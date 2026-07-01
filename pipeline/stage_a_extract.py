@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
 from datetime import datetime, timezone
 
 from pipeline.models import Claim, ClaimsDocument, Article, Corpus
@@ -148,12 +150,16 @@ _MISSED_CLAIMS_TOOL = {
 
 def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_gate: bool = True) -> ClaimsDocument:
     """Extract claims from article text using LLM with structured output."""
+    t0 = time.time()
+
+    print(f"Sending article to LLM ({model}) for claim extraction...", file=sys.stderr)
     result = _call_llm_structured(
         system=EXTRACTION_SYSTEM_PROMPT,
         user=build_extraction_prompt(article_text),
         model=model,
         tool_schema=_EXTRACTION_TOOL,
     )
+    t1 = time.time()
 
     claims = []
     for i, c in enumerate(result.get("claims", [])):
@@ -165,8 +171,10 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
         ))
 
     article_title = result.get("article_title", "Untitled")
+    print(f"First pass: {len(claims)} claims extracted ({t1 - t0:.1f}s)", file=sys.stderr)
 
     if quality_gate:
+        print(f"Running quality gate ({model})...", file=sys.stderr)
         existing_texts = [c.claim_text for c in claims]
         missed = _call_llm_structured(
             system=QUALITY_GATE_SYSTEM_PROMPT,
@@ -174,7 +182,9 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
             model=model,
             tool_schema=_MISSED_CLAIMS_TOOL,
         )
+        t2 = time.time()
         start_idx = len(claims)
+        missed_count = len(missed.get("missed_claims", []))
         for j, mc in enumerate(missed.get("missed_claims", [])):
             claims.append(Claim(
                 claim_id=f"c{start_idx + j + 1:04d}",
@@ -182,6 +192,9 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
                 source_quote=mc["source_quote"],
                 claim_type=mc["claim_type"],
             ))
+        print(f"Quality gate: {missed_count} missed claims found ({t2 - t1:.1f}s)", file=sys.stderr)
+
+    print(f"Total: {len(claims)} claims in {time.time() - t0:.1f}s", file=sys.stderr)
 
     return ClaimsDocument(
         article=Article(
@@ -212,11 +225,15 @@ def run_stage_a(
     if not article_text.strip():
         raise ValueError("Article is empty")
 
+    words = len(article_text.split())
+    print(f"Article: {article_path} ({words} words, {len(article_text)} chars)", file=sys.stderr)
+    print(f"Model: {model}", file=sys.stderr)
+
     doc = extract_claims(article_text, model=model, quality_gate=quality_gate)
     doc.corpus = Corpus(root=corpus_root, project=project_name)
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(doc.to_json())
 
-    print(f"Extracted {len(doc.claims)} claims -> {output_path}")
+    print(f"Wrote {len(doc.claims)} claims -> {output_path}")
     return doc

@@ -242,17 +242,29 @@ async def _verify_claim_async(
         f"source_url, rationale, human_review, confidence."
     )
 
-    # Dynamic sandbox: restrict Bash and Read to the corpus directory.
-    # Generated at runtime so it works wherever the corpus lives.
+    # Dynamic sandbox: deny access outside the corpus and /tmp.
+    # The agent's cwd is corpus_root, so relative paths work for corpus access.
+    # Explicit deny blocks the agent from wandering into /home, /etc, etc.
     import tempfile as _tempfile
     _settings = {
         "permissions": {
-            "allow": [
-                f"Bash({corpus_root}/**)",
-                f"Read({corpus_root}/**)",
-                "Bash(/tmp/**)",
-                "WebSearch",
-                "WebFetch",
+            "deny": [
+                "Bash(/home/**)",
+                "Bash(/etc/**)",
+                "Bash(/usr/**)",
+                "Bash(/var/**)",
+                "Bash(/root/**)",
+                "Bash(/opt/**)",
+                "Bash(/sys/**)",
+                "Bash(/proc/**)",
+                "Read(/home/**)",
+                "Read(/etc/**)",
+                "Read(/usr/**)",
+                "Read(/var/**)",
+                "Read(/root/**)",
+                "Read(/opt/**)",
+                "Read(/sys/**)",
+                "Read(/proc/**)",
             ]
         }
     }

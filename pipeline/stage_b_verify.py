@@ -182,6 +182,10 @@ def parse_verdict(claim: Claim, text: str) -> Claim:
         print(f"  [{claim.claim_id}] Missing field: {e}", file=sys.stderr)
         return agent_failure_result(claim)
 
+    if claim.source_proximity == "original" and _is_summary_path(claim.source_path):
+        claim.source_proximity = "derived"
+        claim.human_review = True
+
     return claim
 
 
@@ -333,6 +337,17 @@ async def _verify_claim_async(
     return result
 
 
+def _is_summary_path(path: str | None) -> bool:
+    """Check if a source path appears to be a summary/overview rather than an original document."""
+    if not path:
+        return False
+    summary_markers = [
+        "_summary", "_CASE_OVERVIEW", "CORPUS_OVERVIEW", "CORPUS_ROLLUP",
+        "ALL_SUMMARIES", "INDEX.md",
+    ]
+    return any(m in path for m in summary_markers)
+
+
 def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
     """Populate claim fields from a structured output dict. Falls back to
     agent_failure_result on missing required fields."""
@@ -347,6 +362,18 @@ def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
     except KeyError as e:
         print(f"  [{claim.claim_id}] Missing field in structured output: {e}", file=sys.stderr)
         return agent_failure_result(claim)
+
+    # Mechanical safety net: if the agent cited a summary as "original",
+    # downgrade to "derived" and flag for human review.
+    if claim.source_proximity == "original" and _is_summary_path(claim.source_path):
+        claim.source_proximity = "derived"
+        claim.human_review = True
+        print(
+            f"  [{claim.claim_id}] Downgraded source_proximity original→derived "
+            f"(summary path: {claim.source_path})",
+            file=sys.stderr,
+        )
+
     return claim
 
 

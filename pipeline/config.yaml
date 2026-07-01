@@ -9,7 +9,7 @@ output:
   web_cache_dir: "web_cache/"
 
 stage_a:
-  model: "deepseek-v4-pro[1m]"
+  model: "deepseek-v4-pro"
   quality_gate: true
 
 stage_b:

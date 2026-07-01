@@ -83,7 +83,7 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
         system=system,
         messages=[{"role": "user", "content": user}],
         tools=[tool_schema],
-        tool_choice={"type": "function", "function": {"name": tool_schema["name"]}},
+        tool_choice={"type": "tool", "name": tool_schema["name"]},
     )
     for block in response.content:
         if block.type == "tool_use":

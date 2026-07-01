@@ -23,7 +23,7 @@ class OutputConfig:
 
 @dataclass
 class StageAConfig:
-    model: str = "deepseek-v4-pro[1m]"
+    model: str = "deepseek-v4-pro"
     quality_gate: bool = True
 
 @dataclass

@@ -105,7 +105,10 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
                     return json.loads(match.group())
                 except json.JSONDecodeError:
                     pass
-    raise RuntimeError("LLM did not call the expected tool and no JSON fallback found")
+    raise RuntimeError(
+        f"LLM did not call the expected tool. "
+        f"Text response preview: {block.text[:200] if block.text else 'empty'}"
+    )
 
 
 _EXTRACTION_TOOL = {
@@ -222,44 +225,102 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
     )
 
 
-def _chunk_article(text: str, max_words: int = 300) -> list[str]:
-    """Split article into chunks suitable for claim extraction.
+def _chunk_article(text: str, target_words: int = 300, max_words: int = 1000) -> list[str]:
+    """Split article into chunks of ~target_words, never exceeding max_words.
 
-    Tries progressively finer delimiters until every chunk is under max_words.
+    1. Split on double-newlines (paragraph boundaries).
+    2. Merge adjacent small chunks until each is at least target_words,
+       without exceeding max_words.
+    3. Any chunk still over max_words is split on sentences.
+    4. Any chunk STILL over max_words is hard-split.
     """
-    # Delimiter cascade: double-newline → sentence → semicolon → comma → space
-    delimiters = [
-        ("double newline", r'\n\n'),
-        ("sentence", r'(?<=[.!?])\s+'),
-        ("semicolon", r';\s*'),
-        ("comma", r',\s+'),
-        ("space", r'\s+'),
-    ]
+    # Step 1: split on paragraph boundaries
+    chunks = [c.strip() for c in text.split('\n\n') if c.strip()]
 
-    chunks = [text]
-
-    for name, pattern in delimiters:
-        if all(len(c.split()) <= max_words for c in chunks):
-            break
-        new_chunks = []
-        for c in chunks:
-            if len(c.split()) <= max_words:
-                new_chunks.append(c)
-            else:
-                parts = re.split(pattern, c)
-                new_chunks.extend(p for p in parts if p.strip())
-        chunks = new_chunks
-
-    # Final safeguard: hard-split any remaining oversized chunks
-    final = []
+    # Step 2: merge small chunks with neighbors
+    merged = []
+    buf = ""
     for c in chunks:
-        words_list = c.split()
-        while len(words_list) > max_words:
-            final.append(" ".join(words_list[:max_words]))
-            words_list = words_list[max_words:]
-        if words_list:
-            final.append(" ".join(words_list))
-    return final
+        combined = (buf + "\n\n" + c).strip() if buf else c
+        if len(combined.split()) <= max_words:
+            buf = combined
+        else:
+            if buf:
+                merged.append(buf)
+            buf = c
+    if buf:
+        merged.append(buf)
+
+    # Step 2b: merge backward — any chunk under target_words gets merged
+    # with the next chunk if the combined total stays under max_words
+    final = []
+    i = 0
+    while i < len(merged):
+        c = merged[i]
+        cw = len(c.split())
+        if cw < target_words and i + 1 < len(merged):
+            next_cw = len(merged[i + 1].split())
+            if cw + next_cw <= max_words:
+                final.append(c + "\n\n" + merged[i + 1])
+                i += 2
+                continue
+        final.append(c)
+        i += 1
+
+    # Step 3: split oversized chunks on sentences
+    sentence_pattern = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
+    result = []
+    for c in final:
+        if len(c.split()) <= max_words:
+            result.append(c)
+        else:
+            parts = sentence_pattern.split(c)
+            for p in parts:
+                if p.strip():
+                    result.append(p.strip())
+
+    # Step 4: hard-split any remaining oversized chunks
+    oversized = []
+    for c in result:
+        if len(c.split()) > max_words:
+            words_list = c.split()
+            while len(words_list) > max_words:
+                oversized.append(" ".join(words_list[:max_words]))
+                words_list = words_list[max_words:]
+            if words_list:
+                oversized.append(" ".join(words_list))
+        else:
+            oversized.append(c)
+
+    return [c for c in oversized if len(c.split()) >= 10]  # Drop tiny fragments
+
+
+def _save_partial_claims(output_path: str, results_by_idx: dict, total_chunks: int, article_path: str) -> None:
+    """Write partial claims.json as chunks complete."""
+    all_claims = []
+    for i in range(total_chunks):
+        all_claims.extend(results_by_idx.get(i, []))
+    for j, claim in enumerate(all_claims):
+        claim.claim_id = f"c{j+1:04d}"
+    data = {
+        "article": {"path": article_path, "title": "", "generated_at": ""},
+        "corpus": {"root": "", "project": ""},
+        "claims": [
+            {
+                "claim_id": c.claim_id, "claim_text": c.claim_text,
+                "source_quote": c.source_quote, "claim_type": c.claim_type,
+                "verdict": c.verdict, "source_proximity": c.source_proximity,
+                "source_path": c.source_path, "source_url": c.source_url,
+                "rationale": c.rationale, "human_review": c.human_review,
+                "confidence": c.confidence, "reconciled": c.reconciled,
+            }
+            for c in all_claims
+        ],
+    }
+    tmp = output_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, output_path)
 
 
 def run_stage_a(
@@ -300,8 +361,12 @@ def run_stage_a(
         t0 = time.time()
 
         def _extract_chunk(i: int, chunk: str) -> tuple[int, list]:
-            chunk_doc = extract_claims(chunk, model=model, quality_gate=False, article_path=article_path)
-            return i, chunk_doc.claims
+            try:
+                chunk_doc = extract_claims(chunk, model=model, quality_gate=False, article_path=article_path)
+                return i, chunk_doc.claims
+            except Exception as e:
+                print(f"  Chunk {i+1} failed: {e}", file=sys.stderr)
+                return i, []
 
         results_by_idx: dict[int, list] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -313,10 +378,12 @@ def run_stage_a(
                     cw = len(chunks[i].split())
                     pbar.set_postfix_str(f"{cw}w → {len(claims)} claims")
                     pbar.update(1)
+                    # Incremental save — never lose progress
+                    _save_partial_claims(output_path, results_by_idx, total, article_path)
 
         # Assemble claims in original chunk order
         for i in range(total):
-            all_claims.extend(results_by_idx[i])
+            all_claims.extend(results_by_idx.get(i, []))
 
         # Renumber claims sequentially
         for j, claim in enumerate(all_claims):

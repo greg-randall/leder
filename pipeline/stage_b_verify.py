@@ -219,7 +219,8 @@ async def _verify_claim_async(
 
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
-        (os.path.join(debug_dir, f"{claim.claim_id}.log")).write_text(full_text)
+        with open(os.path.join(debug_dir, f"{claim.claim_id}.log"), "w") as f:
+            f.write(full_text)
 
     return parse_verdict(claim, full_text)
 

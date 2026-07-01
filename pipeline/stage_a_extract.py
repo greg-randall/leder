@@ -83,7 +83,7 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
     )
     response = client.messages.create(
         model=model,
-        max_tokens=16384,
+        max_tokens=384000,
         system=system,
         messages=[{"role": "user", "content": user}],
         tools=[tool_schema],

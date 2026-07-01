@@ -292,24 +292,31 @@ def run_stage_a(
         total = len(chunks)
         sizes = ", ".join(str(len(c.split())) for c in chunks)
         concurrency = min(len(chunks), 32)
-        print(f"Chunked into {total} chunks (word counts: {sizes})", file=sys.stderr)
-        print(f"Processing {concurrency} at a time...", file=sys.stderr)
+        print(f"Chunked into {total} chunks ({concurrency} concurrent)", file=sys.stderr)
+
+        from tqdm import tqdm
 
         all_claims = []
         t0 = time.time()
 
-        def _extract_chunk(i_chunk):
-            i, chunk = i_chunk
-            cw = len(chunk.split())
+        def _extract_chunk(i: int, chunk: str) -> tuple[int, list]:
             chunk_doc = extract_claims(chunk, model=model, quality_gate=False, article_path=article_path)
-            return (i, cw, chunk_doc.claims)
+            return i, chunk_doc.claims
 
+        results_by_idx: dict[int, list] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = {executor.submit(_extract_chunk, (i, c)): i for i, c in enumerate(chunks)}
-            for future in concurrent.futures.as_completed(futures):
-                i, cw, claims = future.result()
-                all_claims.extend(claims)
-                print(f"  Chunk {i+1}/{total} ({cw} words) → {len(claims)} claims", file=sys.stderr)
+            futures = {executor.submit(_extract_chunk, i, c): i for i, c in enumerate(chunks)}
+            with tqdm(total=total, desc="  Chunks", unit="chunk") as pbar:
+                for future in concurrent.futures.as_completed(futures):
+                    i, claims = future.result()
+                    results_by_idx[i] = claims
+                    cw = len(chunks[i].split())
+                    pbar.set_postfix_str(f"{cw}w → {len(claims)} claims")
+                    pbar.update(1)
+
+        # Assemble claims in original chunk order
+        for i in range(total):
+            all_claims.extend(results_by_idx[i])
 
         # Renumber claims sequentially
         for j, claim in enumerate(all_claims):

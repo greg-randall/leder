@@ -180,7 +180,7 @@ async def _verify_claim_async(
 ) -> Claim:
     from claude_agent_sdk import (
         query, ClaudeAgentOptions,
-        AssistantMessage, TextBlock,
+        AssistantMessage, TextBlock, ToolUseBlock,
         ProcessError, CLINotFoundError,
     )
 
@@ -201,10 +201,18 @@ async def _verify_claim_async(
     )
 
     full_text = ""
+    transcript: list[dict] = []  # Full message stream for debug
 
     async def _run():
         nonlocal full_text
         async for message in query(prompt=prompt, options=options):
+            # Serialize the full message for debug transcript
+            if debug_dir:
+                try:
+                    transcript.append(_serialize_message(message))
+                except Exception:
+                    pass
+
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -226,10 +234,39 @@ async def _verify_claim_async(
 
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
+        # Human-readable text output
         with open(os.path.join(debug_dir, f"{claim.claim_id}.log"), "w") as f:
             f.write(full_text)
+        # Full transcript — every message, every tool call, every result
+        with open(os.path.join(debug_dir, f"{claim.claim_id}.jsonl"), "w") as f:
+            for entry in transcript:
+                f.write(json.dumps(entry, default=str) + "\n")
 
     return parse_verdict(claim, full_text)
+
+
+def _serialize_message(msg) -> dict:
+    """Convert an SDK message to a plain dict for JSONL debug output."""
+    result: dict = {"type": type(msg).__name__}
+    if hasattr(msg, "content") and msg.content:
+        blocks = []
+        for block in msg.content:
+            b: dict = {"type": type(block).__name__}
+            if hasattr(block, "text"):
+                b["text"] = block.text[:5000]
+            if hasattr(block, "name"):
+                b["name"] = block.name
+            if hasattr(block, "input"):
+                b["input"] = str(block.input)[:2000]
+            if hasattr(block, "tool_use_id"):
+                b["tool_use_id"] = block.tool_use_id
+            if hasattr(block, "thinking"):
+                b["thinking"] = block.thinking[:2000]
+            blocks.append(b)
+        result["blocks"] = blocks
+    if hasattr(msg, "result"):
+        result["result"] = str(msg.result)[:500]
+    return result
 
 
 async def _verify_claim_with_retry(

@@ -83,8 +83,11 @@ elsewhere on the filesystem.
 5. WEB -- when the claim involves information not in the local corpus.
    Some claims are about statutes, company statements, news events, or external
    context that simply doesn't exist in the local files. That's expected.
-   Use WebSearch to find relevant pages, then WebFetch to pull and evaluate
-   the best match.
+   Use WebSearch to find relevant pages, then fetch the best match:
+   - Try `curl -sL <url> | head -200` first for plain text / PDF links
+   - Use WebFetch for JavaScript-heavy pages
+   - For stubborn pages: `obscura fetch <url> --dump markdown` (if installed)
+   - For quick extraction: `curl -sL https://r.jina.ai/<url>` for clean markdown
 
 ## EVALUATION
 

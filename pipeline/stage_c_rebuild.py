@@ -156,8 +156,13 @@ Respond with ONLY a JSON object:
                 model=model,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
+                thinking={"type": "disabled"},
             )
-            text = response.content[0].text if response.content else ""
+            # Extract text from response, skipping non-text blocks
+            text = ""
+            for block in response.content:
+                if hasattr(block, "text"):
+                    text += block.text
             json_match = re.search(r'\{[^}]+\}', text)
             if json_match:
                 result = json.loads(json_match.group())

@@ -118,6 +118,7 @@ _EXTRACTION_TOOL = {
         "type": "object",
         "properties": {
             "article_title": {"type": "string", "description": "A short title for the article."},
+            "article_summary": {"type": "string", "description": "One to two sentences summarizing what the article is about, for context when fact-checking individual claims."},
             "claims": {
                 "type": "array",
                 "items": {
@@ -186,9 +187,11 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
             claim_text=c["claim_text"],
             source_quote=c["source_quote"],
             claim_type=c["claim_type"],
+            context=_find_paragraph(article_text, c["source_quote"]),
         ))
 
     article_title = result.get("article_title", "Untitled")
+    article_summary = result.get("article_summary", "")
     print(f"First pass: {len(claims)} claims extracted ({t1 - t0:.1f}s)", file=sys.stderr)
 
     if quality_gate:
@@ -209,6 +212,7 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
                 claim_text=mc["claim_text"],
                 source_quote=mc["source_quote"],
                 claim_type=mc["claim_type"],
+                context=_find_paragraph(article_text, mc["source_quote"]),
             ))
         print(f"Quality gate: {missed_count} missed claims found ({t2 - t1:.1f}s)", file=sys.stderr)
 
@@ -222,7 +226,49 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
         ),
         corpus=Corpus(root="", project=""),
         claims=claims,
+        article_summary=article_summary,
     )
+
+
+def _find_paragraph(text: str, quote: str, context_chars: int = 1500) -> str:
+    """Find the paragraph containing `quote` and return surrounding context.
+
+    Searches for the quote in the text (normalized), then expands to the
+    enclosing paragraph boundaries. Truncates to ~context_chars centered
+    on the quote if the paragraph is very long.
+    """
+    n_text = re.sub(r'\s+', ' ', text).lower()
+    n_quote = re.sub(r'\s+', ' ', quote).lower().strip()
+    idx = n_text.find(n_quote)
+    if idx == -1:
+        return ""
+
+    # Expand to paragraph boundaries (double newlines)
+    start = text.rfind('\n\n', 0, max(0, idx - 1000))
+    if start == -1:
+        start = 0
+    else:
+        start += 2
+    end = text.find('\n\n', idx + len(quote))
+    if end == -1:
+        end = len(text)
+
+    para = text[start:end].strip()
+    if len(para) <= context_chars:
+        return para
+    # Truncate around the quote
+    qi = para.lower().find(n_quote)
+    if qi == -1:
+        return para[:context_chars] + "..."
+    half = context_chars // 2
+    left = max(0, qi - half)
+    right = min(len(para), qi + len(quote) + half)
+    result = para[left:right].strip()
+    if left > 0:
+        result = "..." + result
+    if right < len(para):
+        result = result + "..."
+    return result
 
 
 def _chunk_article(text: str, target_words: int = 300, max_words: int = 1000) -> list[str]:
@@ -312,6 +358,7 @@ def _save_partial_claims(output_path: str, results_by_idx: dict, total_chunks: i
             {
                 "claim_id": c.claim_id, "claim_text": c.claim_text,
                 "source_quote": c.source_quote, "claim_type": c.claim_type,
+                "context": c.context,
                 "verdict": c.verdict, "source_proximity": c.source_proximity,
                 "source_path": c.source_path, "source_url": c.source_url,
                 "rationale": c.rationale, "human_review": c.human_review,

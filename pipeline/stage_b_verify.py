@@ -204,6 +204,7 @@ def _write_incremental(claims: list[Claim], results_by_id: dict[str, Claim], out
                 "claim_text": c.claim_text,
                 "source_quote": c.source_quote,
                 "claim_type": c.claim_type,
+                "context": c.context,
                 "verdict": c.verdict,
                 "source_proximity": c.source_proximity,
                 "source_path": c.source_path,
@@ -231,6 +232,7 @@ async def _verify_claim_async(
     timeout: int = 600,
     max_turns: int = 30,
     debug_dir: str | None = None,
+    article_summary: str = "",
 ) -> Claim:
     from claude_agent_sdk import (
         query, ClaudeAgentOptions,
@@ -238,8 +240,18 @@ async def _verify_claim_async(
         ProcessError, CLINotFoundError,
     )
 
+    article_context = ""
+    if article_summary:
+        article_context = f"This claim is from an article about: {article_summary}\n\n"
+
+    para_context = ""
+    if claim.context:
+        para_context = f"Surrounding paragraph from the article:\n> {claim.context}\n\n"
+
     prompt = (
         f"Verify this claim:\n\n"
+        f"{article_context}"
+        f"{para_context}"
         f"Claim: {claim.claim_text}\n\n"
         f"Claim type: {claim.claim_type}\n\n"
         f"Output fields: verdict, source_proximity, source_path, "
@@ -408,14 +420,14 @@ async def _verify_claim_with_retry(
     timeout: int = 600,
     max_turns: int = 30,
     debug_dir: str | None = None,
+    article_summary: str = "",
 ) -> Claim:
     """Verify a claim with one retry if the agent produced no verdict."""
-    result = await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir)
+    result = await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir, article_summary)
     if result.verdict is not None:
         return result
-    # Agent produced no verdict at all — retry once
     print(f"  Retrying {claim.claim_id}...", file=sys.stderr)
-    return await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir)
+    return await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir, article_summary)
 
 
 async def _verify_all(
@@ -427,6 +439,7 @@ async def _verify_all(
     max_turns: int = 30,
     output_path: str | None = None,
     debug_dir: str | None = None,
+    article_summary: str = "",
 ) -> list[Claim]:
     import time as time_mod
     from tqdm import tqdm
@@ -442,7 +455,7 @@ async def _verify_all(
         t0 = time_mod.time()
         async with sem:
             result = await _verify_claim_with_retry(
-                claim, corpus_root, system_prompt, timeout, max_turns, debug_dir,
+                claim, corpus_root, system_prompt, timeout, max_turns, debug_dir, article_summary,
             )
         elapsed = time_mod.time() - t0
         agent_times.append(elapsed)
@@ -531,6 +544,7 @@ def run_stage_b(
         max_turns=max_turns,
         output_path=output_path,
         debug_dir=debug_dir,
+        article_summary=doc.article_summary,
     ))
     elapsed = time_mod.time() - t0
 

@@ -46,6 +46,7 @@ class Claim:
     claim_text: str
     source_quote: str
     claim_type: ClaimType
+    context: str = ""  # Surrounding paragraph from the article (set by Stage A)
 
     # Stage B output (nullable until populated)
     verdict: Optional[Verdict] = None
@@ -99,6 +100,7 @@ class ClaimsDocument:
     article: Article
     corpus: Corpus
     claims: list[Claim] = field(default_factory=list)
+    article_summary: str = ""
 
     def to_json(self) -> str:
         return json.dumps(self._to_dict(), indent=2, ensure_ascii=False)
@@ -108,6 +110,7 @@ class ClaimsDocument:
             "article": asdict(self.article),
             "corpus": asdict(self.corpus),
             "claims": [asdict(c) for c in self.claims],
+            "article_summary": self.article_summary,
         }
 
     @classmethod
@@ -117,4 +120,5 @@ class ClaimsDocument:
             article=Article(**data["article"]),
             corpus=Corpus(**data["corpus"]),
             claims=[Claim(**c) for c in data["claims"]],
+            article_summary=data.get("article_summary", ""),
         )

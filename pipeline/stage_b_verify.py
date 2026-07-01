@@ -367,15 +367,16 @@ async def _verify_all(
     debug_dir: str | None = None,
 ) -> list[Claim]:
     import time as time_mod
+    from tqdm import tqdm
 
     sem = asyncio.Semaphore(concurrency)
     total = len(claims)
-    completed = 0
     agent_times: list[float] = []
     results_by_id: dict[str, Claim] = {}
 
+    pbar = tqdm(total=total, desc="  Agents", unit="claim")
+
     async def verify_one(claim: Claim) -> Claim:
-        nonlocal completed
         t0 = time_mod.time()
         async with sem:
             result = await _verify_claim_with_retry(
@@ -383,7 +384,6 @@ async def _verify_all(
             )
         elapsed = time_mod.time() - t0
         agent_times.append(elapsed)
-        completed += 1
         results_by_id[result.claim_id] = result
 
         status = (
@@ -392,22 +392,23 @@ async def _verify_all(
         )
 
         avg = sum(agent_times) / len(agent_times) if agent_times else 0
-        remaining = total - completed
+        remaining = total - pbar.n - 1
         eta_sec = int(avg * remaining / concurrency) if concurrency else 0
         eta_str = f"{eta_sec // 60}m{eta_sec % 60}s" if eta_sec > 0 else "—"
 
-        print(
-            f"  [{completed}/{total}] {status} {claim.claim_id} "
-            f"({elapsed:.0f}s, avg {avg:.0f}s, ETA {eta_str}) "
-            f"{claim.claim_text[:60]}..."
+        pbar.set_postfix_str(
+            f"{status} {claim.claim_id} {elapsed:.0f}s avg:{avg:.0f}s ETA:{eta_str}"
         )
+        pbar.update(1)
 
         if output_path:
             _write_incremental(claims, results_by_id, output_path)
 
         return result
 
-    return await asyncio.gather(*[verify_one(c) for c in claims])
+    results = await asyncio.gather(*[verify_one(c) for c in claims])
+    pbar.close()
+    return results
 
 
 # ---- public entry point ----

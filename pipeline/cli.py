@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     b_parser.add_argument(
         "--debug", type=int, default=0, metavar="N",
-        help="Run on first N claims only, save agent output to debug/",
+        help="Randomly sample N claims, save agent transcripts to debug/",
     )
 
     c_parser = subparsers.add_parser(

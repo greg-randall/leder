@@ -433,7 +433,7 @@ def run_stage_b(
         concurrency: Max concurrent agent sessions (default 32).
         timeout: Per-agent timeout in seconds (default 600).
         max_turns: Max tool-calling turns per agent (default 30).
-        debug_count: If >0, run only the first N claims and save agent
+        debug_count: If >0, randomly sample N claims and save agent
                      output to debug/ directory alongside output_path.
     """
     import time as time_mod
@@ -446,7 +446,8 @@ def run_stage_b(
 
     debug_dir = None
     if debug_count > 0:
-        claims = claims[:debug_count]
+        import random
+        claims = random.sample(claims, min(debug_count, len(claims)))
         total = len(claims)
         debug_dir = os.path.join(os.path.dirname(output_path) or ".", "debug")
         print(f"Debug mode: {total} claims, logs → {debug_dir}/", file=sys.stderr)

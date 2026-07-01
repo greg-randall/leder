@@ -123,7 +123,9 @@ def reconcile_unmatched_quotes(
         return unmatched
 
     import anthropic
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic(
+        api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY")
+    )
 
     reconciled = []
     for claim in unmatched:

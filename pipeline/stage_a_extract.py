@@ -78,7 +78,9 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
     """Call an LLM with structured output (function calling). Returns the parsed tool call args."""
     import anthropic
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic(
+        api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY")
+    )
     response = client.messages.create(
         model=model,
         max_tokens=4096,

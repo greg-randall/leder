@@ -62,12 +62,9 @@ def _setup_provider_env(config) -> None:
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
         if deepseek_key:
             os.environ.setdefault("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
-            # ANTHROPIC_AUTH_TOKEN for Claude Code CLI (Stage B agents)
+            # ANTHROPIC_AUTH_TOKEN for Claude Code CLI and SDK —
+            # matches sample-code pattern, avoids connector warning
             os.environ.setdefault("ANTHROPIC_AUTH_TOKEN", deepseek_key)
-            # ANTHROPIC_API_KEY for the Anthropic SDK (Stages A, C) —
-            # set separately so we can pop it before Stage B to avoid
-            # the noisy Claude Code connector warning
-            os.environ.setdefault("ANTHROPIC_API_KEY", deepseek_key)
             os.environ.setdefault("ANTHROPIC_DEFAULT_OPUS_MODEL", "deepseek-v4-pro[1m]")
             os.environ.setdefault("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-v4-pro[1m]")
             os.environ.setdefault("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek-v4-flash")
@@ -255,9 +252,6 @@ def main() -> None:
         print(f"Stage A complete: {len(doc.claims)} claims extracted")
 
     # --- Stage B: Claim verification ---
-    # Claude Code CLI reads ANTHROPIC_AUTH_TOKEN, not ANTHROPIC_API_KEY.
-    # Having ANTHROPIC_API_KEY set triggers a noisy "connectors disabled"
-    # warning in every subprocess. Pop it for Stage B, restore after.
     if args.command in ("all", "stage-b"):
         claims_path = config.resolve_path(
             getattr(args, "claims", "claims.json")
@@ -268,8 +262,6 @@ def main() -> None:
 
         from pipeline.stage_b_verify import run_stage_b
 
-        _saved_api_key = os.environ.pop("ANTHROPIC_API_KEY", None)
-
         output_path = _resolve_output_path(output_path)
         doc = run_stage_b(
             claims_path=claims_path,
@@ -278,10 +270,6 @@ def main() -> None:
             concurrency=config.stage_b.concurrency,
             timeout=config.stage_b.timeout,
         )
-
-        if _saved_api_key is not None:
-            os.environ["ANTHROPIC_API_KEY"] = _saved_api_key
-
         print(f"Stage B complete: {len(doc.claims)} claims verified")
 
     # --- Stage C: Article rebuild with footnotes ---

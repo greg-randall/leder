@@ -242,6 +242,9 @@ async def _verify_claim_async(
         f"source_url, rationale, human_review, confidence."
     )
 
+    # Path to agent sandbox settings (restricts Bash/Read to corpus + allowed commands)
+    settings_path = os.path.join(os.path.dirname(__file__), "agent-settings.json")
+
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         allowed_tools=["Read", "Bash", "WebSearch", "WebFetch"],
@@ -249,6 +252,7 @@ async def _verify_claim_async(
         cwd=corpus_root,
         max_turns=max_turns,
         output_format={"type": "json_schema", "schema": VerdictOutput.model_json_schema()},
+        settings=settings_path if os.path.exists(settings_path) else None,
     )
 
     full_text = ""

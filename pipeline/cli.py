@@ -129,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     d_parser.add_argument("--input", default="article-sourced.md")
     d_parser.add_argument("--output", default="article-sourced.html")
+    d_parser.add_argument(
+        "--config", default="pipeline/config.yaml", help="Path to config file"
+    )
 
     check_parser = subparsers.add_parser(
         "check", help="Run startup validation only"

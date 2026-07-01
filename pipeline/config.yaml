@@ -1,0 +1,20 @@
+article:
+  path: "article.md"
+
+corpus:
+  root: "source-docs-and-summaries/"
+
+output:
+  dir: "."
+  web_cache_dir: "web_cache/"
+
+stage_a:
+  model: "deepseek-v4-pro[1m]"
+  quality_gate: true
+
+stage_b:
+  model: "deepseek-v4-flash"
+  concurrency: 32
+
+stage_c:
+  quote_match_method: "normalized"

@@ -591,7 +591,17 @@ def run_stage_b(
         doc = ClaimsDocument.from_json(f.read())
 
     claims = doc.claims
+    # Resume support: skip claims that already have a verdict
+    already_done = [c for c in claims if c.verdict is not None]
+    pending = [c for c in claims if c.verdict is None]
+    if already_done and pending:
+        print(f"Resuming: {len(already_done)} already verified, {len(pending)} remaining", file=sys.stderr)
+    claims = pending
     total = len(claims)
+
+    if total == 0:
+        print("All claims already verified — nothing to do.", file=sys.stderr)
+        return doc
 
     debug_dir = None
     if debug_count > 0:
@@ -626,8 +636,9 @@ def run_stage_b(
     ))
     elapsed = time_mod.time() - t0
 
-    # Merge results back into full claim set
+    # Merge results back into full claim set (including already-done claims)
     result_map = {r.claim_id: r for r in results}
+    result_map.update({c.claim_id: c for c in already_done})
     doc.claims = [result_map.get(c.claim_id, c) for c in doc.claims]
 
     with open(output_path, "w", encoding="utf-8") as f:

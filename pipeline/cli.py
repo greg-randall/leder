@@ -124,6 +124,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="pipeline/config.yaml", help="Path to config file"
     )
 
+    d_parser = subparsers.add_parser(
+        "stage-d", help="Convert sourced article to HTML"
+    )
+    d_parser.add_argument("--input", default="article-sourced.md")
+    d_parser.add_argument("--output", default="article-sourced.html")
+
     check_parser = subparsers.add_parser(
         "check", help="Run startup validation only"
     )
@@ -302,6 +308,17 @@ def main() -> None:
             model=config.stage_a.model,
         )
         print(f"Stage C complete: {output_path}")
+
+    # --- Stage D: HTML conversion ---
+    if args.command in ("all", "stage-d"):
+        input_path = getattr(args, "input", "article-sourced.md")
+        input_path = config.resolve_path(input_path) if config else input_path
+        output_path = getattr(args, "output", "article-sourced.html")
+        output_path = config.resolve_path(output_path) if config else output_path
+
+        from pipeline.stage_d_html import run_stage_d
+        run_stage_d(input_path, output_path)
+        print(f"Stage D complete: {output_path}")
 
 
 if __name__ == "__main__":

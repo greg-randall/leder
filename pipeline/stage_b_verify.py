@@ -40,6 +40,8 @@ The corpus is organized with summaries at three levels. Search top-down.
 
 **CRITICAL RULE: Summaries are a map, not the territory.** Summaries tell you WHERE to look, but you MUST verify the claim against the ORIGINAL converted .md file. Never cite a summary as your source -- the summary is a search index, not evidence. If a summary mentions a fact but the original file doesn't confirm it, the verdict is "unsupported." If the original file is unavailable or unreadable, flag `human_review: true` and cite the best available source.
 
+**SANDBOX: Stay inside the corpus.** All files you need are within the current working directory. Use relative paths only (e.g. `rg "term" .` or `rg "term" LA-0304/`). Never use absolute paths like `/home/...` -- you are searching a specific document corpus, not the entire filesystem. The Read tool also takes paths relative to this directory.
+
 1. PROJECT LEVEL -- CORPUS_OVERVIEW.md / CORPUS_ROLLUP.md
    Cross-cutting patterns, claims about "all permits" or multi-case comparisons.
    Use Bash with ripgrep: rg "keywords" .

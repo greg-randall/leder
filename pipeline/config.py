@@ -31,7 +31,7 @@ class StageBConfig:
     model: str = "deepseek-v4-flash"
     concurrency: int = 32
     timeout: int = 600
-    max_turns: int = 30
+    max_turns: int = 60
 
 @dataclass
 class StageCConfig:

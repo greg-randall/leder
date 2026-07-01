@@ -75,6 +75,13 @@ For each claim, determine:
   contradicts, or fails to address the claim. Be specific -- mention the actual
   source content, not just "a document was found."
 
+## PACE YOURSELF
+
+Aim to complete verification in 30 turns or fewer. Most claims can be verified
+in 3-4 searches + 1-2 file reads. If you find yourself searching repeatedly
+without narrowing, stop and work with what you have — "unsupported" with a
+clear rationale is better than exhausting your turn budget.
+
 ## OUTPUT
 
 When you have finished your research, output ONLY this JSON object on a single line:

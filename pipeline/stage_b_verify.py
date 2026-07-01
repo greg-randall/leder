@@ -81,13 +81,13 @@ elsewhere on the filesystem.
    Use the Read tool to open the file.
 
 5. WEB -- when the claim involves information not in the local corpus.
-   Some claims are about statutes, company statements, news events, or external
-   context that simply doesn't exist in the local files. That's expected.
-   Use WebSearch to find relevant pages, then fetch the best match:
-   - Try `curl -sL <url> | head -200` first for plain text / PDF links
-   - Use WebFetch for JavaScript-heavy pages
-   - For stubborn pages: `obscura fetch <url> --dump markdown` (if installed)
-   - For quick extraction: `curl -sL https://r.jina.ai/<url>` for clean markdown
+   Use WebSearch to find relevant pages, then fetch the best match.
+   SAVE what you fetch: write the content to `web_cache/<claim_id>/page.md`
+   (create the directory first). This is the audit trail for human review.
+   Fetch methods to try:
+   - `curl -sL <url> | head -200` for plain text / PDF links
+   - WebFetch for JavaScript-heavy pages
+   - `curl -sL https://r.jina.ai/<url>` for clean markdown
 
 ## EVALUATION
 
@@ -254,6 +254,9 @@ async def _verify_claim_async(
         f"{para_context}"
         f"Claim: {claim.claim_text}\n\n"
         f"Claim type: {claim.claim_type}\n\n"
+        f"Claim ID: {claim.claim_id}\n\n"
+        f"If you fetch any web pages, save them to "
+        f"web_cache/{claim.claim_id}/page.md for the audit trail.\n\n"
         f"Output fields: verdict, source_proximity, source_path, "
         f"source_url, rationale, human_review, confidence."
     )
@@ -526,6 +529,10 @@ def run_stage_b(
         total = len(claims)
         debug_dir = os.path.join(os.path.dirname(output_path) or ".", "debug")
         print(f"Debug mode: {total} claims, logs → {debug_dir}/", file=sys.stderr)
+
+    # Ensure web_cache exists for agents to save fetched pages
+    web_cache_dir = os.path.join(os.path.dirname(output_path) or ".", "web_cache")
+    os.makedirs(web_cache_dir, exist_ok=True)
 
     model_name = os.environ.get("ANTHROPIC_MODEL", "unknown")
 

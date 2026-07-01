@@ -159,6 +159,13 @@ def _load_config(config_arg: str):
         sys.exit(1)
 
 
+def _warn_if_overwrite(path: str) -> None:
+    """Warn if the output file already exists and will be overwritten."""
+    if os.path.exists(path):
+        size = os.path.getsize(path)
+        print(f"⚠️  Output file exists: {path} ({size:,} bytes) — will be overwritten", file=sys.stderr)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -202,6 +209,7 @@ def main() -> None:
 
         from pipeline.stage_a_extract import run_stage_a
 
+        _warn_if_overwrite(output_path)
         doc = run_stage_a(
             article_path=article_path,
             output_path=output_path,
@@ -223,6 +231,7 @@ def main() -> None:
 
         from pipeline.stage_b_verify import run_stage_b
 
+        _warn_if_overwrite(output_path)
         doc = run_stage_b(
             claims_path=claims_path,
             output_path=output_path,
@@ -246,6 +255,7 @@ def main() -> None:
 
         from pipeline.stage_c_rebuild import run_stage_c
 
+        _warn_if_overwrite(output_path)
         run_stage_c(
             article_path=article_path,
             claims_path=claims_path,

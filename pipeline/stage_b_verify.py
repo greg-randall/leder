@@ -242,8 +242,24 @@ async def _verify_claim_async(
         f"source_url, rationale, human_review, confidence."
     )
 
-    # Path to agent sandbox settings (restricts Bash/Read to corpus + allowed commands)
-    settings_path = os.path.join(os.path.dirname(__file__), "agent-settings.json")
+    # Dynamic sandbox: restrict Bash and Read to the corpus directory.
+    # Generated at runtime so it works wherever the corpus lives.
+    import tempfile as _tempfile
+    _settings = {
+        "permissions": {
+            "allow": [
+                f"Bash({corpus_root}/**)",
+                f"Read({corpus_root}/**)",
+                "Bash(/tmp/**)",
+                "WebSearch",
+                "WebFetch",
+            ]
+        }
+    }
+    _sf = _tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    json.dump(_settings, _sf)
+    _sf.close()
+    settings_path = _sf.name
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -252,57 +268,57 @@ async def _verify_claim_async(
         cwd=corpus_root,
         max_turns=max_turns,
         output_format={"type": "json_schema", "schema": VerdictOutput.model_json_schema()},
-        settings=settings_path if os.path.exists(settings_path) else None,
+        settings=settings_path,
     )
 
     full_text = ""
     structured_output = None
     transcript: list[dict] = []  # Full message stream for debug
 
-    async def _run():
-        nonlocal full_text, structured_output
-        async for message in query(prompt=prompt, options=options):
-            if debug_dir:
-                try:
-                    transcript.append(_serialize_message(message))
-                except Exception:
-                    pass
-
-            if isinstance(message, ResultMessage):
-                structured_output = message.structured_output
-            elif isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        full_text += block.text
-
+    result = agent_failure_result(claim)
     try:
+        async def _run():
+            nonlocal full_text, structured_output
+            async for message in query(prompt=prompt, options=options):
+                if debug_dir:
+                    try:
+                        transcript.append(_serialize_message(message))
+                    except Exception:
+                        pass
+
+                if isinstance(message, ResultMessage):
+                    structured_output = message.structured_output
+                elif isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            full_text += block.text
+
         await asyncio.wait_for(_run(), timeout=timeout)
+
+        if debug_dir:
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(os.path.join(debug_dir, f"{claim.claim_id}.log"), "w") as f:
+                f.write(full_text)
+            with open(os.path.join(debug_dir, f"{claim.claim_id}.jsonl"), "w") as f:
+                for entry in transcript:
+                    f.write(json.dumps(entry, default=str) + "\n")
+
+        if structured_output and isinstance(structured_output, dict):
+            result = _populate_claim_from_dict(claim, structured_output)
+        else:
+            result = parse_verdict(claim, full_text)
     except asyncio.TimeoutError:
         print(f"  [{claim.claim_id}] Timed out after {timeout}s", file=sys.stderr)
-        return agent_failure_result(claim)
     except CLINotFoundError:
-        return agent_failure_result(claim)
+        pass
     except ProcessError as e:
         print(f"  [{claim.claim_id}] Process error (exit {e.exit_code})", file=sys.stderr)
-        return agent_failure_result(claim)
     except Exception as e:
         print(f"  [{claim.claim_id}] Error: {e}", file=sys.stderr)
-        return agent_failure_result(claim)
+    finally:
+        os.unlink(settings_path)
 
-    if debug_dir:
-        os.makedirs(debug_dir, exist_ok=True)
-        with open(os.path.join(debug_dir, f"{claim.claim_id}.log"), "w") as f:
-            f.write(full_text)
-        with open(os.path.join(debug_dir, f"{claim.claim_id}.jsonl"), "w") as f:
-            for entry in transcript:
-                f.write(json.dumps(entry, default=str) + "\n")
-
-    # Primary path: structured output from the SDK
-    if structured_output and isinstance(structured_output, dict):
-        return _populate_claim_from_dict(claim, structured_output)
-
-    # Fallback: regex parse from text (older CLI, no structured output support)
-    return parse_verdict(claim, full_text)
+    return result
 
 
 def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:

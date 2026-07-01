@@ -276,7 +276,8 @@ def main() -> None:
             max_turns=config.stage_b.max_turns,
             debug_count=getattr(args, "debug", 0),
         )
-        print(f"Stage B complete: {len(doc.claims)} claims verified")
+        verified_count = sum(1 for c in doc.claims if c.verdict is not None)
+        print(f"Stage B complete: {verified_count} claims verified")
 
     # --- Stage C: Article rebuild with footnotes ---
     if args.command in ("all", "stage-c"):

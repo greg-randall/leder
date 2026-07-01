@@ -479,13 +479,17 @@ def run_stage_b(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(doc.to_json())
 
-    supported = sum(1 for c in doc.claims if c.verdict == "supported")
-    contradicted = sum(1 for c in doc.claims if c.verdict == "contradicted")
-    unsupported = sum(1 for c in doc.claims if c.verdict == "unsupported")
-    review = sum(1 for c in doc.claims if c.human_review)
+    verified = [c for c in doc.claims if c.claim_id in result_map]
+    unverified = [c for c in doc.claims if c.claim_id not in result_map]
+    supported = sum(1 for c in verified if c.verdict == "supported")
+    contradicted = sum(1 for c in verified if c.verdict == "contradicted")
+    unsupported = sum(1 for c in verified if c.verdict == "unsupported")
+    review = sum(1 for c in verified if c.human_review)
 
-    avg = elapsed / total if total > 0 else 0
+    avg = elapsed / len(verified) if verified else 0
     print(f"\nDone: {supported} ✓ / {contradicted} ✗ / {unsupported} ?  ({review} flagged for review)")
-    print(f"  {total} claims in {elapsed:.0f}s ({avg:.1f}s avg, ~{total / elapsed * 60:.0f}/min)")
+    print(f"  {len(verified)} claims in {elapsed:.0f}s ({avg:.1f}s avg, ~{len(verified) / elapsed * 60:.0f}/min)")
+    if unverified:
+        print(f"  {len(unverified)} claims untouched (not in this run)")
 
     return doc

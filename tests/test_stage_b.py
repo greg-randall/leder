@@ -5,6 +5,8 @@ from pipeline.stage_b_verify import (
     AGENT_SYSTEM_PROMPT,
     agent_failure_result,
     parse_verdict,
+    _populate_claim_from_dict,
+    VerdictOutput,
 )
 from pipeline.models import Claim
 
@@ -14,7 +16,57 @@ def test_agent_system_prompt_contains_key_rules():
     assert "Summaries are a map" in AGENT_SYSTEM_PROMPT
     assert "ORIGINALS (MANDATORY VERIFICATION STEP)" in AGENT_SYSTEM_PROMPT
     assert "OUTPUT" in AGENT_SYSTEM_PROMPT
-    assert '"verdict"' in AGENT_SYSTEM_PROMPT
+    assert "structured data" in AGENT_SYSTEM_PROMPT
+
+
+def test_structured_output_populates_claim():
+    """Structured output from the SDK should populate all claim fields."""
+    claim = Claim(
+        claim_id="c0001",
+        claim_text="Test claim.",
+        source_quote="Test claim.",
+        claim_type="numeric",
+    )
+    data = {
+        "verdict": "supported",
+        "source_proximity": "original",
+        "source_path": "LA-0304/permits/2020.md",
+        "source_url": None,
+        "rationale": "The permit confirms 165 acres of irrigation.",
+        "human_review": False,
+        "confidence": 0.95,
+    }
+    result = _populate_claim_from_dict(claim, data)
+    assert result.verdict == "supported"
+    assert result.source_proximity == "original"
+    assert result.source_path == "LA-0304/permits/2020.md"
+    assert result.rationale == "The permit confirms 165 acres of irrigation."
+    assert result.human_review is False
+    assert result.confidence == 0.95
+
+
+def test_structured_output_missing_field_falls_back():
+    """Missing required fields should trigger failure fallback."""
+    claim = Claim(
+        claim_id="c0002",
+        claim_text="Test.",
+        source_quote="Test.",
+        claim_type="numeric",
+    )
+    # Missing source_proximity
+    result = _populate_claim_from_dict(claim, {"verdict": "supported", "rationale": "ok", "human_review": False, "confidence": 0.5})
+    assert result.verdict == "unsupported"
+    assert result.human_review is True
+
+
+def test_verdict_output_schema():
+    """VerdictOutput schema should be valid JSON Schema."""
+    schema = VerdictOutput.model_json_schema()
+    assert schema["type"] == "object"
+    assert "verdict" in schema["properties"]
+    assert "source_proximity" in schema["properties"]
+    # Enum values should be enforced
+    assert "supported" in schema["properties"]["verdict"]["enum"]
 
 
 def test_parse_verdict_valid_json():

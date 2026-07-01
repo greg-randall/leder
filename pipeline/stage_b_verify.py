@@ -12,7 +12,22 @@ import os
 import re
 import sys
 
+from typing import Literal
+
+from pydantic import BaseModel
+
 from pipeline.models import Claim, ClaimsDocument, Article, Corpus
+
+
+class VerdictOutput(BaseModel):
+    """Structured output schema for claim verification agents."""
+    verdict: Literal["supported", "contradicted", "unsupported"]
+    source_proximity: Literal["original", "derived", "unverifiable"]
+    source_path: str | None = None
+    source_url: str | None = None
+    rationale: str
+    human_review: bool
+    confidence: float
 
 
 AGENT_SYSTEM_PROMPT = """You are a fact-checker verifying claims against a corpus of documents.
@@ -84,12 +99,11 @@ clear rationale is better than exhausting your turn budget.
 
 ## OUTPUT
 
-When you have finished your research, output ONLY this JSON object on a single line:
-{"verdict":"supported|contradicted|unsupported","source_proximity":"original|derived|unverifiable","source_path":null,"source_url":null,"rationale":"One sentence citing the specific source and what it says.","human_review":false,"confidence":0.0}
-
-- source_path: relative path within the corpus, or null
-- source_url: URL of the web source, or null
-- confidence: number between 0.0 and 1.0"""
+Your verdict will be collected as structured data — no need to format JSON manually.
+Explain your reasoning in the rationale field: mention the specific source document
+and what it says. If no source was found, explain what you searched for.
+source_path should be a relative path within the corpus, source_url a full URL.
+confidence is between 0.0 (complete guess) and 1.0 (verbatim match in primary source)."""
 
 # ---- helpers ----
 
@@ -180,16 +194,14 @@ async def _verify_claim_async(
 ) -> Claim:
     from claude_agent_sdk import (
         query, ClaudeAgentOptions,
-        AssistantMessage, TextBlock, ToolUseBlock,
+        AssistantMessage, TextBlock, ResultMessage,
         ProcessError, CLINotFoundError,
     )
 
     prompt = (
         f"Verify this claim:\n\n"
         f"{claim.claim_text}\n\n"
-        f"Claim type: {claim.claim_type}\n\n"
-        f"When you have finished your research, output ONLY a JSON object "
-        f"with your verdict. No other text before or after the JSON."
+        f"Claim type: {claim.claim_type}"
     )
 
     options = ClaudeAgentOptions(
@@ -198,22 +210,25 @@ async def _verify_claim_async(
         permission_mode="acceptEdits",
         cwd=corpus_root,
         max_turns=max_turns,
+        output_format={"type": "json_schema", "schema": VerdictOutput.model_json_schema()},
     )
 
     full_text = ""
+    structured_output = None
     transcript: list[dict] = []  # Full message stream for debug
 
     async def _run():
-        nonlocal full_text
+        nonlocal full_text, structured_output
         async for message in query(prompt=prompt, options=options):
-            # Serialize the full message for debug transcript
             if debug_dir:
                 try:
                     transcript.append(_serialize_message(message))
                 except Exception:
                     pass
 
-            if isinstance(message, AssistantMessage):
+            if isinstance(message, ResultMessage):
+                structured_output = message.structured_output
+            elif isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         full_text += block.text
@@ -234,15 +249,35 @@ async def _verify_claim_async(
 
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
-        # Human-readable text output
         with open(os.path.join(debug_dir, f"{claim.claim_id}.log"), "w") as f:
             f.write(full_text)
-        # Full transcript — every message, every tool call, every result
         with open(os.path.join(debug_dir, f"{claim.claim_id}.jsonl"), "w") as f:
             for entry in transcript:
                 f.write(json.dumps(entry, default=str) + "\n")
 
+    # Primary path: structured output from the SDK
+    if structured_output and isinstance(structured_output, dict):
+        return _populate_claim_from_dict(claim, structured_output)
+
+    # Fallback: regex parse from text (older CLI, no structured output support)
     return parse_verdict(claim, full_text)
+
+
+def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
+    """Populate claim fields from a structured output dict. Falls back to
+    agent_failure_result on missing required fields."""
+    try:
+        claim.verdict = data["verdict"]
+        claim.source_proximity = data["source_proximity"]
+        claim.source_path = data.get("source_path")
+        claim.source_url = data.get("source_url")
+        claim.rationale = data.get("rationale", "No rationale provided.")
+        claim.human_review = data.get("human_review", True)
+        claim.confidence = data.get("confidence")
+    except KeyError as e:
+        print(f"  [{claim.claim_id}] Missing field in structured output: {e}", file=sys.stderr)
+        return agent_failure_result(claim)
+    return claim
 
 
 def _serialize_message(msg) -> dict:
@@ -277,11 +312,11 @@ async def _verify_claim_with_retry(
     max_turns: int = 30,
     debug_dir: str | None = None,
 ) -> Claim:
+    """Verify a claim with one retry if the agent produced no verdict."""
     result = await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir)
-    if result.rationale != agent_failure_result(Claim(
-        claim_id="x", claim_text="x", source_quote="x", claim_type="numeric",
-    )).rationale:
+    if result.verdict is not None:
         return result
+    # Agent produced no verdict at all — retry once
     print(f"  Retrying {claim.claim_id}...", file=sys.stderr)
     return await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir)
 

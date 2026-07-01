@@ -159,11 +159,41 @@ def _load_config(config_arg: str):
         sys.exit(1)
 
 
-def _warn_if_overwrite(path: str) -> None:
-    """Warn if the output file already exists and will be overwritten."""
-    if os.path.exists(path):
-        size = os.path.getsize(path)
-        print(f"⚠️  Output file exists: {path} ({size:,} bytes) — will be overwritten", file=sys.stderr)
+def _resolve_output_path(path: str) -> str:
+    """Check for conflicts and let the user choose what to do.
+
+    Returns the final path to use (may differ from input if user chose timestamp).
+    """
+    if not os.path.exists(path):
+        return path
+
+    size = os.path.getsize(path)
+    print(f"\n⚠️  Output file exists: {path} ({size:,} bytes)", file=sys.stderr)
+    print(f"    [o] overwrite   [t] timestamp   [q] quit", file=sys.stderr)
+
+    while True:
+        try:
+            choice = input("    Choose: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.", file=sys.stderr)
+            sys.exit(1)
+
+        if choice in ("o", "overwrite"):
+            return path
+        elif choice in ("t", "timestamp"):
+            from datetime import datetime
+            stem = Path(path).stem
+            suffix = Path(path).suffix
+            parent = Path(path).parent
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            new_path = str(parent / f"{stem}-{ts}{suffix}")
+            print(f"    Using: {new_path}", file=sys.stderr)
+            return new_path
+        elif choice in ("q", "quit"):
+            print("Cancelled.", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"    Unknown option: '{choice}' — [o]verwrite, [t]imestamp, [q]uit", file=sys.stderr)
 
 
 def main() -> None:
@@ -209,7 +239,7 @@ def main() -> None:
 
         from pipeline.stage_a_extract import run_stage_a
 
-        _warn_if_overwrite(output_path)
+        output_path = _resolve_output_path(output_path)
         doc = run_stage_a(
             article_path=article_path,
             output_path=output_path,
@@ -231,7 +261,7 @@ def main() -> None:
 
         from pipeline.stage_b_verify import run_stage_b
 
-        _warn_if_overwrite(output_path)
+        output_path = _resolve_output_path(output_path)
         doc = run_stage_b(
             claims_path=claims_path,
             output_path=output_path,
@@ -255,7 +285,7 @@ def main() -> None:
 
         from pipeline.stage_c_rebuild import run_stage_c
 
-        _warn_if_overwrite(output_path)
+        output_path = _resolve_output_path(output_path)
         run_stage_c(
             article_path=article_path,
             claims_path=claims_path,

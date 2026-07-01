@@ -15,7 +15,8 @@ stage_a:
 stage_b:
   model: "deepseek-v4-flash"
   concurrency: 32
-  timeout: 180
+  timeout: 600
+  max_turns: 30
 
 stage_c:
   quote_match_method: "normalized"

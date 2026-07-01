@@ -109,6 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
     b_parser.add_argument(
         "--config", default="pipeline/config.yaml", help="Path to config file"
     )
+    b_parser.add_argument(
+        "--debug", type=int, default=0, metavar="N",
+        help="Run on first N claims only, save agent output to debug/",
+    )
 
     c_parser = subparsers.add_parser(
         "stage-c", help="Rebuild article with footnotes"
@@ -269,6 +273,8 @@ def main() -> None:
             corpus_root=config.resolve_path(config.corpus.root),
             concurrency=config.stage_b.concurrency,
             timeout=config.stage_b.timeout,
+            max_turns=config.stage_b.max_turns,
+            debug_count=getattr(args, "debug", 0),
         )
         print(f"Stage B complete: {len(doc.claims)} claims verified")
 

@@ -251,19 +251,22 @@ def _chunk_article(text: str, target_words: int = 300, max_words: int = 1000) ->
     if buf:
         merged.append(buf)
 
-    # Step 2b: merge backward — any chunk under target_words gets merged
-    # with the next chunk if the combined total stays under max_words
+    # Step 2b: merge forward — any chunk under target_words gets merged
+    # with following chunks until it reaches target_words or would exceed max_words
     final = []
     i = 0
     while i < len(merged):
         c = merged[i]
         cw = len(c.split())
-        if cw < target_words and i + 1 < len(merged):
+        # Keep merging subsequent chunks while under target_words AND combined stays under max_words
+        while cw < target_words and i + 1 < len(merged):
             next_cw = len(merged[i + 1].split())
             if cw + next_cw <= max_words:
-                final.append(c + "\n\n" + merged[i + 1])
-                i += 2
-                continue
+                c = c + "\n\n" + merged[i + 1]
+                cw = cw + next_cw
+                i += 1
+            else:
+                break
         final.append(c)
         i += 1
 

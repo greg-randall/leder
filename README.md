@@ -16,14 +16,15 @@ Stage A: DECOMPOSITION
     by a verbatim source_quote for mechanical footnote placement.
     │
     ▼
-Stage B: VERIFICATION (parallel, one agent per claim)
-    Each agent searches a tiered local corpus:
+Stage B: VERIFICATION (parallel, one REAL agent per claim)
+    Each claim gets a full Claude Code agent via the Claude Agent SDK.
+    Agents autonomously search, read, and evaluate:
       1. Project-level summaries → route to the right section
       2. Group-level summaries   → route to the right files
       3. File-level summaries     → identify the exact original document
       4. Original documents       → verify the claim against primary sources
       5. Web search               → for claims not in the local corpus
-    
+
     Output: claims.json enriched with verdict, source, proximity, rationale.
     │
     ▼
@@ -32,16 +33,49 @@ Stage C: REBUILD
     fail to match. Produces article-sourced.md with numbered [^1] footnotes.
 ```
 
+## Setup
+
+### 1. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configure your API key
+
+Copy the example env file and add your key:
+
+```bash
+cp .env.example .env
+# Edit .env with your API key
+```
+
+The pipeline auto-detects your provider. With DeepSeek (recommended — cheap, high throughput):
+
+```
+# .env
+DEEPSEEK_API_KEY=sk-...
+```
+
+Or use Anthropic directly:
+
+```
+# .env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### 3. Verify everything works
+
+```bash
+python3 -m pipeline.cli check
+```
+
 ## Prerequisites
 
 - Python 3.10+
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`sudo apt install ripgrep`)
-- [Anthropic API key](https://console.anthropic.com/) (set as `ANTHROPIC_API_KEY`)
-
-### Optional (for web fetch)
-
-- [Obscura](https://github.com/h4ckf0r0day/obscura) — stealth headless browser (Tier 2 web fetch)
-- [Jina AI](https://r.jina.ai) — used automatically at Tier 1, no installation needed
+- A DeepSeek or Anthropic API key (set in `.env`)
+- The [Claude Agent SDK](https://pypi.org/project/claude-agent-sdk/) bundles the Claude Code CLI — no separate Claude Code installation needed
 
 ### Local Corpus
 
@@ -54,19 +88,6 @@ The pipeline expects a local corpus converted to markdown and summarized at thre
 | File-level | One per source document | `.../Reports/2021_Q3_summary.md` |
 
 Summaries are a **search index**, not evidence. The agent uses them to find the right original document, then verifies against that original. For the current RRC permit files project, this summarization is complete.
-
-## Installation
-
-```bash
-cd /path/to/g-journalism-run
-pip install -r requirements.txt
-```
-
-Run the startup check to verify everything is in place:
-
-```bash
-python3 -m pipeline.cli check
-```
 
 ## Usage
 
@@ -97,31 +118,30 @@ All settings are in `pipeline/config.yaml`:
 
 ```yaml
 article:
-  path: "article.md"          # Input article
+  path: "article.md"
 
 corpus:
-  root: "source-docs-and-summaries/"  # Local document corpus
+  root: "source-docs-and-summaries/"
 
 stage_a:
-  model: "claude-sonnet-5"    # LLM for claim extraction
-  quality_gate: true          # Second pass to catch missed claims
+  model: "deepseek-v4-pro[1m]"   # Quality extraction needs a strong model
+  quality_gate: true              # Second pass to catch missed claims
 
 stage_b:
-  model: "claude-sonnet-5"    # LLM for verification agents
-  concurrency: 5              # Max parallel agents
-  agent_timeout_seconds: 120
+  model: "deepseek-v4-flash"     # Fast/cheap — verification is search + JSON
+  concurrency: 32                # Parallel agents (disk I/O is the real cap)
 
 stage_c:
   quote_match_method: "normalized"
-
-fetch:
-  jina:
-    enabled: true
-  obscura:
-    enabled: true
-  scrape_skill:
-    enabled: true
 ```
+
+### Model selection
+
+| Stage | Default | Why |
+|-------|---------|-----|
+| A — extraction | `deepseek-v4-pro[1m]` | Decomposing prose into atomic claims needs precision |
+| B — verification | `deepseek-v4-flash` | Search files, read documents, output JSON — straightforward |
+| C — reconciliation | Reuses stage A model | Matching broken quotes to article text |
 
 ## Output Format
 
@@ -163,28 +183,22 @@ Claims that fail both mechanical matching and LLM reconciliation appear in a **�
 
 ```
 g-journalism-run/
+├── .env.example                        # API key template
 ├── article.md                          # Input article
 ├── article-sourced.md                  # Output (Stage C)
 ├── claims.json                         # Intermediate data (Stage A → B → C)
-├── web_cache/                          # Fetched page snapshots
-│   └── c004/
-│       ├── original.html               # Raw HTML (Tiers 2-3)
-│       ├── extracted.md                # Trafilatura-extracted content
-│       └── source.txt                  # URL and fetch method
 ├── source-docs-and-summaries/          # Local corpus
 ├── pipeline/                           # Pipeline code
-│   ├── cli.py                          # Entry point
+│   ├── cli.py                          # Entry point + .env loading
 │   ├── config.yaml                     # Configuration
 │   ├── config.py                       # Config loader
 │   ├── models.py                       # Data model (claims.json schema)
 │   ├── startup_check.py                # Prerequisite validation
-│   ├── stage_a_extract.py              # Claim extraction
-│   ├── stage_b_verify.py               # Verification agents
-│   ├── stage_c_rebuild.py              # Article rebuild
+│   ├── stage_a_extract.py              # Stage A — claim extraction
+│   ├── stage_b_verify.py               # Stage B — verification (Claude Agent SDK)
+│   ├── stage_c_rebuild.py              # Stage C — article rebuild
 │   └── tools/
-│       ├── search_corpus.py            # Ripgrep wrapper
-│       ├── web_search.py               # DuckDuckGo search
-│       └── web_fetch.py                # Jina → Obscura → scrape skill
+│       └── __init__.py
 ├── tests/                              # Test suite
 └── requirements.txt
 ```

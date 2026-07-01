@@ -222,7 +222,7 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
     )
 
 
-def _chunk_article(text: str, max_words: int = 1000) -> list[str]:
+def _chunk_article(text: str, max_words: int = 300) -> list[str]:
     """Split article into chunks suitable for claim extraction.
 
     Tries progressively finer delimiters until every chunk is under max_words.
@@ -230,7 +230,7 @@ def _chunk_article(text: str, max_words: int = 1000) -> list[str]:
     # Delimiter cascade: double-newline → sentence → semicolon → comma → space
     delimiters = [
         ("double newline", r'\n\n'),
-        ("sentence", r'(?<=[.!?])\s+(?=[A-Z])'),
+        ("sentence", r'(?<=[.!?])\s+'),
         ("semicolon", r';\s*'),
         ("comma", r',\s+'),
         ("space", r'\s+'),

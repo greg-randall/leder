@@ -229,7 +229,7 @@ def run_stage_b(
     corpus_root: str,
     web_cache_dir: str = "",
     model: str = "",
-    concurrency: int = 3,
+    concurrency: int = 32,
 ) -> ClaimsDocument:
     """Load claims.json, verify each claim via Claude Agent SDK, write enriched claims.json.
 
@@ -239,7 +239,7 @@ def run_stage_b(
         corpus_root: Root directory of the local document corpus.
         web_cache_dir: Ignored (kept for backward compat). Agent uses its own fetch.
         model: Ignored (kept for backward compat). Agent uses env-configured model.
-        concurrency: Max concurrent agent sessions (default 3).
+        concurrency: Max concurrent agent sessions (default 32).
     """
     with open(claims_path, encoding="utf-8") as f:
         doc = ClaimsDocument.from_json(f.read())

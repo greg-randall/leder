@@ -29,7 +29,7 @@ class StageAConfig:
 @dataclass
 class StageBConfig:
     model: str = "deepseek-v4-flash"
-    concurrency: int = 3
+    concurrency: int = 32
 
 @dataclass
 class StageCConfig:

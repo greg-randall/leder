@@ -169,7 +169,7 @@ def test_load_config_valid(tmp_path):
                 "corpus": {"root": "source-docs-and-summaries/"},
                 "output": {"dir": ".", "web_cache_dir": "web_cache/"},
                 "stage_a": {"model": "deepseek-v4-pro", "quality_gate": True},
-                "stage_b": {"model": "deepseek-v4-flash", "concurrency": 3},
+                "stage_b": {"model": "deepseek-v4-flash", "concurrency": 32},
             }
         )
     )
@@ -179,7 +179,7 @@ def test_load_config_valid(tmp_path):
     assert isinstance(config, PipelineConfig)
     assert config.article.path == "article.md"
     assert config.corpus.root == "source-docs-and-summaries/"
-    assert config.stage_b.concurrency == 3
+    assert config.stage_b.concurrency == 32
 
 
 # ---------------------------------------------------------------------------

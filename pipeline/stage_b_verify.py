@@ -363,6 +363,77 @@ def _is_summary_path(path: str | None) -> bool:
     return any(m in path for m in summary_markers)
 
 
+def _backfill_web_cache(claims: list[Claim], web_cache_dir: str) -> None:
+    """For any claim with a source_url but no cached page, try to fetch it.
+
+    Uses obscura if available, falls back to Jina, then curl.
+    """
+    import subprocess as _sp
+
+    missing = [
+        c for c in claims
+        if c.source_url and c.source_url != "null"
+        and not (os.path.isdir(os.path.join(web_cache_dir, c.claim_id)))
+    ]
+    if not missing:
+        return
+
+    print(f"\nBackfilling web cache for {len(missing)} claims...", file=sys.stderr)
+    for c in missing:
+        cid = c.claim_id
+        url = c.source_url
+        cache_dir = os.path.join(web_cache_dir, cid)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        content = None
+        method = None
+
+        # Try obscura first
+        if _sp.run(["which", "obscura"], capture_output=True).returncode == 0:
+            try:
+                r = _sp.run(
+                    ["obscura", "fetch", url, "--dump", "markdown", "--timeout", "30"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if r.returncode == 0 and len(r.stdout) > 100:
+                    content = r.stdout
+                    method = "obscura"
+            except Exception:
+                pass
+
+        # Fall back to Jina
+        if not content:
+            try:
+                import httpx
+                r = httpx.get(f"https://r.jina.ai/{url}", timeout=30)
+                if r.status_code == 200 and len(r.text) > 100:
+                    content = r.text
+                    method = "jina"
+            except Exception:
+                pass
+
+        # Last resort: curl
+        if not content:
+            try:
+                r = _sp.run(
+                    ["curl", "-sL", url], capture_output=True, text=True, timeout=30,
+                )
+                if r.returncode == 0 and len(r.stdout) > 100:
+                    content = r.stdout
+                    method = "curl"
+            except Exception:
+                pass
+
+        if content:
+            with open(os.path.join(cache_dir, "page.md"), "w") as f:
+                f.write(content)
+            with open(os.path.join(cache_dir, "source.txt"), "w") as f:
+                f.write(f"source_url: {url}\nfetch_method: {method}\n")
+            print(f"  {cid}: cached via {method} ({len(content)} bytes)", file=sys.stderr)
+        else:
+            print(f"  {cid}: FAILED to cache {url}", file=sys.stderr)
+
+
 def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
     """Populate claim fields from a structured output dict. Falls back to
     agent_failure_result on missing required fields."""
@@ -564,6 +635,9 @@ def run_stage_b(
 
     verified = [c for c in doc.claims if c.claim_id in result_map]
     unverified = [c for c in doc.claims if c.claim_id not in result_map]
+    # Backfill missing web cache entries using obscura
+    _backfill_web_cache(verified, web_cache_dir)
+
     supported = sum(1 for c in verified if c.verdict == "supported")
     contradicted = sum(1 for c in verified if c.verdict == "contradicted")
     unsupported = sum(1 for c in verified if c.verdict == "unsupported")

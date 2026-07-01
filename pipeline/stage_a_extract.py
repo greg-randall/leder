@@ -1,6 +1,7 @@
 """Stage A: Extract verifiable claims from a Markdown article using LLM structured output."""
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import sys
@@ -220,6 +221,46 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
     )
 
 
+def _chunk_article(text: str, max_words: int = 1000) -> list[str]:
+    """Split article into chunks suitable for claim extraction.
+
+    Tries progressively finer delimiters until every chunk is under max_words.
+    """
+    # Delimiter cascade: double-newline → sentence → semicolon → comma → space
+    delimiters = [
+        ("double newline", r'\n\n'),
+        ("sentence", r'(?<=[.!?])\s+(?=[A-Z])'),
+        ("semicolon", r';\s*'),
+        ("comma", r',\s+'),
+        ("space", r'\s+'),
+    ]
+
+    chunks = [text]
+
+    for name, pattern in delimiters:
+        if all(len(c.split()) <= max_words for c in chunks):
+            break
+        new_chunks = []
+        for c in chunks:
+            if len(c.split()) <= max_words:
+                new_chunks.append(c)
+            else:
+                parts = re.split(pattern, c)
+                new_chunks.extend(p for p in parts if p.strip())
+        chunks = new_chunks
+
+    # Final safeguard: hard-split any remaining oversized chunks
+    final = []
+    for c in chunks:
+        words_list = c.split()
+        while len(words_list) > max_words:
+            final.append(" ".join(words_list[:max_words]))
+            words_list = words_list[max_words:]
+        if words_list:
+            final.append(" ".join(words_list))
+    return final
+
+
 def run_stage_a(
     article_path: str,
     output_path: str,
@@ -242,7 +283,67 @@ def run_stage_a(
     print(f"Article: {article_path} ({words} words, {len(article_text)} chars)", file=sys.stderr)
     print(f"Model: {model}", file=sys.stderr)
 
-    doc = extract_claims(article_text, model=model, quality_gate=quality_gate, article_path=article_path)
+    chunks = _chunk_article(article_text)
+    if len(chunks) == 1:
+        print(f"Single chunk ({words} words)", file=sys.stderr)
+        doc = extract_claims(article_text, model=model, quality_gate=quality_gate, article_path=article_path)
+    else:
+        total = len(chunks)
+        sizes = ", ".join(str(len(c.split())) for c in chunks)
+        concurrency = min(len(chunks), 32)
+        print(f"Chunked into {total} chunks (word counts: {sizes})", file=sys.stderr)
+        print(f"Processing {concurrency} at a time...", file=sys.stderr)
+
+        all_claims = []
+        t0 = time.time()
+
+        def _extract_chunk(i_chunk):
+            i, chunk = i_chunk
+            cw = len(chunk.split())
+            chunk_doc = extract_claims(chunk, model=model, quality_gate=False, article_path=article_path)
+            return (i, cw, chunk_doc.claims)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(_extract_chunk, (i, c)): i for i, c in enumerate(chunks)}
+            for future in concurrent.futures.as_completed(futures):
+                i, cw, claims = future.result()
+                all_claims.extend(claims)
+                print(f"  Chunk {i+1}/{total} ({cw} words) → {len(claims)} claims", file=sys.stderr)
+
+        # Renumber claims sequentially
+        for j, claim in enumerate(all_claims):
+            claim.claim_id = f"c{j+1:04d}"
+
+        # Run quality gate on the full article with all existing claims
+        existing_texts = [c.claim_text for c in all_claims]
+        print(f"Running quality gate on full article ({model})...", file=sys.stderr)
+        missed = _call_llm_structured(
+            system=QUALITY_GATE_SYSTEM_PROMPT,
+            user=build_quality_gate_prompt(article_text, existing_texts),
+            model=model,
+            tool_schema=_MISSED_CLAIMS_TOOL,
+        )
+        missed_count = len(missed.get("missed_claims", []))
+        start_idx = len(all_claims)
+        for j, mc in enumerate(missed.get("missed_claims", [])):
+            all_claims.append(Claim(
+                claim_id=f"c{start_idx + j + 1:04d}",
+                claim_text=mc["claim_text"],
+                source_quote=mc["source_quote"],
+                claim_type=mc["claim_type"],
+            ))
+        print(f"Quality gate: {missed_count} missed claims found ({time.time() - t0:.1f}s total)", file=sys.stderr)
+
+        doc = ClaimsDocument(
+            article=Article(
+                path=article_path,
+                title="",
+                generated_at=datetime.now(timezone.utc).isoformat(),
+            ),
+            corpus=Corpus(root="", project=""),
+            claims=all_claims,
+        )
+
     doc.corpus = Corpus(root=corpus_root, project=project_name)
 
     with open(output_path, "w", encoding="utf-8") as f:

@@ -150,7 +150,8 @@ _MISSED_CLAIMS_TOOL = {
 }
 
 
-def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_gate: bool = True) -> ClaimsDocument:
+def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_gate: bool = True,
+                   article_path: str = "article.md") -> ClaimsDocument:
     """Extract claims from article text using LLM with structured output."""
     t0 = time.time()
 
@@ -200,11 +201,11 @@ def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_ga
 
     return ClaimsDocument(
         article=Article(
-            path="article.md",
+            path=article_path,
             title=article_title,
             generated_at=datetime.now(timezone.utc).isoformat(),
         ),
-        corpus=Corpus(root="source-docs-and-summaries/", project=""),
+        corpus=Corpus(root="", project=""),
         claims=claims,
     )
 
@@ -231,7 +232,7 @@ def run_stage_a(
     print(f"Article: {article_path} ({words} words, {len(article_text)} chars)", file=sys.stderr)
     print(f"Model: {model}", file=sys.stderr)
 
-    doc = extract_claims(article_text, model=model, quality_gate=quality_gate)
+    doc = extract_claims(article_text, model=model, quality_gate=quality_gate, article_path=article_path)
     doc.corpus = Corpus(root=corpus_root, project=project_name)
 
     with open(output_path, "w", encoding="utf-8") as f:

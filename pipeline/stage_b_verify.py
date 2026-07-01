@@ -591,11 +591,13 @@ def run_stage_b(
         doc = ClaimsDocument.from_json(f.read())
 
     claims = doc.claims
-    # Resume support: skip claims that already have a verdict
-    already_done = [c for c in claims if c.verdict is not None]
-    pending = [c for c in claims if c.verdict is None]
+    # Resume support: skip supported/contradicted, retry unsupported/untouched
+    already_done = [c for c in claims if c.verdict in ("supported", "contradicted")]
+    pending = [c for c in claims if c.verdict not in ("supported", "contradicted")]
     if already_done and pending:
-        print(f"Resuming: {len(already_done)} already verified, {len(pending)} remaining", file=sys.stderr)
+        print(f"Resuming: {len(already_done)} done, {len(pending)} to retry "
+              f"({sum(1 for c in pending if c.verdict == 'unsupported')} unsupported, "
+              f"{sum(1 for c in pending if c.verdict is None)} untouched)", file=sys.stderr)
     claims = pending
     total = len(claims)
 

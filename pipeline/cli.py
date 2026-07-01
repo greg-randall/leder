@@ -267,6 +267,7 @@ def main() -> None:
             output_path=output_path,
             corpus_root=config.resolve_path(config.corpus.root),
             concurrency=config.stage_b.concurrency,
+            timeout=config.stage_b.timeout,
         )
         print(f"Stage B complete: {len(doc.claims)} claims verified")
 

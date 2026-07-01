@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sys
 
@@ -136,8 +137,14 @@ async def _verify_claim_async(
     claim: Claim,
     corpus_root: str,
     system_prompt: str,
+    timeout: int = 180,
 ) -> Claim:
-    """One claim = one Claude Code agent session via the Claude Agent SDK."""
+    """One claim = one Claude Code agent session via the Claude Agent SDK.
+
+    Args:
+        timeout: Per-agent timeout in seconds. Agents that exceed this
+                 are killed and the claim is marked for human review.
+    """
     from claude_agent_sdk import (
         query, ClaudeAgentOptions,
         AssistantMessage, TextBlock,
@@ -160,13 +167,20 @@ async def _verify_claim_async(
         max_turns=15,
     )
 
-    full_text = ""
-    try:
+    async def _run_query():
+        full_text = ""
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         full_text += block.text
+        return full_text
+
+    try:
+        full_text = await asyncio.wait_for(_run_query(), timeout=timeout)
+    except asyncio.TimeoutError:
+        print(f"  [{claim.claim_id}] Agent timed out after {timeout}s", file=sys.stderr)
+        return agent_failure_result(claim)
     except CLINotFoundError:
         return agent_failure_result(claim)
     except ProcessError as e:
@@ -183,14 +197,15 @@ async def _verify_claim_with_retry(
     claim: Claim,
     corpus_root: str,
     system_prompt: str,
+    timeout: int = 180,
 ) -> Claim:
     """Verify a claim with one retry on failure."""
     try:
-        return await _verify_claim_async(claim, corpus_root, system_prompt)
+        return await _verify_claim_async(claim, corpus_root, system_prompt, timeout)
     except Exception as e:
         print(f"  Agent failed for {claim.claim_id}: {e}. Retrying once...")
         try:
-            return await _verify_claim_async(claim, corpus_root, system_prompt)
+            return await _verify_claim_async(claim, corpus_root, system_prompt, timeout)
         except Exception as e2:
             print(f"  Agent failed again for {claim.claim_id}: {e2}. Marking as unsupported.")
             return agent_failure_result(claim)
@@ -201,24 +216,44 @@ async def _verify_all(
     corpus_root: str,
     system_prompt: str,
     concurrency: int,
+    timeout: int = 180,
 ) -> list[Claim]:
     """Verify all claims with a concurrency semaphore."""
+    import time as time_mod
+
     sem = asyncio.Semaphore(concurrency)
     total = len(claims)
     completed = 0
+    start_time = time_mod.time()
+    agent_times: list[float] = []
 
     async def verify_one(claim: Claim) -> Claim:
         nonlocal completed
+        t0 = time_mod.time()
         async with sem:
-            result = await _verify_claim_with_retry(claim, corpus_root, system_prompt)
-            completed += 1
-            status = "?" if result.verdict is None else (
-                "✓" if result.verdict == "supported" else (
-                    "✗" if result.verdict == "contradicted" else "?"
-                )
+            result = await _verify_claim_with_retry(claim, corpus_root, system_prompt, timeout)
+        elapsed = time_mod.time() - t0
+        agent_times.append(elapsed)
+        completed += 1
+
+        status = "?" if result.verdict is None else (
+            "✓" if result.verdict == "supported" else (
+                "✗" if result.verdict == "contradicted" else "?"
             )
-            print(f"  [{completed}/{total}] {status} {claim.claim_id}: {claim.claim_text[:80]}...")
-            return result
+        )
+
+        # ETA from average time per agent so far
+        avg = sum(agent_times) / len(agent_times)
+        remaining = total - completed
+        eta_sec = int(avg * remaining / concurrency)
+        eta_str = f"{eta_sec // 60}m{eta_sec % 60}s" if eta_sec > 0 else "—"
+
+        print(
+            f"  [{completed}/{total}] {status} {claim.claim_id} "
+            f"({elapsed:.0f}s, avg {avg:.0f}s, ETA {eta_str}) "
+            f"{claim.claim_text[:60]}..."
+        )
+        return result
 
     return await asyncio.gather(*[verify_one(c) for c in claims])
 
@@ -230,6 +265,7 @@ def run_stage_b(
     web_cache_dir: str = "",
     model: str = "",
     concurrency: int = 32,
+    timeout: int = 180,
 ) -> ClaimsDocument:
     """Load claims.json, verify each claim via Claude Agent SDK, write enriched claims.json.
 
@@ -240,19 +276,29 @@ def run_stage_b(
         web_cache_dir: Ignored (kept for backward compat). Agent uses its own fetch.
         model: Ignored (kept for backward compat). Agent uses env-configured model.
         concurrency: Max concurrent agent sessions (default 32).
+        timeout: Per-agent timeout in seconds (default 180).
     """
+    import time as time_mod
+
     with open(claims_path, encoding="utf-8") as f:
         doc = ClaimsDocument.from_json(f.read())
 
     total = len(doc.claims)
-    print(f"Verifying {total} claims (concurrency={concurrency})...")
+    model_name = os.environ.get("ANTHROPIC_MODEL", "unknown")
 
+    print(f"Dispatching {total} agents", file=sys.stderr)
+    print(f"  Concurrency: {concurrency}  |  Model: {model_name}  |  Timeout: {timeout}s/agent", file=sys.stderr)
+    print(f"  Corpus: {corpus_root}", file=sys.stderr)
+
+    t0 = time_mod.time()
     results = asyncio.run(_verify_all(
         doc.claims,
         corpus_root,
         AGENT_SYSTEM_PROMPT,
         concurrency,
+        timeout=timeout,
     ))
+    elapsed = time_mod.time() - t0
 
     # Merge results back, preserving original claim order
     result_map = {r.claim_id: r for r in results}
@@ -266,7 +312,8 @@ def run_stage_b(
     unsupported = sum(1 for c in doc.claims if c.verdict == "unsupported")
     review = sum(1 for c in doc.claims if c.human_review)
 
-    print(f"\nDone: {supported} supported, {contradicted} contradicted, {unsupported} unsupported")
-    print(f"  {review} claim(s) flagged for human review")
+    avg = elapsed / total if total > 0 else 0
+    print(f"\nDone: {supported} ✓ / {contradicted} ✗ / {unsupported} ?  ({review} flagged for review)")
+    print(f"  {total} claims in {elapsed:.0f}s ({avg:.1f}s avg, ~{total / elapsed * 60:.0f}/min)")
 
     return doc

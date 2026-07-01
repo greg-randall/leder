@@ -83,17 +83,28 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
     )
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=16384,
         system=system,
         messages=[{"role": "user", "content": user}],
         tools=[tool_schema],
-        tool_choice={"type": "tool", "name": tool_schema["name"]},
+        tool_choice={"type": "auto"},
         thinking={"type": "disabled"},
     )
     for block in response.content:
         if block.type == "tool_use":
             return block.input
-    raise RuntimeError("LLM did not call the expected tool")
+    # Fallback: model returned text instead of calling the tool.
+    # Try to parse JSON from the text response.
+    for block in response.content:
+        if block.type == "text" and block.text:
+            import re as _re
+            match = _re.search(r'\{.*"claims".*\}', block.text, _re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+    raise RuntimeError("LLM did not call the expected tool and no JSON fallback found")
 
 
 _EXTRACTION_TOOL = {

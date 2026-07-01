@@ -79,11 +79,11 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
     import anthropic
 
     client = anthropic.Anthropic(
-        api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY")
+        api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY"),
     )
     response = client.messages.create(
         model=model,
-        max_tokens=384000,
+        max_tokens=8192,
         system=system,
         messages=[{"role": "user", "content": user}],
         tools=[tool_schema],
@@ -94,7 +94,6 @@ def _call_llm_structured(system: str, user: str, model: str, tool_schema: dict) 
         if block.type == "tool_use":
             return block.input
     # Fallback: model returned text instead of calling the tool.
-    # Try to parse JSON from the text response.
     for block in response.content:
         if block.type == "text" and block.text:
             import re as _re

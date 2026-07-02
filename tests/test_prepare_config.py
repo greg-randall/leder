@@ -1,0 +1,52 @@
+"""Tests for the prepare: config section."""
+from __future__ import annotations
+
+import textwrap
+from pathlib import Path
+
+from pipeline.config import PipelineConfig
+
+
+def _write(tmp_path: Path, body: str) -> str:
+    # config.yaml lives at project root; project_root = parent.parent of the file.
+    root = tmp_path / "proj"
+    (root / "pipeline").mkdir(parents=True)
+    cfg = root / "config.yaml"
+    cfg.write_text(textwrap.dedent(body))
+    return str(cfg)
+
+
+def test_prepare_defaults_when_absent(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.ocr_images is True
+    assert cfg.prepare.vision_fallback.enabled is True
+    assert cfg.prepare.vision_fallback.model == "gpt-4o-mini"
+    assert cfg.prepare.rollup.crosscutting is True
+    assert cfg.prepare.summarize.model == "deepseek-v4-flash"
+
+
+def test_prepare_parsed_from_yaml(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+        prepare:
+          source_root: "raw/"
+          convert_workers: 4
+          ocr_images: false
+          vision_fallback: {enabled: false, model: "gpt-4o", min_words: 5, max_pages_per_doc: 10}
+          summarize: {model: "m-flash", workers: 7}
+          rollup: {model: "m-pro", big_call_model: "m-pro[1m]", workers: 3, crosscutting: false}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.source_root == "raw/"
+    assert cfg.prepare.convert_workers == 4
+    assert cfg.prepare.ocr_images is False
+    assert cfg.prepare.vision_fallback.min_words == 5
+    assert cfg.prepare.vision_fallback.max_pages_per_doc == 10
+    assert cfg.prepare.summarize.workers == 7
+    assert cfg.prepare.rollup.big_call_model == "m-pro[1m]"
+    assert cfg.prepare.rollup.crosscutting is False

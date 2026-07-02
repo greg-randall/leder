@@ -38,6 +38,46 @@ class StageCConfig:
     quote_match_method: str = "normalized"
 
 @dataclass
+class VisionFallbackConfig:
+    enabled: bool = True
+    model: str = "gpt-4o-mini"
+    min_words: int = 20
+    max_pages_per_doc: int = 30
+
+@dataclass
+class PrepareSummarizeConfig:
+    model: str = "deepseek-v4-flash"
+    workers: int = 50
+
+@dataclass
+class PrepareRollupConfig:
+    model: str = "deepseek-v4-pro"
+    big_call_model: str = "deepseek-v4-pro[1m]"
+    workers: int = 12
+    crosscutting: bool = True
+
+@dataclass
+class PrepareConfig:
+    source_root: str = "raw-source-docs/"
+    convert_workers: int = 8
+    ocr_images: bool = True
+    vision_fallback: VisionFallbackConfig = field(default_factory=VisionFallbackConfig)
+    summarize: PrepareSummarizeConfig = field(default_factory=PrepareSummarizeConfig)
+    rollup: PrepareRollupConfig = field(default_factory=PrepareRollupConfig)
+
+    @classmethod
+    def from_raw(cls, raw: dict | None) -> "PrepareConfig":
+        raw = raw or {}
+        return cls(
+            source_root=raw.get("source_root", "raw-source-docs/"),
+            convert_workers=raw.get("convert_workers", 8),
+            ocr_images=raw.get("ocr_images", True),
+            vision_fallback=VisionFallbackConfig(**(raw.get("vision_fallback") or {})),
+            summarize=PrepareSummarizeConfig(**(raw.get("summarize") or {})),
+            rollup=PrepareRollupConfig(**(raw.get("rollup") or {})),
+        )
+
+@dataclass
 class PipelineConfig:
     article: ArticleConfig
     corpus: CorpusConfig
@@ -45,6 +85,7 @@ class PipelineConfig:
     stage_a: StageAConfig = field(default_factory=StageAConfig)
     stage_b: StageBConfig = field(default_factory=StageBConfig)
     stage_c: StageCConfig = field(default_factory=StageCConfig)
+    prepare: PrepareConfig = field(default_factory=PrepareConfig)
     project_root: str = ""
 
     @classmethod
@@ -80,6 +121,7 @@ class PipelineConfig:
             stage_a=StageAConfig(**raw.get("stage_a", {})),
             stage_b=StageBConfig(**raw.get("stage_b", {})),
             stage_c=StageCConfig(**raw.get("stage_c", {})),
+            prepare=PrepareConfig.from_raw(raw.get("prepare")),
         )
         config.project_root = str(Path(path).resolve().parent.parent)
         return config

@@ -20,3 +20,21 @@ stage_b:
 
 stage_c:
   quote_match_method: "normalized"
+
+prepare:
+  source_root: "raw-source-docs/"
+  convert_workers: 8
+  ocr_images: true
+  vision_fallback:
+    enabled: true
+    model: "gpt-4o-mini"
+    min_words: 20
+    max_pages_per_doc: 30
+  summarize:
+    model: "deepseek-v4-flash"
+    workers: 50
+  rollup:
+    model: "deepseek-v4-pro"
+    big_call_model: "deepseek-v4-pro[1m]"
+    workers: 12
+    crosscutting: true

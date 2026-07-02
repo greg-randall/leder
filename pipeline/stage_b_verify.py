@@ -649,7 +649,20 @@ def run_stage_b(
     # Merge results back into full claim set (including already-done claims)
     result_map = {r.claim_id: r for r in results}
     result_map.update({c.claim_id: c for c in already_done})
-    doc.claims = [result_map.get(c.claim_id, c) for c in doc.claims]
+
+    # Deduplicate by claim_text: keep the verified version over untouched,
+    # and the latest result over earlier ones (higher claim_id = newer).
+    seen_text: dict[str, Claim] = {}
+    for c in sorted(doc.claims, key=lambda c: c.claim_id):
+        if c.verdict is not None or c.claim_text not in seen_text:
+            seen_text[c.claim_text] = c
+    deduped = list(seen_text.values())
+
+    # Re-number claims sequentially
+    for i, c in enumerate(deduped):
+        c.claim_id = f"c{i+1:04d}"
+
+    doc.claims = deduped
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(doc.to_json())

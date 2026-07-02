@@ -255,10 +255,14 @@ async def _verify_claim_async(
     if claim.context:
         para_context = f"Surrounding paragraph from the article:\n> {claim.context}\n\n"
 
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%B %d, %Y")
+
     prompt = (
         f"Verify this claim:\n\n"
         f"{article_context}"
         f"{para_context}"
+        f"Today's date: {today}\n\n"
         f"Claim: {claim.claim_text}\n\n"
         f"Claim type: {claim.claim_type}\n\n"
         f"Claim ID: {claim.claim_id}\n\n"

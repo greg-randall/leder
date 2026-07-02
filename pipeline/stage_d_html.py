@@ -79,7 +79,8 @@ _STYLE = """<style>
   .src-card { background: var(--source-bg); border: 1px solid var(--border);
     border-left: 3px solid var(--border); border-radius: 4px;
     padding: 0.35em 0.5em; margin: 0.25em 0; cursor: pointer;
-    transition: box-shadow 0.3s; overflow: hidden; max-height: 2.4em; }
+    transition: box-shadow 0.3s, max-height 0.3s; overflow: hidden;
+    max-height: 3.6em; }
   .src-card.expanded { max-height: none; cursor: default; }
   .src-card.flash { box-shadow: 0 0 0 2px var(--supported); }
   .src-card.supported { border-left-color: var(--supported); }

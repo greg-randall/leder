@@ -133,6 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="pipeline/config.yaml", help="Path to config file"
     )
 
+    e_parser = subparsers.add_parser(
+        "stage-e", help="Generate .docx with comments from sourced article"
+    )
+    e_parser.add_argument("--article", default="article-sourced.md")
+    e_parser.add_argument("--claims", default="claims-full-article-verified.json")
+    e_parser.add_argument("--output", default="article-sourced.docx")
+    e_parser.add_argument(
+        "--config", default="pipeline/config.yaml", help="Path to config file"
+    )
+
     check_parser = subparsers.add_parser(
         "check", help="Run startup validation only"
     )
@@ -322,6 +332,19 @@ def main() -> None:
         from pipeline.stage_d_html import run_stage_d
         run_stage_d(input_path, output_path)
         print(f"Stage D complete: {output_path}")
+
+    # --- Stage E: .docx with comments ---
+    if args.command in ("all", "stage-e"):
+        article_path = getattr(args, "article", "article-sourced.md")
+        article_path = config.resolve_path(article_path) if config else article_path
+        claims_path = getattr(args, "claims", "claims-full-article-verified.json")
+        claims_path = config.resolve_path(claims_path) if config else claims_path
+        output_path = getattr(args, "output", "article-sourced.docx")
+        output_path = config.resolve_path(output_path) if config else output_path
+
+        from pipeline.stage_e_docx import run_stage_e
+        run_stage_e(article_path, claims_path, output_path)
+        print(f"Stage E complete: {output_path}")
 
 
 if __name__ == "__main__":

@@ -32,7 +32,28 @@ python3 -m pipeline.cli check
 
 ### Run it
 
-The file `pipeline/config.yaml` controls models, concurrency, timeouts, and turn limits. The defaults work, but you can dial things up or down.
+The pipeline reads `config.yaml` from the project root. This file controls which models to use, how many agents run at once, timeouts, and turn limits. The defaults are sensible. Here is the full file:
+
+```yaml
+article:
+  path: "article.md"
+
+corpus:
+  root: "source-docs-and-summaries/"
+
+stage_a:
+  model: "deepseek-v4-pro"
+  quality_gate: true
+
+stage_b:
+  model: "deepseek-v4-flash"
+  concurrency: 32
+  timeout: 600
+  max_turns: 60
+
+stage_c:
+  quote_match_method: "levenshtein"
+```
 
 Full pipeline:
 
@@ -173,24 +194,6 @@ g-journalism-run/
 **`pipeline/stage_c_rebuild.py`** uses `find_quote_position()` to strip everything but letters and spaces, try an exact match, then fall back to a sliding-window Levenshtein distance via `difflib.SequenceMatcher`. It picks the best match above 60% similarity. `_letters_pos_to_original()` maps positions back to the original article. `insert_footnote_markers()` snaps insertion points to word boundaries.
 
 **`pipeline/cli.py`** loads `.env` from the project root, auto-detects DeepSeek, and sets the `ANTHROPIC_*` environment variables. It offers overwrite, timestamp, or quit on file conflicts. All five stages are wired as subcommands, plus `all` and `check`.
-
-### Configuration
-
-```yaml
-# pipeline/config.yaml
-stage_a:
-  model: "deepseek-v4-pro"     # Extraction needs a strong model
-  quality_gate: true
-
-stage_b:
-  model: "deepseek-v4-flash"   # Verification is search + JSON
-  concurrency: 32              # Disk I/O is the real bottleneck
-  timeout: 600                 # Seconds per agent
-  max_turns: 60                # Tool-calling rounds per agent
-
-stage_c:
-  quote_match_method: "levenshtein"
-```
 
 ### Provider setup
 

@@ -27,7 +27,7 @@ _STYLE = """<style>
   p { margin: 0 0 1.2em; }
   a { color: #2563eb; text-decoration: none; }
   a:hover { text-decoration: underline; }
-  hr { border: none; border-top: 1px solid var(--border); margin: 3em 0 1.5em; }
+  hr { display: none; }
 
   /* Footnote reference markers in body text — colored pill badges */
   a.fn-ref {
@@ -42,8 +42,7 @@ _STYLE = """<style>
   .fn-ref.unsupported { background: var(--unsupported); }
 
   /* Source cards at bottom */
-  .sources { margin-top: 1em; }
-  .sources h2 { margin-bottom: 0.5em; }
+  .sources { display: none; }  /* hidden — sidebar shows them all */
   .source { background: var(--source-bg); border: 1px solid var(--border);
     border-left: 3px solid var(--border); border-radius: 6px;
     padding: 0.9em 1em; margin: 0.8em 0; }

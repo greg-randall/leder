@@ -102,7 +102,12 @@ _STYLE = """<style>
   .src-card .sc-source { font-size: 0.8em; font-family: monospace; word-break: break-all; }
   .src-card .sc-source a { color: var(--muted); }
   .src-card .sc-flags { font-size: 0.78em; margin-top: 0.2em; }
-  .src-card .sc-num { font-size: 0.7em; color: var(--muted); float: right; }
+  .src-card .sc-num { font-size: 0.85em; font-weight: 700;
+    display: inline-block; padding: 0.1em 0.45em; border-radius: 3px;
+    margin-right: 0.4em; vertical-align: top; }
+  .src-card.supported .sc-num { background: var(--supported); color: #fff; }
+  .src-card.contradicted .sc-num { background: var(--contradicted); color: #fff; }
+  .src-card.unsupported .sc-num { background: var(--unsupported); color: #fff; }
 
   @media (max-width: 1000px) {
     .page { flex-direction: column; }
@@ -134,7 +139,12 @@ _STYLE = """<style>
   .src-card .sc-source { font-size: 0.85em; font-family: monospace; word-break: break-all; display: block; }
   .src-card .sc-source a { color: var(--muted); }
   .src-card .sc-flags { font-size: 0.8em; margin-top: 0.2em; display: block; }
-  .src-card .sc-num { font-size: 0.7em; color: var(--muted); float: right; }
+  .src-card .sc-num { font-size: 0.85em; font-weight: 700;
+    display: inline-block; padding: 0.1em 0.45em; border-radius: 3px;
+    margin-right: 0.4em; vertical-align: top; }
+  .src-card.supported .sc-num { background: var(--supported); color: #fff; }
+  .src-card.contradicted .sc-num { background: var(--contradicted); color: #fff; }
+  .src-card.unsupported .sc-num { background: var(--unsupported); color: #fff; }
 
   @media (max-width: 900px) {
     body { margin-right: 0; }
@@ -181,7 +191,7 @@ document.querySelectorAll('.sources .source').forEach(function(src) {
   card.className = 'src-card ' + vclass;
   card.id = 'sc-' + fnId;
 
-  var html = '<span class="sc-num">#' + fnId + '</span>';
+  var html = '<span class="sc-num ' + vclass + '">#' + fnId + '</span>';
   if (badge) html += '<span class="sc-badge ' + vclass + '">' + badge.innerHTML + '</span>';
   if (claim) html += '<span class="sc-claim">' + claim.innerHTML + '</span>';
   if (rationale) html += '<span class="sc-rationale">' + rationale.innerHTML + '</span>';

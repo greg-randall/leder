@@ -2,6 +2,7 @@
 """prepare-2: batch-summarize converted markdown files into _summary.md."""
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,8 +49,7 @@ def truncate_to_tokens(text: str, max_tokens: int):
     return _ENC.decode(toks[:max_tokens]), True, len(toks)
 
 
-def build_user_msg(md_path: Path):
-    content = md_path.read_text(encoding="utf-8", errors="replace")
+def build_user_msg(md_path: Path, content: str):
     content, truncated, orig_tokens = truncate_to_tokens(content, MAX_CONTENT_TOKENS)
     note = ""
     if truncated:
@@ -87,7 +87,7 @@ def summarize_one(md_path: Path, corpus_root: Path, model: str, force: bool):
             "**Facts:** *(none)*\n", encoding="utf-8")
         return str(md_path.relative_to(corpus_root)), "skip"
 
-    user_msg, truncated, orig_tokens = build_user_msg(md_path)
+    user_msg, truncated, orig_tokens = build_user_msg(md_path, raw)
     try:
         text = call_text_llm(PROMPT, user_msg, model=model, max_tokens=MAX_TOKENS)
         if truncated:
@@ -97,7 +97,8 @@ def summarize_one(md_path: Path, corpus_root: Path, model: str, force: bool):
             text = banner + text
         out_path.write_text(text, encoding="utf-8")
         return str(md_path.relative_to(corpus_root)), ("ok_truncated" if truncated else "ok")
-    except Exception:
+    except Exception as ex:
+        print(f"  prepare-2 failed: {md_path.name}: {type(ex).__name__}: {ex}", file=sys.stderr)
         return str(md_path.relative_to(corpus_root)), "fail"
 
 

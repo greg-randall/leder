@@ -1,7 +1,6 @@
 """Tests for prepare-2 (summarize) and the shared text-LLM helper."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest import mock
 
 import pipeline.prepare_2_summarize as p2
@@ -11,7 +10,9 @@ def test_call_text_llm_concats_text_blocks(monkeypatch):
     from pipeline import llm
 
     class _Block:
-        def __init__(self, text): self.type = "text"; self.text = text
+        def __init__(self, text):
+            self.type = "text"
+            self.text = text
 
     class _Resp:
         content = [_Block("hello "), _Block("world")]

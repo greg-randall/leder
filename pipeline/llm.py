@@ -18,6 +18,7 @@ def call_text_llm(system: str, user: str, model: str, max_tokens: int = 4096) ->
     resp = client.messages.create(
         model=model,
         max_tokens=max_tokens,
+        temperature=0.0,
         system=system,
         messages=[{"role": "user", "content": user}],
         thinking={"type": "disabled"},

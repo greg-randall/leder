@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     all_parser = subparsers.add_parser("all", help="Run the full pipeline")
     all_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help="Path to config file"
+        "--config", default="config.yaml", help="Path to config file"
     )
     all_parser.add_argument("--skip-startup-check", action="store_true")
 
@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     a_parser.add_argument("--article", help="Path to article markdown")
     a_parser.add_argument("--output", default="claims.json")
     a_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help="Path to config file"
+        "--config", default="config.yaml", help="Path to config file"
     )
     a_parser.add_argument(
         "--no-quality-gate",
@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     b_parser.add_argument("--claims", default="claims.json")
     b_parser.add_argument("--output", default="claims.json")
     b_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help="Path to config file"
+        "--config", default="config.yaml", help="Path to config file"
     )
     b_parser.add_argument(
         "--debug", type=int, default=0, metavar="N",
@@ -121,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     c_parser.add_argument("--claims", default="claims.json")
     c_parser.add_argument("--output", default="article-sourced.md")
     c_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help="Path to config file"
+        "--config", default="config.yaml", help="Path to config file"
     )
 
     d_parser = subparsers.add_parser(
@@ -130,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     d_parser.add_argument("--input", default="article-sourced.md")
     d_parser.add_argument("--output", default="article-sourced.html")
     d_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help="Path to config file"
+        "--config", default="config.yaml", help="Path to config file"
     )
 
     e_parser = subparsers.add_parser(
@@ -140,14 +140,14 @@ def build_parser() -> argparse.ArgumentParser:
     e_parser.add_argument("--claims", default="claims-full-article-verified.json")
     e_parser.add_argument("--output", default="article-sourced.docx")
     e_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help="Path to config file"
+        "--config", default="config.yaml", help="Path to config file"
     )
 
     check_parser = subparsers.add_parser(
         "check", help="Run startup validation only"
     )
     check_parser.add_argument(
-        "--config", default="pipeline/config.yaml", help=argparse.SUPPRESS
+        "--config", default="config.yaml", help=argparse.SUPPRESS
     )
 
     return parser

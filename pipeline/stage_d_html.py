@@ -104,8 +104,8 @@ _STYLE = """<style>
   .src-card .sc-source a { color: var(--muted); }
   .src-card .sc-flags { font-size: 0.78em; margin-top: 0.2em; }
   .src-card .sc-num { font-size: 0.85em; font-weight: 700;
-    display: inline-block; padding: 0.1em 0.45em; border-radius: 3px;
-    margin-right: 0.4em; vertical-align: top; }
+    display: inline; padding: 0.1em 0.45em; border-radius: 3px;
+    margin-right: 0.3em; line-height: 1.6; }
   .src-card.supported .sc-num { background: var(--supported); color: #fff; }
   .src-card.contradicted .sc-num { background: var(--contradicted); color: #fff; }
   .src-card.unsupported .sc-num { background: var(--unsupported); color: #fff; }
@@ -141,8 +141,8 @@ _STYLE = """<style>
   .src-card .sc-source a { color: var(--muted); }
   .src-card .sc-flags { font-size: 0.8em; margin-top: 0.2em; display: block; }
   .src-card .sc-num { font-size: 0.85em; font-weight: 700;
-    display: inline-block; padding: 0.1em 0.45em; border-radius: 3px;
-    margin-right: 0.4em; vertical-align: top; }
+    display: inline; padding: 0.1em 0.45em; border-radius: 3px;
+    margin-right: 0.3em; line-height: 1.6; }
   .src-card.supported .sc-num { background: var(--supported); color: #fff; }
   .src-card.contradicted .sc-num { background: var(--contradicted); color: #fff; }
   .src-card.unsupported .sc-num { background: var(--unsupported); color: #fff; }

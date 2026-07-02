@@ -10,7 +10,17 @@ __pycache__/
 ~$*
 .pytest_cache/
 web_cache/
-claims-full-article*.json
-article-sourced.md
-article-sourced.html
-article-sourced.docx
+
+# Generated output — claims, sourced articles, exports
+/claims*.json
+/article*.md
+/article*.html
+/article*.docx
+/*.json
+/*.md
+/*.html
+/*.docx
+
+# But keep these source files
+!/.gitignore
+!/README.md

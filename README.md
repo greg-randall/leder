@@ -2,17 +2,17 @@
 
 ## 1. What it is and why
 
-You have a long article making factual claims, and a folder of source documents that either support or contradict those claims. Verifying every claim by hand is slow, error-prone, and exhausting. This pipeline automates the heavy lifting: it reads your article, pulls out every factual claim, dispatches real AI agents to search your document corpus for evidence, and rebuilds the article with color-coded footnotes linked to sources. The human reviews the finished product — spot-checking sources, investigating anything flagged for review, and making the final call.
+You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. This pipeline does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents for evidence, and rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
 
-It's built for journalism workflows where the source material is a mix of local files (permits, reports, emails, spreadsheets — anything convertible to markdown) and web sources. The pipeline is reusable: swap the article and corpus, and it works the same way.
+It handles a mix of local files (permits, reports, emails, spreadsheets. Anything that converts to markdown.) and web sources. Swap the article and corpus and it works the same way.
 
 ## 2. Quickstart
 
-### Prerequisites
+### What you need
 
 - Python 3.10+
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`sudo apt install ripgrep`)
-- A DeepSeek API key (the pipeline auto-configures for DeepSeek via Anthropic-compatible endpoint; Anthropic keys also work)
+- A DeepSeek API key (Anthropic keys also work. The pipeline auto-configures for DeepSeek.)
 
 ### Install
 
@@ -24,21 +24,23 @@ cp .env.example .env
 #   DEEPSEEK_API_KEY=sk-...
 ```
 
-Verify everything works:
+Check that everything is in place:
 
 ```bash
 python3 -m pipeline.cli check
 ```
 
-### Run the full pipeline
+### Run it
+
+Full pipeline:
 
 ```bash
 python3 -m pipeline.cli all
 ```
 
-This runs startup validation, then all five stages in sequence. With a ~5,000-word article and ~300 documents, expect roughly 15 minutes on DeepSeek V4 Flash.
+Runs startup validation, then all five stages. A ~5,000-word article against ~300 documents takes about 15 minutes on DeepSeek V4 Flash.
 
-### Run a single stage
+One stage at a time:
 
 ```bash
 python3 -m pipeline.cli stage-a --article my_article.md --output claims.json
@@ -48,23 +50,33 @@ python3 -m pipeline.cli stage-d --input article-sourced.md --output article-sour
 python3 -m pipeline.cli stage-e --article article-sourced.md --claims claims-verified.json --output article-sourced.docx
 ```
 
-### What success looks like
+What success looks like:
 
-Stage A prints `Wrote 219 claims → claims.json`. Stage B prints `Done: 132 ✓ / 4 ✗ / 10 ?`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML file with a sidebar of color-coded source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
+Stage A prints `Wrote 219 claims → claims.json`. Stage B prints `Done: 132 ✓ / 4 ✗ / 10 ?`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML page with a sidebar of color-coded source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
 
-## 3. How it works, in plain terms
+## 3. How it works
 
-**Stage A — Decomposition.** The article is split into chunks of ~300 words (at paragraph boundaries, then sentences if needed) and sent to an LLM. The LLM extracts every factual claim — standalone, context-injected statements like "LA-0304 irrigates 165 acres in Karnes County via sprinkler" rather than bare phrases like "165 acres." A quality-gate second pass catches anything missed. Output: `claims.json`.
+### Stage A: Decomposition
 
-**Stage B — Verification.** Each claim gets a real Claude Code agent — an autonomous AI with access to your computer's filesystem and the web. Agents search the local document corpus using a tiered strategy: they start with project-level summaries to identify which case folder is relevant, drill into case-level overviews to find the right document category, then read the original documents to verify the claim. If nothing exists locally (e.g., a claim about a statute or a news event), they search the web. Each agent outputs a structured verdict: supported, contradicted, or unsupported, with a rationale and a verbatim source excerpt. Claims are processed in parallel (default 32 at a time). Results are written incrementally so a crash never loses progress.
+The article is split into chunks of about 300 words, at paragraph boundaries, then sentence breaks if a chunk is too long. Each chunk goes to an LLM which extracts factual claims as standalone statements. "LA-0304 irrigates 165 acres in Karnes County via sprinkler," not "165 acres." A second pass catches anything the first pass missed. Output: `claims.json`.
 
-**Stage C — Rebuild.** The verified claims are matched back to their positions in the original article. Each claim carries a `source_quote` — the verbatim text from the article — which is matched against the article using a sliding-window Levenshtein distance to handle smart quotes, ellipses, and paraphrasing. Footnote markers `[^N]` are inserted at word boundaries and snapped to the end of the matched text. Output: `article-sourced.md`.
+### Stage B: Verification
 
-**Stage D — HTML.** The sourced markdown is converted to a self-contained HTML page using Bootstrap 5. Footnote pills are color-coded (green = supported, red = contradicted, orange = unsupported). A sticky sidebar on the right shows every source card — compact by default, expand on click. Click a footnote pill in the article, the matching sidebar card expands and scrolls into view. Output: `article-sourced.html`.
+Each claim gets a real Claude Code agent. The agent has access to your filesystem and the web. It searches the local corpus top-down: project-level summaries tell it which case folder to look in, case-level overviews point to the right document category, then it reads the original documents and checks the claim. If the claim is about a statute or a news event that isn't in the local files, the agent searches the web. Each agent returns a verdict (supported, contradicted, or unsupported), a rationale, and a verbatim excerpt from the source. Claims run in parallel, 32 at a time by default. Results save after each claim finishes, so a crash doesn't lose progress.
 
-**Stage E — Word document.** The sourced article is converted to a .docx file with each footnote becoming a Word comment anchored to the relevant text. Comments include the verdict, claim, rationale, and source path. Upload to Google Drive, open with Google Docs, and all comments appear in the sidebar for collaborative editing. Output: `article-sourced.docx`.
+### Stage C: Rebuild
 
-## 4. The technical detail
+Each claim carries a `source_quote`, the exact text from the article. Stage C matches these quotes back to their positions. It strips everything but letters and spaces, tries an exact match first, then falls back to a sliding-window Levenshtein distance that handles smart quotes, ellipses, and slight paraphrasing. Footnote markers go at word boundaries. Output: `article-sourced.md`.
+
+### Stage D: HTML
+
+The sourced markdown becomes a self-contained HTML page using Bootstrap 5. Footnote pills are green for supported, red for contradicted, orange for unsupported. A sticky sidebar on the right shows every source card. Cards start compact. Click to expand. Click a pill in the article and the matching sidebar card opens and scrolls into view. Output: `article-sourced.html`.
+
+### Stage E: Word document
+
+The sourced article becomes a .docx. Each footnote turns into a Word comment anchored to its text. Comments contain the verdict, claim, rationale, and source path. Upload to Google Drive, open with Google Docs, and all comments show up in the sidebar. Output: `article-sourced.docx`.
+
+## 4. Technical detail
 
 ### Architecture
 
@@ -83,7 +95,7 @@ article.md
     ▼
 ┌──────────────────────────────────────────────────┐
 │ Stage B: verify_claim() × N (parallel, async)     │
-│   Claude Agent SDK — one real agent per claim      │
+│   Claude Agent SDK. One real agent per claim.      │
 │   Tools: Bash (ripgrep), Read, WebSearch, WebFetch │
 │   Tiered search: summaries → originals → web       │
 │   Structured output via json_schema                │
@@ -120,7 +132,7 @@ article.md
 └──────────────────────────────────────────────────┘
 ```
 
-### File structure
+### Files
 
 ```
 g-journalism-run/
@@ -150,37 +162,37 @@ g-journalism-run/
 └── tests/
 ```
 
-### Key files explained
+### Key files
 
-**`pipeline/models.py`** — The data contract. `Claim` is a dataclass with Stage A fields (`claim_text`, `source_quote`, `claim_type`, `context`), Stage B fields (`verdict`, `source_proximity`, `source_path`, `source_url`, `rationale`, `source_excerpt`, `human_review`, `confidence`), and Stage C fields (`reconciled`). `ClaimsDocument` wraps the article metadata + claim list with `to_json()`/`from_json()`. Every stage reads and writes this format.
+**`pipeline/models.py`** is the data contract. `Claim` is a dataclass with Stage A fields (`claim_text`, `source_quote`, `claim_type`, `context`), Stage B fields (`verdict`, `source_proximity`, `source_path`, `source_url`, `rationale`, `source_excerpt`, `human_review`, `confidence`), and a Stage C field (`reconciled`). `ClaimsDocument` wraps article metadata and the claim list with `to_json()` and `from_json()`. Every stage reads and writes this format.
 
-**`pipeline/stage_b_verify.py`** — The most complex stage. Uses `claude-agent-sdk`'s `query()` to spawn one Claude Code process per claim. Each agent receives the system prompt (tiered search strategy, evaluation criteria, output schema), the surrounding paragraph from the article, and the claim text. `VerdictOutput` is a pydantic model passed as `output_format` — the SDK validates the JSON before we see it. `asyncio.Semaphore` controls concurrency. `_write_incremental` saves partial results after every claim. Resume support: already-verified claims are skipped on re-run.
+**`pipeline/stage_b_verify.py`** is the most complex stage. It uses `claude-agent-sdk`'s `query()` to spawn one Claude Code process per claim. Each agent gets the system prompt (tiered search strategy, evaluation criteria, output schema), the surrounding paragraph from the article, and the claim text. `VerdictOutput` is a pydantic model passed as `output_format`. The SDK validates the JSON before we touch it. `asyncio.Semaphore` controls concurrency. `_write_incremental` saves partial results after every claim. Already-verified claims are skipped on re-run.
 
-**`pipeline/stage_c_rebuild.py`** — `find_quote_position()` strips everything except letters and spaces, then tries exact match. If that fails, it slides a window across the article computing Levenshtein distance via `difflib.SequenceMatcher`, picking the best match above 60% similarity. `_letters_pos_to_original()` maps positions back to the original article using a parallel walk. `insert_footnote_markers()` snaps insertion points to word boundaries.
+**`pipeline/stage_c_rebuild.py`** uses `find_quote_position()` to strip everything but letters and spaces, try an exact match, then fall back to a sliding-window Levenshtein distance via `difflib.SequenceMatcher`. It picks the best match above 60% similarity. `_letters_pos_to_original()` maps positions back to the original article. `insert_footnote_markers()` snaps insertion points to word boundaries.
 
-**`pipeline/cli.py`** — `_load_dotenv()` reads `.env` from the project root. `_setup_provider_env()` auto-detects DeepSeek and sets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, etc. `_resolve_output_path()` offers overwrite/timestamp/quit on file conflicts. All five stages are wired as subcommands, plus `all` and `check`.
+**`pipeline/cli.py`** loads `.env` from the project root, auto-detects DeepSeek, and sets the `ANTHROPIC_*` environment variables. It offers overwrite, timestamp, or quit on file conflicts. All five stages are wired as subcommands, plus `all` and `check`.
 
 ### Configuration
 
 ```yaml
 # pipeline/config.yaml
 stage_a:
-  model: "deepseek-v4-pro"     # Quality extraction needs a strong model
+  model: "deepseek-v4-pro"     # Extraction needs a strong model
   quality_gate: true
 
 stage_b:
-  model: "deepseek-v4-flash"   # Fast/cheap — verification is search + JSON
-  concurrency: 32              # Parallel agents (disk I/O is the real cap)
-  timeout: 600                 # Per-agent timeout in seconds
-  max_turns: 60                # Max tool-calling turns per agent
+  model: "deepseek-v4-flash"   # Verification is search + JSON
+  concurrency: 32              # Disk I/O is the real bottleneck
+  timeout: 600                 # Seconds per agent
+  max_turns: 60                # Tool-calling rounds per agent
 
 stage_c:
-  quote_match_method: "levenshtein"  # Fuzzy matching for source_quote → position
+  quote_match_method: "levenshtein"
 ```
 
 ### Provider setup
 
-The pipeline auto-detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures all `ANTHROPIC_*` environment variables. Stages A, B, and C all use DeepSeek models (configurable per stage). Stage B agents use the Claude Agent SDK which spawns Claude Code CLI processes — these inherit the environment and use DeepSeek through the Anthropic-compatible endpoint.
+The pipeline detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, and related variables. Stage B agents use the Claude Agent SDK, which spawns Claude Code CLI processes. These inherit the environment and use DeepSeek through the Anthropic-compatible endpoint.
 
 ### Debug mode
 
@@ -190,12 +202,12 @@ Stage B supports `--debug N` to randomly sample N claims and save full agent tra
 python3 -m pipeline.cli stage-b --claims claims.json --debug 10
 ```
 
-This writes `debug/{claim_id}.log` (human-readable text output) and `debug/{claim_id}.jsonl` (full message stream including every tool call and result).
+Writes `debug/{claim_id}.log` (text output) and `debug/{claim_id}.jsonl` (full message stream with every tool call and result).
 
 ### Web cache
 
-Agents are instructed to save web-fetched pages to `web_cache/{claim_id}/`. After Stage B completes, a backfill step scans for claims with `source_url` but no cached page, and fetches missing pages via obscura → Jina → curl.
+Agents save web-fetched pages to `web_cache/{claim_id}/`. After Stage B finishes, a backfill step scans for claims with a `source_url` but no cached page, and fetches them via obscura, then Jina, then curl.
 
 ### Resume and deduplication
 
-Stage B skips claims that already have a `supported` or `contradicted` verdict. Stage A deduplicates claims with identical text BEFORE dispatching agents (no point verifying the same text twice). Stage C deduplicates by claim text in the output: if all copies agree on verdict, keeps the median-length rationale; if they disagree, keeps one representative per verdict.
+Stage B skips claims that already have a `supported` or `contradicted` verdict. Stage A deduplicates identical claim text before dispatching agents. Stage C deduplicates by claim text in the output: if all copies agree on verdict, it keeps the median-length rationale. If they disagree, it keeps one representative per verdict.

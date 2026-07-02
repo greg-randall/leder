@@ -77,6 +77,31 @@ What success looks like:
 
 Stage A prints `Wrote 219 claims → claims.json`. Stage B prints `Done: 132 ✓ / 4 ✗ / 10 ?`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML page with a sidebar of color-coded source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
 
+### Corpus prep (before Stage A)
+
+The pipeline reads a corpus of summarized markdown from `corpus.root`. Build it
+from a folder of raw source documents with the `prepare` commands (run once when
+your source docs change; NOT part of `all`):
+
+```bash
+python3 -m pipeline.cli prepare-1   # convert raw files → markdown (MarkItDown + gap-fillers)
+python3 -m pipeline.cli prepare-2   # per-document summaries
+python3 -m pipeline.cli prepare-3   # recursive folder summaries + crosscutting overview
+python3 -m pipeline.cli prepare     # all three in order
+```
+
+Config lives under `prepare:` in `config.yaml`. `source_root` points to your
+raw documents; output goes to `corpus.root`. The primary converter is
+[MarkItDown](https://github.com/microsoft/markitdown) (`pip install markitdown[all]`),
+which handles PDF, DOCX, XLSX, PPTX, MSG, images, and more with built-in OCR.
+Seven gap-filler converters cover formats MarkItDown lacks: .eml, .doc, .ppt,
+.rtf, .odt/.ods/.odp, .tsv, .xml.
+
+Set `OPENAI_API_KEY` for image descriptions and improved OCR via
+`gpt-4o-mini` (used by MarkItDown). Files that can't be converted are listed
+in `UNCONVERTED.md` (loud banner + nonzero exit); files using gap-filler
+converters are listed in `NEEDS_REVIEW.md`.
+
 ## 3. How it works
 
 All output filenames below are the CLI defaults. Every stage accepts `--output` (or `--article`, `--claims`, `--input`) if you want different names.

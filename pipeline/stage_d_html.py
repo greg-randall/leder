@@ -69,26 +69,43 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
-  /* Sidebar */
-  .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.3); z-index: 999; }
-  .sidebar-overlay.open { display: block; }
-  .sidebar { position: fixed; top: 0; right: 0; width: 420px; max-width: 90vw;
-    height: 100vh; overflow-y: auto; z-index: 1000;
+  /* Sidebar — always visible, like Google Docs comments */
+  body { margin-right: 340px; }
+  .sidebar { position: fixed; top: 0; right: 0; width: 330px;
+    height: 100vh; overflow-y: auto; z-index: 100;
     background: var(--bg); border-left: 1px solid var(--border);
-    padding: 1.5rem; transform: translateX(100%);
-    transition: transform 0.25s ease; }
-  .sidebar.open { transform: translateX(0); }
-  .sidebar-close { position: absolute; top: 0.5rem; right: 0.8rem;
-    background: none; border: none; font-size: 1.5rem; cursor: pointer;
-    color: var(--muted); line-height: 1; }
-  .sidebar-close:hover { color: var(--text); }
-  .sidebar .source { margin: 1em 0; }
-  .sidebar .claim-context { font-size: 0.9em; color: var(--muted);
-    padding: 0.5em 0.7em; background: var(--source-bg);
-    border-radius: 4px; margin-bottom: 0.8em; font-style: italic; }
-  .sidebar .claim-context mark { background: var(--supported-bg);
-    color: var(--supported); padding: 0 2px; border-radius: 2px; }
+    padding: 1rem 0.8rem; }
+  .sidebar h3 { font-family: -apple-system, sans-serif; font-size: 0.9em;
+    color: var(--muted); margin: 0 0 0.5rem; position: sticky; top: 0;
+    background: var(--bg); padding: 0.3rem 0; z-index: 1; }
+  .sidebar .src-card { background: var(--source-bg); border: 1px solid var(--border);
+    border-left: 3px solid var(--border); border-radius: 4px;
+    padding: 0.6em 0.7em; margin: 0.5em 0; font-size: 0.82em;
+    transition: box-shadow 0.3s, border-color 0.3s; cursor: pointer; }
+  .sidebar .src-card:hover { background: var(--bg); }
+  .sidebar .src-card.flash { box-shadow: 0 0 0 2px var(--supported); }
+  .src-card.supported { border-left-color: var(--supported); }
+  .src-card.contradicted { border-left-color: var(--contradicted); }
+  .src-card.unsupported { border-left-color: var(--unsupported); }
+  .src-card .sc-badge { display: inline-block; padding: 0 0.35em; border-radius: 3px;
+    font-family: -apple-system, sans-serif; font-size: 0.75em; font-weight: 700; margin-right: 0.4em; }
+  .sc-badge.supported { background: var(--supported-bg); color: var(--supported); }
+  .sc-badge.contradicted { background: var(--contradicted-bg); color: var(--contradicted); }
+  .sc-badge.unsupported { background: var(--unsupported-bg); color: var(--unsupported); }
+  .src-card .sc-claim { font-weight: 600; display: block; margin: 0.2em 0; }
+  .src-card .sc-rationale { color: var(--muted); display: block; margin: 0.2em 0; }
+  .src-card .sc-matched { display: block; margin: 0.3em 0; padding: 0.3em 0.5em;
+    background: var(--bg); border-left: 2px solid var(--border);
+    font-style: italic; font-size: 0.92em; }
+  .src-card .sc-source { font-size: 0.85em; font-family: monospace; word-break: break-all; display: block; }
+  .src-card .sc-source a { color: var(--muted); }
+  .src-card .sc-flags { font-size: 0.8em; margin-top: 0.2em; display: block; }
+  .src-card .sc-num { font-size: 0.7em; color: var(--muted); float: right; }
+
+  @media (max-width: 900px) {
+    body { margin-right: 0; }
+    .sidebar { display: none; }
+  }
 
   @media (prefers-color-scheme: dark) {
     :root { --text: #ddd; --bg: #1a1a1a; --muted: #999;
@@ -96,85 +113,75 @@ _STYLE = """<style>
       --contradicted: #f87171; --contradicted-bg: #3a1a1a;
       --unsupported: #facc15; --unsupported-bg: #3a351a;
       --source-bg: #252525; --border: #333; }
-    .sidebar-overlay { background: rgba(0,0,0,0.6); }
   }
 </style>"""
 
 _SCRIPT = """<script>
-// Build a lookup of footnote data from the source cards
-var fnData = {};
-document.querySelectorAll('.source').forEach(function(src) {
-  var id = src.id.replace('fn', '');
-  fnData[id] = src.innerHTML;
-});
-
-// Sidebar elements
-var overlay = document.createElement('div');
-overlay.className = 'sidebar-overlay';
-document.body.appendChild(overlay);
-
+// Sidebar: always-visible, click footnote to scroll to the matching card
 var sidebar = document.createElement('div');
 sidebar.className = 'sidebar';
-sidebar.innerHTML = '<button class="sidebar-close" title="Close">&times;</button><div class="sidebar-content"></div>';
+sidebar.innerHTML = '<h3>Sources</h3><div class="sidebar-cards"></div>';
 document.body.appendChild(sidebar);
+var cardsContainer = sidebar.querySelector('.sidebar-cards');
 
-var content = sidebar.querySelector('.sidebar-content');
-var closeBtn = sidebar.querySelector('.sidebar-close');
+// Build sidebar cards from the source section at the bottom
+document.querySelectorAll('.sources .source').forEach(function(src) {
+  var card = document.createElement('div');
+  var fnId = src.id.replace('fn', '');
 
-function openSidebar(fnId, refEl) {
-  var data = fnData[fnId];
-  if (!data) return;
+  // Parse the source card's content
+  var badge = src.querySelector('.badge');
+  var claim = src.querySelector('.claim');
+  var rationale = src.querySelector('.rationale');
+  var srcLink = src.querySelector('.src-link');
+  var flags = src.querySelector('.flags');
 
-  // Find the sentence in the article that contains this footnote ref
-  var articleCtx = '';
-  if (refEl) {
-    var p = refEl.closest('p');
-    if (p) {
-      // Get text around the footnote marker
-      var fullText = p.textContent || '';
-      // Find which footnote number we're looking for
-      var refIdx = fullText.indexOf(fnId);
-      if (refIdx > -1) {
-        // Expand to sentence boundaries
-        var before = fullText.lastIndexOf('. ', refIdx);
-        var after = fullText.indexOf('. ', refIdx + fnId.length);
-        if (before === -1) before = 0; else before += 2;
-        if (after === -1) after = fullText.length; else after += 1;
-        articleCtx = fullText.slice(before, after).trim();
-        // Highlight the footnote number
-        articleCtx = articleCtx.replace(fnId, '<mark>' + fnId + '</mark>');
-      } else {
-        articleCtx = fullText.slice(0, 300).trim() + '...';
-      }
-    }
+  var vclass = '';
+  if (badge) {
+    var bt = badge.textContent.trim();
+    if (bt.indexOf('Supported') > -1) vclass = 'supported';
+    else if (bt.indexOf('Contradicted') > -1) vclass = 'contradicted';
+    else vclass = 'unsupported';
   }
+  card.className = 'src-card ' + vclass;
+  card.id = 'sc-' + fnId;
 
-  var ctxHtml = articleCtx ? '<div class="claim-context">' + articleCtx + '</div>' : '';
-  content.innerHTML = ctxHtml + '<div class="source">' + data + '</div>';
-  overlay.classList.add('open');
-  sidebar.classList.add('open');
-}
+  var html = '<span class="sc-num">#' + fnId + '</span>';
+  if (badge) html += '<span class="sc-badge ' + vclass + '">' + badge.innerHTML + '</span>';
+  if (claim) html += '<span class="sc-claim">' + claim.innerHTML + '</span>';
+  if (rationale) html += '<span class="sc-rationale">' + rationale.innerHTML + '</span>';
+  if (srcLink) html += '<span class="sc-source">' + srcLink.innerHTML + '</span>';
+  if (flags && flags.textContent.trim()) html += '<span class="sc-flags">' + flags.innerHTML + '</span>';
 
-function closeSidebar() {
-  overlay.classList.remove('open');
-  sidebar.classList.remove('open');
-}
+  card.innerHTML = html;
+  cardsContainer.appendChild(card);
 
-overlay.addEventListener('click', closeSidebar);
-closeBtn.addEventListener('click', closeSidebar);
+  // Click card to scroll article to the footnote ref
+  card.addEventListener('click', function() {
+    var ref = document.getElementById('fnref' + fnId);
+    if (ref) {
+      ref.scrollIntoView({behavior: 'smooth', block: 'center'});
+      card.classList.add('flash');
+      setTimeout(function() { card.classList.remove('flash'); }, 1500);
+    }
+  });
+});
 
-// Wire up footnote refs to open sidebar
+// Wire up footnote refs: click in article → scroll sidebar to matching card
 document.querySelectorAll('a.fn-ref').forEach(function(ref) {
   ref.addEventListener('click', function(e) {
     e.preventDefault();
     var fnId = this.id.replace('fnref', '');
-    openSidebar(fnId, this);
+    var card = document.getElementById('sc-' + fnId);
+    if (card) {
+      card.scrollIntoView({behavior: 'smooth', block: 'center'});
+      card.classList.add('flash');
+      setTimeout(function() { card.classList.remove('flash'); }, 1500);
+    }
+    // Also scroll to the full source card at bottom
+    var fullSrc = document.getElementById('fn' + fnId);
+    if (fullSrc) fullSrc.scrollIntoView({behavior: 'smooth', block: 'center'});
   });
-});
-
-// Close on Escape
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') closeSidebar();
 });
 </script>"""
 

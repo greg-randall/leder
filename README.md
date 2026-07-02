@@ -32,6 +32,8 @@ python3 -m pipeline.cli check
 
 ### Run it
 
+The file `pipeline/config.yaml` controls models, concurrency, timeouts, and turn limits. The defaults work, but you can dial things up or down.
+
 Full pipeline:
 
 ```bash

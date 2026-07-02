@@ -60,7 +60,7 @@ elsewhere on the filesystem.
    CORPUS_ROLLUP.md: statistical summary (counts, dates, volumes). Use for
      claims with aggregate numbers.
 
-2. GROUP LEVEL -- _CASE_OVERVIEW.md inside each case folder.
+2. GROUP LEVEL -- _FOLDER_SUMMARY.md inside each case folder.
    One overview per permit/pilot. Use for claims about a specific operator,
    facility, or permit number. To discover case folder names, start by
    listing the top-level directory or searching CORPUS_OVERVIEW.md for the
@@ -368,7 +368,7 @@ def _is_summary_path(path: str | None) -> bool:
     if not path:
         return False
     summary_markers = [
-        "_summary", "_CASE_OVERVIEW", "CORPUS_OVERVIEW", "CORPUS_ROLLUP",
+        "_summary", "_FOLDER_SUMMARY", "CORPUS_OVERVIEW", "CORPUS_ROLLUP",
         "ALL_SUMMARIES", "INDEX.md",
     ]
     return any(m in path for m in summary_markers)

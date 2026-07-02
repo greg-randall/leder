@@ -32,7 +32,7 @@ python3 -m pipeline.cli check
 
 ### Run it
 
-The pipeline reads `config.yaml` from the project root. This file controls which models to use, how many agents run at once, timeouts, and turn limits. The defaults are sensible. Here is the full file:
+The pipeline reads `config.yaml` from the project root. This file controls which models to use, how many agents run at once, timeouts, and turn limits. The defaults are sensible. You will want to point `article.path` at your own article and `corpus.root` at your own document folder. Here is the full file:
 
 ```yaml
 article:

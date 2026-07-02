@@ -138,7 +138,13 @@ _SCRIPT = """<script>
         });
         card.classList.add('expanded');
         card.classList.add('flash');
-        card.scrollIntoView({behavior: 'smooth', block: 'center'});
+        // Manually center the card in the sidebar — more reliable than scrollIntoView
+        var sidebarCol = card.closest('.sidebar-col');
+        if (sidebarCol) {
+          var cardTop = card.offsetTop - sidebarCol.offsetTop;
+          var targetScroll = cardTop - (sidebarCol.clientHeight / 2) + (card.offsetHeight / 2);
+          sidebarCol.scrollTo({top: targetScroll, behavior: 'smooth'});
+        }
         setTimeout(function() { card.classList.remove('flash'); }, 2000);
       }
     });

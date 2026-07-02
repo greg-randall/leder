@@ -53,3 +53,19 @@ def test_crosscutting_uses_big_call_model(tmp_path, monkeypatch):
                      big_call_model="pro[1m]", workers=1,
                      crosscutting=True, force=True)
     assert "pro[1m]" in seen  # crosscutting call used the big-call model
+
+
+def test_failed_folder_summary_not_persisted(tmp_path, monkeypatch):
+    corpus = tmp_path / "corpus"
+    _mk(corpus / "A" / "d1_summary.md", "**Summary:** one.")
+    _mk(corpus / "A" / "d2_summary.md", "**Summary:** two.")  # 2 summaries -> LLM path
+
+    def boom(system, user, model, max_tokens=4096):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(p3, "call_text_llm", boom)
+    p3.run_prepare_3(corpus_root=str(corpus), model="pro", big_call_model="pro[1m]",
+                     workers=1, crosscutting=False, force=True)
+    # failed folder summary must NOT be written, so a re-run retries (no poison string)
+    assert not (corpus / "A" / "_FOLDER_SUMMARY.md").exists()
+    assert not (corpus / "CORPUS_OVERVIEW.md").exists()

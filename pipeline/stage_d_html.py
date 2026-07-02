@@ -33,15 +33,20 @@ _STYLE = """<style>
   .fn-ref.unsupported { background: var(--unsupported); }
 
   /* Sidebar cards */
-  /* Sticky sidebar — stays in view while scrolling */
-  .sidebar-col { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
+  /* Smooth scrolling everywhere */
+  html { scroll-behavior: smooth; }
+  .sidebar-col { position: sticky; top: 1rem; max-height: calc(100vh - 2rem);
+    overflow-y: auto; scroll-behavior: smooth; }
 
   .src-card {
     background: var(--source-bg); border: 1px solid #dee2e6;
     border-left: 3px solid #dee2e6; border-radius: 4px;
     padding: 0.4em 0.6em; margin: 0.3em 0; cursor: pointer;
-    overflow: hidden; max-height: 3.8em; transition: max-height 0.3s;
+    overflow: hidden; max-height: 3.8em;
+    transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.4s ease;
   }
+  a.fn-ref { transition: transform 0.2s ease, filter 0.2s ease; }
   .src-card.expanded { max-height: 60em; cursor: default; }
   .src-card.flash { box-shadow: 0 0 0 3px rgba(45,125,70,0.4); }
   .src-card.supported { border-left-color: var(--supported); }
@@ -85,6 +90,21 @@ _STYLE = """<style>
 </style>"""
 
 _SCRIPT = """<script>
+// Eased smooth-scroll helper
+function smoothScrollTo(el, target, duration) {
+  var start = el.scrollTop;
+  var change = target - start;
+  var startTime = performance.now();
+  function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; } // easeInOutQuad
+  function animate(now) {
+    var elapsed = now - startTime;
+    var progress = Math.min(elapsed / duration, 1);
+    el.scrollTop = start + change * ease(progress);
+    if (progress < 1) requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+}
+
 (function() {
   var cardsContainer = document.querySelector('.sidebar-cards');
   if (!cardsContainer) return;
@@ -138,12 +158,12 @@ _SCRIPT = """<script>
         });
         card.classList.add('expanded');
         card.classList.add('flash');
-        // Manually center the card in the sidebar — more reliable than scrollIntoView
+        // Smooth-scroll card to center of sidebar
         var sidebarCol = card.closest('.sidebar-col');
         if (sidebarCol) {
           var cardTop = card.offsetTop - sidebarCol.offsetTop;
-          var targetScroll = cardTop - (sidebarCol.clientHeight / 2) + (card.offsetHeight / 2);
-          sidebarCol.scrollTo({top: targetScroll, behavior: 'smooth'});
+          var target = cardTop - (sidebarCol.clientHeight / 2) + (card.offsetHeight / 2);
+          smoothScrollTo(sidebarCol, target, 500);
         }
         setTimeout(function() { card.classList.remove('flash'); }, 2000);
       }

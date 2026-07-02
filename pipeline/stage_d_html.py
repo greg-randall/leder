@@ -19,10 +19,10 @@ _STYLE = """<style>
     --contradicted: #c42b2b; --contradicted-bg: #fde8e8;
     --unsupported: #b08800; --unsupported-bg: #fff8e1;
     --source-bg: #f5f5f5; --border: #e0e0e0;
-    font-family: Georgia, 'Times New Roman', serif;
-    line-height: 1.7; color: var(--text); background: var(--bg);
-    max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem;
   }
+  body { font-family: Georgia, 'Times New Roman', serif;
+    line-height: 1.7; color: var(--text); background: var(--bg);
+    margin: 0; padding: 0; }
   h1, h2, h3 { font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.3; }
   p { margin: 0 0 1.2em; }
   a { color: #2563eb; text-decoration: none; }
@@ -68,12 +68,19 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
-  /* Sidebar — always visible, like Google Docs comments, doesn't squeeze article */
-  .sidebar { position: fixed; top: 0; right: max(0px, calc((100vw - 720px) / 2 - 350px));
-    width: 320px; height: 100vh; overflow-y: auto; z-index: 100;
-    background: var(--bg); border-left: 1px solid var(--border);
+  /* Layout: article centered, sidebar to the right — single page scroll */
+  .page { display: flex; justify-content: center; gap: 2rem;
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+  .article-col { flex: 0 1 720px; min-width: 0; font-size: 1.05em; line-height: 1.7; }
+  .sidebar { flex: 0 0 300px; position: sticky; top: 1rem;
+    align-self: flex-start; max-height: calc(100vh - 2rem);
+    overflow-y: auto; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px;
     padding: 1rem 0.8rem; }
-  @media (max-width: 1100px) { .sidebar { right: 0; } }
+  @media (max-width: 900px) {
+    .page { flex-direction: column; }
+    .sidebar { display: none; }
+  }
   .sidebar h3 { font-family: -apple-system, sans-serif; font-size: 0.9em;
     color: var(--muted); margin: 0 0 0.5rem; position: sticky; top: 0;
     background: var(--bg); padding: 0.3rem 0; z-index: 1; }
@@ -120,7 +127,8 @@ _SCRIPT = """<script>
 var sidebar = document.createElement('div');
 sidebar.className = 'sidebar';
 sidebar.innerHTML = '<h3>Sources</h3><div class="sidebar-cards"></div>';
-document.body.appendChild(sidebar);
+var page = document.querySelector('.page');
+if (page) page.appendChild(sidebar);
 var cardsContainer = sidebar.querySelector('.sidebar-cards');
 
 // Build sidebar cards from the source section at the bottom
@@ -221,9 +229,12 @@ def convert(article_sourced_md: str, output_html: str) -> None:
 {_STYLE}
 </head>
 <body>
+<div class="page">
+<div class="article-col">
 {unplaced_html}
 {html_body}
-<hr>
+</div>
+</div>
 <div class="sources">
 {sources_html}
 </div>

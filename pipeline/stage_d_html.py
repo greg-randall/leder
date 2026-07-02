@@ -36,15 +36,10 @@ _STYLE = """<style>
     padding: 0.1em 0.35em; border-radius: 10px;
     color: #fff;
   }
-  a.fn-ref:hover { opacity: 0.8; }
+  a.fn-ref:hover { filter: brightness(1.2); transform: scale(1.15); }
   .fn-ref.supported { background: var(--supported); }
   .fn-ref.contradicted { background: var(--contradicted); }
   .fn-ref.unsupported { background: var(--unsupported); }
-
-  /* Hover: highlight the containing sentence */
-  .fn-sentence { border-radius: 3px; transition: background 0.15s; }
-  .fn-sentence:has(.fn-ref:hover) { }
-  /* JavaScript handles the hover highlight since :has parent selector isn't broadly supported */
 
   /* Source cards at bottom */
   .sources { margin-top: 1em; }
@@ -74,8 +69,6 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
-  .sentence-highlight { border-radius: 2px; transition: background-color 0.2s; }
-
   @media (prefers-color-scheme: dark) {
     :root { --text: #ddd; --bg: #1a1a1a; --muted: #999;
       --supported: #4ade80; --supported-bg: #1a3a2a;
@@ -86,33 +79,19 @@ _STYLE = """<style>
 </style>"""
 
 _SCRIPT = """<script>
-// Hover: highlight the sentence around a footnote reference
-document.querySelectorAll('a.fn-ref').forEach(function(ref) {
-  ref.addEventListener('mouseenter', function() {
-    var p = ref.closest('p');
-    if (!p) return;
-    // Find the sentence containing this ref
-    var text = p.textContent || '';
-    var refIdx = Array.from(p.childNodes).indexOf(ref);
-    // Simple approach: wrap the ref's parent text segment
-    var color = getComputedStyle(ref).color;
-    ref.style.backgroundColor = color.replace(')', ', 0.15)').replace('rgb', 'rgba');
-    ref.style.padding = '0 2px';
-  });
-  ref.addEventListener('mouseleave', function() {
-    ref.style.backgroundColor = '';
-    ref.style.padding = '';
-  });
-});
-
 // Click footnote number to highlight source card briefly
 document.querySelectorAll('.source').forEach(function(src) {
-  src.addEventListener('click', function() {
-    var orig = this.style.boxShadow;
-    this.style.boxShadow = '0 0 0 3px ' + getComputedStyle(this).borderLeftColor;
-    this.style.transition = 'box-shadow 0.15s';
-    setTimeout(function() { src.style.boxShadow = orig; }, 2000);
-  });
+  var fnId = src.id.replace('fn', '');
+  var ref = document.getElementById('fnref' + fnId);
+  if (ref) {
+    ref.addEventListener('click', function() {
+      src.scrollIntoView({behavior: 'smooth'});
+      var orig = src.style.boxShadow;
+      src.style.boxShadow = '0 0 0 3px ' + getComputedStyle(src).borderLeftColor;
+      src.style.transition = 'box-shadow 0.15s';
+      setTimeout(function() { src.style.boxShadow = orig; }, 2000);
+    });
+  }
 });
 </script>"""
 

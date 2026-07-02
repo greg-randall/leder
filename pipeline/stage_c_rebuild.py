@@ -22,33 +22,81 @@ def normalize_text(text: str) -> str:
 def find_quote_position(source_quote: str, article_text: str) -> tuple[int, int] | None:
     """Find the (start, end) position of source_quote in article_text.
 
-    Uses normalized matching via regex with flexible whitespace.
-    Returns None if not found or ambiguous (multiple matches).
+    Uses fuzzy matching: splits the quote into words, finds the longest
+    contiguous subsequence of those words that appears in the article.
+    Handles ellipsis, smart quotes, slight paraphrasing.
+    Returns None only if no meaningful match exists.
     """
     n_quote = normalize_text(source_quote)
     if not n_quote:
         return None
 
-    # Split normalized quote on whitespace runs, build a regex that allows
-    # flexible whitespace between non-whitespace segments.
-    parts = re.split(r'(\s+)', n_quote)
-    pattern_parts = []
-    for part in parts:
-        if re.match(r'^\s+$', part):
-            pattern_parts.append(r'\s+')
-        else:
-            pattern_parts.append(re.escape(part))
-
-    pattern = ''.join(pattern_parts)
-
-    matches = list(re.finditer(pattern, article_text, re.IGNORECASE))
-    if not matches:
+    n_article = normalize_text(article_text)
+    quote_words = n_quote.split()
+    if not quote_words:
         return None
-    if len(matches) > 1:
-        return None  # Ambiguous
 
-    m = matches[0]
-    return (m.start(), m.end())
+    # Find longest contiguous subsequence of quote_words in the article.
+    # Works by trying progressively shorter windows.
+    # Minimum match: 5 words or 60% of the quote, whichever is smaller.
+    min_words = max(3, min(5, len(quote_words) // 2))
+
+    for window in range(len(quote_words), min_words - 1, -1):
+        for start in range(len(quote_words) - window + 1):
+            subseq = ' '.join(quote_words[start:start + window])
+            # Build flexible-whitespace regex
+            parts = re.split(r'(\s+)', subseq)
+            pattern_parts = []
+            for part in parts:
+                if re.match(r'^\s+$', part):
+                    pattern_parts.append(r'\s+')
+                else:
+                    pattern_parts.append(re.escape(part))
+            pattern = ''.join(pattern_parts)
+
+            matches = list(re.finditer(pattern, n_article))
+            if len(matches) == 1:
+                m = matches[0]
+                # Map back from normalized to original positions
+                return _normalized_to_original(m.start(), m.end(), article_text)
+            elif len(matches) > 1:
+                # Ambiguous — continue with shorter window
+                pass
+
+    return None
+
+
+def _normalized_to_original(n_start: int, n_end: int, original: str) -> tuple[int, int]:
+    """Map positions in normalized text back to original article positions."""
+    # Walk through original, tracking normalized position
+    norm_pos = 0
+    orig_start = None
+    orig_end = None
+    in_ws = False
+
+    for i, ch in enumerate(original):
+        nch = ch.lower()
+        if nch.isspace():
+            if not in_ws and norm_pos > 0:
+                norm_pos += 1  # Count first whitespace as one space
+                in_ws = True
+        else:
+            in_ws = False
+            nch_stripped = nch.strip('.,;:!?\'"()-[]{}')
+            if nch_stripped:
+                norm_pos += 1
+
+        if orig_start is None and norm_pos >= n_start:
+            orig_start = i
+        if norm_pos >= n_end:
+            orig_end = i
+            break
+
+    if orig_start is None:
+        orig_start = 0
+    if orig_end is None:
+        orig_end = len(original)
+    return (orig_start, orig_end)
 
 
 def insert_footnote_markers(article_text: str, placed_claims: list[tuple[str, tuple[int, int]]]) -> str:

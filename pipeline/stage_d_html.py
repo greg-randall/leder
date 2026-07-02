@@ -87,6 +87,8 @@ _STYLE = """<style>
   .sidebar .claim-context { font-size: 0.9em; color: var(--muted);
     padding: 0.5em 0.7em; background: var(--source-bg);
     border-radius: 4px; margin-bottom: 0.8em; font-style: italic; }
+  .sidebar .claim-context mark { background: var(--supported-bg);
+    color: var(--supported); padding: 0 2px; border-radius: 2px; }
 
   @media (prefers-color-scheme: dark) {
     :root { --text: #ddd; --bg: #1a1a1a; --muted: #999;
@@ -119,10 +121,36 @@ document.body.appendChild(sidebar);
 var content = sidebar.querySelector('.sidebar-content');
 var closeBtn = sidebar.querySelector('.sidebar-close');
 
-function openSidebar(fnId) {
+function openSidebar(fnId, refEl) {
   var data = fnData[fnId];
   if (!data) return;
-  content.innerHTML = '<div class="source">' + data + '</div>';
+
+  // Find the sentence in the article that contains this footnote ref
+  var articleCtx = '';
+  if (refEl) {
+    var p = refEl.closest('p');
+    if (p) {
+      // Get text around the footnote marker
+      var fullText = p.textContent || '';
+      // Find which footnote number we're looking for
+      var refIdx = fullText.indexOf(fnId);
+      if (refIdx > -1) {
+        // Expand to sentence boundaries
+        var before = fullText.lastIndexOf('. ', refIdx);
+        var after = fullText.indexOf('. ', refIdx + fnId.length);
+        if (before === -1) before = 0; else before += 2;
+        if (after === -1) after = fullText.length; else after += 1;
+        articleCtx = fullText.slice(before, after).trim();
+        // Highlight the footnote number
+        articleCtx = articleCtx.replace(fnId, '<mark>' + fnId + '</mark>');
+      } else {
+        articleCtx = fullText.slice(0, 300).trim() + '...';
+      }
+    }
+  }
+
+  var ctxHtml = articleCtx ? '<div class="claim-context">' + articleCtx + '</div>' : '';
+  content.innerHTML = ctxHtml + '<div class="source">' + data + '</div>';
   overlay.classList.add('open');
   sidebar.classList.add('open');
 }
@@ -137,10 +165,10 @@ closeBtn.addEventListener('click', closeSidebar);
 
 // Wire up footnote refs to open sidebar
 document.querySelectorAll('a.fn-ref').forEach(function(ref) {
-  var fnId = ref.id.replace('fnref', '');
   ref.addEventListener('click', function(e) {
     e.preventDefault();
-    openSidebar(fnId);
+    var fnId = this.id.replace('fnref', '');
+    openSidebar(fnId, this);
   });
 });
 

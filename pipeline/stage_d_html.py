@@ -91,7 +91,7 @@ _STYLE = """<style>
   .sc-badge.supported { background: var(--supported-bg); color: var(--supported); }
   .sc-badge.contradicted { background: var(--contradicted-bg); color: var(--contradicted); }
   .sc-badge.unsupported { background: var(--unsupported-bg); color: var(--unsupported); }
-  .src-card .sc-claim { font-weight: 600; }
+  .src-card .sc-claim { font-weight: 600; display: inline; }
   .src-card .sc-rationale, .src-card .sc-matched, .src-card .sc-source,
   .src-card .sc-flags { display: none; }
   .src-card.expanded .sc-rationale, .src-card.expanded .sc-matched,
@@ -193,7 +193,6 @@ document.querySelectorAll('.sources .source').forEach(function(src) {
   card.id = 'sc-' + fnId;
 
   var html = '<span class="sc-num ' + vclass + '">#' + fnId + '</span>';
-  if (badge) html += '<span class="sc-badge ' + vclass + '">' + badge.innerHTML + '</span>';
   if (claim) html += '<span class="sc-claim">' + claim.innerHTML + '</span>';
   if (rationale) html += '<span class="sc-rationale">' + rationale.innerHTML + '</span>';
   if (srcLink) html += '<span class="sc-source">' + srcLink.innerHTML + '</span>';

@@ -2,7 +2,7 @@
 
 ## 1. What it is and why
 
-You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. This pipeline does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents for evidence, and rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
+You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. This pipeline does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents (or the web) for evidence, and rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
 
 It handles a mix of local files (permits, reports, emails, spreadsheets. Anything that converts to markdown.) and web sources. Swap the article and corpus and it works the same way.
 

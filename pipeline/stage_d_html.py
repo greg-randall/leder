@@ -69,12 +69,12 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
-  /* Sidebar — always visible, like Google Docs comments */
-  body { margin-right: 340px; }
-  .sidebar { position: fixed; top: 0; right: 0; width: 330px;
-    height: 100vh; overflow-y: auto; z-index: 100;
+  /* Sidebar — always visible, like Google Docs comments, doesn't squeeze article */
+  .sidebar { position: fixed; top: 0; right: max(0px, calc((100vw - 720px) / 2 - 350px));
+    width: 320px; height: 100vh; overflow-y: auto; z-index: 100;
     background: var(--bg); border-left: 1px solid var(--border);
     padding: 1rem 0.8rem; }
+  @media (max-width: 1100px) { .sidebar { right: 0; } }
   .sidebar h3 { font-family: -apple-system, sans-serif; font-size: 0.9em;
     color: var(--muted); margin: 0 0 0.5rem; position: sticky; top: 0;
     background: var(--bg); padding: 0.3rem 0; z-index: 1; }
@@ -167,7 +167,7 @@ document.querySelectorAll('.sources .source').forEach(function(src) {
   });
 });
 
-// Wire up footnote refs: click in article → scroll sidebar to matching card
+// Wire up footnote refs: click in article → highlight in sidebar (no scroll-to-bottom)
 document.querySelectorAll('a.fn-ref').forEach(function(ref) {
   ref.addEventListener('click', function(e) {
     e.preventDefault();
@@ -176,11 +176,8 @@ document.querySelectorAll('a.fn-ref').forEach(function(ref) {
     if (card) {
       card.scrollIntoView({behavior: 'smooth', block: 'center'});
       card.classList.add('flash');
-      setTimeout(function() { card.classList.remove('flash'); }, 1500);
+      setTimeout(function() { card.classList.remove('flash'); }, 2000);
     }
-    // Also scroll to the full source card at bottom
-    var fullSrc = document.getElementById('fn' + fnId);
-    if (fullSrc) fullSrc.scrollIntoView({behavior: 'smooth', block: 'center'});
   });
 });
 </script>"""

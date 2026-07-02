@@ -138,7 +138,7 @@ _SCRIPT = """<script>
         });
         card.classList.add('expanded');
         card.classList.add('flash');
-        card.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        card.scrollIntoView({behavior: 'smooth', block: 'center'});
         setTimeout(function() { card.classList.remove('flash'); }, 2000);
       }
     });

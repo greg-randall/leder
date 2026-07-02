@@ -19,83 +19,97 @@ def normalize_text(text: str) -> str:
     return text.lower()
 
 
+def _letters_only(text: str) -> str:
+    """Strip everything except letters and spaces, lowercase, collapse whitespace."""
+    result = re.sub(r'[^a-z\n ]', '', text.lower()).replace('\n', ' ')
+    return re.sub(r' +', ' ', result).strip()
+
+
 def find_quote_position(source_quote: str, article_text: str) -> tuple[int, int] | None:
     """Find the (start, end) position of source_quote in article_text.
 
-    Uses fuzzy matching: splits the quote into words, finds the longest
-    contiguous subsequence of those words that appears in the article.
-    Handles ellipsis, smart quotes, slight paraphrasing.
-    Returns None only if no meaningful match exists.
+    Uses sliding-window Levenshtein: strips to letters-only, lowercases,
+    then slides the quote across the article and picks the best match.
     """
-    n_quote = normalize_text(source_quote)
-    if not n_quote:
+    needle = _letters_only(source_quote).split()
+    if not needle:
         return None
 
-    n_article = normalize_text(article_text)
-    quote_words = n_quote.split()
-    if not quote_words:
+    haystack = _letters_only(article_text)
+    haystack_words = haystack.split()
+    needle_len = len(needle)
+    haystack_len = len(haystack_words)
+
+    if needle_len > haystack_len:
         return None
 
-    # Find longest contiguous subsequence of quote_words in the article.
-    # Works by trying progressively shorter windows.
-    # Minimum match: 5 words or 60% of the quote, whichever is smaller.
-    min_words = max(3, min(5, len(quote_words) // 2))
+    # Try exact subsequence first (fast path)
+    needle_str = ' '.join(needle)
+    idx = haystack.find(needle_str)
+    if idx != -1:
+        # Found exact match — find position in original article
+        return _letters_pos_to_original(idx, len(needle_str), article_text)
 
-    for window in range(len(quote_words), min_words - 1, -1):
-        for start in range(len(quote_words) - window + 1):
-            subseq = ' '.join(quote_words[start:start + window])
-            # Build flexible-whitespace regex
-            parts = re.split(r'(\s+)', subseq)
-            pattern_parts = []
-            for part in parts:
-                if re.match(r'^\s+$', part):
-                    pattern_parts.append(r'\s+')
-                else:
-                    pattern_parts.append(re.escape(part))
-            pattern = ''.join(pattern_parts)
+    # Sliding window Levenshtein — compare word sequences
+    import difflib
+    best_ratio = 0.0
+    best_start = None
+    best_len = 0
 
-            matches = list(re.finditer(pattern, n_article))
-            if len(matches) == 1:
-                m = matches[0]
-                # Map back from normalized to original positions
-                return _normalized_to_original(m.start(), m.end(), article_text)
-            elif len(matches) > 1:
-                # Ambiguous — continue with shorter window
-                pass
+    # Window size: needle_len ± 50% (handles added/removed words)
+    for window in range(max(3, needle_len // 2), min(haystack_len, needle_len * 2) + 1):
+        for start in range(haystack_len - window + 1):
+            window_str = ' '.join(haystack_words[start:start + window])
+            ratio = difflib.SequenceMatcher(None, needle_str, window_str).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_start = start
+                best_len = window
 
-    return None
+    # Require at least 60% similarity
+    if best_ratio < 0.6 or best_start is None:
+        return None
+
+    # Map back to original article position
+    window_str = ' '.join(haystack_words[best_start:best_start + best_len])
+    char_start = haystack.find(window_str)
+    if char_start == -1:
+        return None
+    return _letters_pos_to_original(char_start, len(window_str), article_text)
 
 
-def _normalized_to_original(n_start: int, n_end: int, original: str) -> tuple[int, int]:
-    """Map positions in normalized text back to original article positions."""
-    # Walk through original, tracking normalized position
-    norm_pos = 0
-    orig_start = None
-    orig_end = None
-    in_ws = False
+def _letters_pos_to_original(l_start: int, l_len: int, original: str) -> tuple[int, int]:
+    """Map a position in letters-only text back to the original article.
 
-    for i, ch in enumerate(original):
-        nch = ch.lower()
-        if nch.isspace():
-            if not in_ws and norm_pos > 0:
-                norm_pos += 1  # Count first whitespace as one space
-                in_ws = True
-        else:
-            in_ws = False
-            nch_stripped = nch.strip('.,;:!?\'"()-[]{}')
-            if nch_stripped:
-                norm_pos += 1
+    Walks the original and the letters-only text in parallel, building
+    a mapping from letters-only positions to original positions.
+    Collapses multiple spaces to match _letters_only.
+    """
+    letters_text = _letters_only(original)
+    mapping = []
+    li = 0  # position in letters_text
+    prev_was_space = False
 
-        if orig_start is None and norm_pos >= n_start:
-            orig_start = i
-        if norm_pos >= n_end:
-            orig_end = i
+    for oi, ch in enumerate(original):
+        if li >= len(letters_text):
             break
+        lch = letters_text[li]
+        if ch.isalpha():
+            if ch.lower() == lch:
+                mapping.append(oi)
+                li += 1
+                prev_was_space = False
+        elif ch == ' ' or ch == '\n':
+            if lch == ' ' and not prev_was_space:
+                mapping.append(oi)
+                li += 1
+                prev_was_space = True
+        # Other chars (punctuation, digits) are skipped in letters_text
 
-    if orig_start is None:
-        orig_start = 0
-    if orig_end is None:
-        orig_end = len(original)
+    orig_start = mapping[l_start] if l_start < len(mapping) else 0
+    end_idx = l_start + l_len
+    orig_end = mapping[end_idx - 1] + 1 if end_idx <= len(mapping) and end_idx > 0 else len(original)
+
     return (orig_start, orig_end)
 
 

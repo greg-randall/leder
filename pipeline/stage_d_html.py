@@ -68,17 +68,18 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
-  /* Layout: article centered, sidebar to the right — single page scroll */
-  .page { display: flex; justify-content: center; gap: 2rem;
-    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
-  .article-col { flex: 0 1 720px; min-width: 0; font-size: 1.05em; line-height: 1.7; }
-  .sidebar { flex: 0 0 300px; position: sticky; top: 1rem;
-    align-self: flex-start; max-height: calc(100vh - 2rem);
-    overflow-y: auto; background: var(--bg);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 1rem 0.8rem; }
-  @media (max-width: 900px) {
+  /* Layout: article left + sidebar right, proper two-column feel */
+  .page { display: flex; justify-content: center; align-items: flex-start;
+    gap: 0; max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
+  .article-col { flex: 0 1 680px; min-width: 0; padding-right: 2.5rem;
+    font-size: 1.05em; line-height: 1.7; }
+  .sidebar { flex: 0 0 320px; position: sticky; top: 2rem;
+    max-height: calc(100vh - 4rem); overflow-y: auto;
+    background: var(--bg); border-left: 1px solid var(--border);
+    padding: 0 0.8rem 1rem 1.2rem; }
+  @media (max-width: 1000px) {
     .page { flex-direction: column; }
+    .article-col { padding-right: 0; }
     .sidebar { display: none; }
   }
   .sidebar h3 { font-family: -apple-system, sans-serif; font-size: 0.9em;

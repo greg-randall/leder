@@ -125,7 +125,7 @@ For each claim, determine:
 
 - source_excerpt: The verbatim text from the source document that confirms
   or contradicts the claim. Copy-paste the exact sentence(s) from the source.
-  This is the evidence the human reviewer will check against."""
+  This is the evidence the human reviewer will check against.
 
 ## PACE YOURSELF
 

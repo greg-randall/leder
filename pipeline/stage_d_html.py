@@ -33,6 +33,9 @@ _STYLE = """<style>
   .fn-ref.unsupported { background: var(--unsupported); }
 
   /* Sidebar cards */
+  /* Sticky sidebar — stays in view while scrolling */
+  .sidebar-col { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
+
   .src-card {
     background: var(--source-bg); border: 1px solid #dee2e6;
     border-left: 3px solid #dee2e6; border-radius: 4px;
@@ -183,7 +186,9 @@ def convert(article_sourced_md: str, output_html: str) -> None:
 {html_body}
 </div>
 <div class="col-lg-4">
+<div class="sidebar-col">
 <div class="sidebar-cards mt-3"></div>
+</div>
 </div>
 </div>
 </div>

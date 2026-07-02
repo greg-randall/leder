@@ -284,6 +284,30 @@ def run_stage_c(
         doc = ClaimsDocument.from_json(f.read())
 
     claims = doc.claims
+
+    # Deduplicate by claim_text: agree → median length, disagree → one per verdict
+    from collections import defaultdict
+    groups: dict[str, list[Claim]] = defaultdict(list)
+    for c in claims:
+        if c.verdict is not None:
+            groups[c.claim_text].append(c)
+    deduped = []
+    for text, dupes in groups.items():
+        by_verdict: dict[str, list[Claim]] = defaultdict(list)
+        for c in dupes:
+            by_verdict[c.verdict or "unsupported"].append(c)
+        for vclaims in by_verdict.values():
+            vclaims.sort(key=lambda c: len(c.rationale or ""))
+            deduped.append(vclaims[len(vclaims) // 2])
+    seen_texts = set(groups.keys())
+    for c in claims:
+        if c.verdict is None and c.claim_text not in seen_texts:
+            deduped.append(c)
+            seen_texts.add(c.claim_text)
+    for i, c in enumerate(deduped):
+        c.claim_id = f"c{i+1:04d}"
+    claims = deduped
+
     placed = []
     unmatched = []
 

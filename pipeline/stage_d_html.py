@@ -68,15 +68,42 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
-  /* Layout: article left + sidebar right, proper two-column feel */
+  /* Layout: article left + comments column right, single page scroll */
   .page { display: flex; justify-content: center; align-items: flex-start;
     gap: 0; max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
   .article-col { flex: 0 1 680px; min-width: 0; padding-right: 2.5rem;
     font-size: 1.05em; line-height: 1.7; }
-  .sidebar { flex: 0 0 320px; position: sticky; top: 2rem;
-    max-height: calc(100vh - 4rem); overflow-y: auto;
-    background: var(--bg); border-left: 1px solid var(--border);
-    padding: 0 0.8rem 1rem 1.2rem; }
+  .sidebar { flex: 0 0 320px; background: var(--bg);
+    border-left: 1px solid var(--border); padding: 0 0 1rem 1.2rem; }
+  /* Compact cards — expand on click */
+  .src-card { background: var(--source-bg); border: 1px solid var(--border);
+    border-left: 3px solid var(--border); border-radius: 4px;
+    padding: 0.35em 0.5em; margin: 0.25em 0; cursor: pointer;
+    transition: box-shadow 0.3s; overflow: hidden; max-height: 2.4em; }
+  .src-card.expanded { max-height: none; cursor: default; }
+  .src-card.flash { box-shadow: 0 0 0 2px var(--supported); }
+  .src-card.supported { border-left-color: var(--supported); }
+  .src-card.contradicted { border-left-color: var(--contradicted); }
+  .src-card.unsupported { border-left-color: var(--unsupported); }
+  .src-card .sc-badge { display: inline-block; padding: 0 0.35em; border-radius: 3px;
+    font-family: -apple-system, sans-serif; font-size: 0.72em; font-weight: 700; margin-right: 0.4em; }
+  .sc-badge.supported { background: var(--supported-bg); color: var(--supported); }
+  .sc-badge.contradicted { background: var(--contradicted-bg); color: var(--contradicted); }
+  .sc-badge.unsupported { background: var(--unsupported-bg); color: var(--unsupported); }
+  .src-card .sc-claim { font-weight: 600; }
+  .src-card .sc-rationale, .src-card .sc-matched, .src-card .sc-source,
+  .src-card .sc-flags { display: none; }
+  .src-card.expanded .sc-rationale, .src-card.expanded .sc-matched,
+  .src-card.expanded .sc-source, .src-card.expanded .sc-flags { display: block; }
+  .src-card .sc-rationale { color: var(--muted); margin: 0.3em 0; font-size: 0.85em; }
+  .src-card .sc-matched { margin: 0.3em 0; padding: 0.3em 0.5em;
+    background: var(--bg); border-left: 2px solid var(--border);
+    font-style: italic; font-size: 0.85em; }
+  .src-card .sc-source { font-size: 0.8em; font-family: monospace; word-break: break-all; }
+  .src-card .sc-source a { color: var(--muted); }
+  .src-card .sc-flags { font-size: 0.78em; margin-top: 0.2em; }
+  .src-card .sc-num { font-size: 0.7em; color: var(--muted); float: right; }
+
   @media (max-width: 1000px) {
     .page { flex-direction: column; }
     .article-col { padding-right: 0; }
@@ -164,27 +191,32 @@ document.querySelectorAll('.sources .source').forEach(function(src) {
   card.innerHTML = html;
   cardsContainer.appendChild(card);
 
-  // Click card to scroll article to the footnote ref
-  card.addEventListener('click', function() {
-    var ref = document.getElementById('fnref' + fnId);
-    if (ref) {
-      ref.scrollIntoView({behavior: 'smooth', block: 'center'});
-      card.classList.add('flash');
-      setTimeout(function() { card.classList.remove('flash'); }, 1500);
+  // Click card to expand/collapse
+  card.addEventListener('click', function(e) {
+    card.classList.toggle('expanded');
+    if (card.classList.contains('expanded')) {
+      // Scroll article to this footnote
+      var ref = document.getElementById('fnref' + fnId);
+      if (ref) ref.scrollIntoView({behavior: 'smooth', block: 'center'});
     }
   });
 });
 
-// Wire up footnote refs: click in article → highlight in sidebar (no scroll-to-bottom)
+// Wire up footnote refs: click → expand matching card + scroll page to align
 document.querySelectorAll('a.fn-ref').forEach(function(ref) {
   ref.addEventListener('click', function(e) {
     e.preventDefault();
     var fnId = this.id.replace('fnref', '');
     var card = document.getElementById('sc-' + fnId);
     if (card) {
-      card.scrollIntoView({behavior: 'smooth', block: 'center'});
+      // Collapse all other cards
+      document.querySelectorAll('.src-card.expanded').forEach(function(c) {
+        if (c !== card) c.classList.remove('expanded');
+      });
+      card.classList.add('expanded');
+      // Flash briefly
       card.classList.add('flash');
-      setTimeout(function() { card.classList.remove('flash'); }, 2000);
+      setTimeout(function() { card.classList.remove('flash'); }, 1500);
     }
   });
 });

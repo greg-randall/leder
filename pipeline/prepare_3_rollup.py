@@ -162,9 +162,7 @@ def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
 
     if only in (None, "tree"):
         print("prepare-3: building recursive folder summaries...")
-        for d in sorted(c for c in root.iterdir() if c.is_dir()):
-            summarize_folder(d, root, model, force)
-        # Summarize the root folder from top-level file + subfolder summaries.
+        # One post-order pass over the whole tree (recurses into every subdir).
         summarize_folder(root, root, model, force)
         root_summary = root / "_FOLDER_SUMMARY.md"
         if root_summary.exists():

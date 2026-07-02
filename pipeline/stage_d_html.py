@@ -69,29 +69,84 @@ _STYLE = """<style>
   .unplaced h2 { marginTop: 0; color: var(--contradicted); }
   .unplaced li { marginBottom: 0.8em; }
 
+  /* Sidebar */
+  .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.3); z-index: 999; }
+  .sidebar-overlay.open { display: block; }
+  .sidebar { position: fixed; top: 0; right: 0; width: 420px; max-width: 90vw;
+    height: 100vh; overflow-y: auto; z-index: 1000;
+    background: var(--bg); border-left: 1px solid var(--border);
+    padding: 1.5rem; transform: translateX(100%);
+    transition: transform 0.25s ease; }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-close { position: absolute; top: 0.5rem; right: 0.8rem;
+    background: none; border: none; font-size: 1.5rem; cursor: pointer;
+    color: var(--muted); line-height: 1; }
+  .sidebar-close:hover { color: var(--text); }
+  .sidebar .source { margin: 1em 0; }
+  .sidebar .claim-context { font-size: 0.9em; color: var(--muted);
+    padding: 0.5em 0.7em; background: var(--source-bg);
+    border-radius: 4px; margin-bottom: 0.8em; font-style: italic; }
+
   @media (prefers-color-scheme: dark) {
     :root { --text: #ddd; --bg: #1a1a1a; --muted: #999;
       --supported: #4ade80; --supported-bg: #1a3a2a;
       --contradicted: #f87171; --contradicted-bg: #3a1a1a;
       --unsupported: #facc15; --unsupported-bg: #3a351a;
       --source-bg: #252525; --border: #333; }
+    .sidebar-overlay { background: rgba(0,0,0,0.6); }
   }
 </style>"""
 
 _SCRIPT = """<script>
-// Click footnote number to highlight source card briefly
+// Build a lookup of footnote data from the source cards
+var fnData = {};
 document.querySelectorAll('.source').forEach(function(src) {
-  var fnId = src.id.replace('fn', '');
-  var ref = document.getElementById('fnref' + fnId);
-  if (ref) {
-    ref.addEventListener('click', function() {
-      src.scrollIntoView({behavior: 'smooth'});
-      var orig = src.style.boxShadow;
-      src.style.boxShadow = '0 0 0 3px ' + getComputedStyle(src).borderLeftColor;
-      src.style.transition = 'box-shadow 0.15s';
-      setTimeout(function() { src.style.boxShadow = orig; }, 2000);
-    });
-  }
+  var id = src.id.replace('fn', '');
+  fnData[id] = src.innerHTML;
+});
+
+// Sidebar elements
+var overlay = document.createElement('div');
+overlay.className = 'sidebar-overlay';
+document.body.appendChild(overlay);
+
+var sidebar = document.createElement('div');
+sidebar.className = 'sidebar';
+sidebar.innerHTML = '<button class="sidebar-close" title="Close">&times;</button><div class="sidebar-content"></div>';
+document.body.appendChild(sidebar);
+
+var content = sidebar.querySelector('.sidebar-content');
+var closeBtn = sidebar.querySelector('.sidebar-close');
+
+function openSidebar(fnId) {
+  var data = fnData[fnId];
+  if (!data) return;
+  content.innerHTML = '<div class="source">' + data + '</div>';
+  overlay.classList.add('open');
+  sidebar.classList.add('open');
+}
+
+function closeSidebar() {
+  overlay.classList.remove('open');
+  sidebar.classList.remove('open');
+}
+
+overlay.addEventListener('click', closeSidebar);
+closeBtn.addEventListener('click', closeSidebar);
+
+// Wire up footnote refs to open sidebar
+document.querySelectorAll('a.fn-ref').forEach(function(ref) {
+  var fnId = ref.id.replace('fnref', '');
+  ref.addEventListener('click', function(e) {
+    e.preventDefault();
+    openSidebar(fnId);
+  });
+});
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeSidebar();
 });
 </script>"""
 

@@ -312,7 +312,8 @@ def run_stage_c(
     unmatched = []
 
     # First pass: mechanical matching
-    for claim in claims:
+    from tqdm import tqdm
+    for claim in tqdm(claims, desc="  Matching", unit="claim"):
         pos = find_quote_position(claim.source_quote, article_text)
         if pos:
             placed.append((claim.claim_id, pos))
@@ -326,7 +327,7 @@ def run_stage_c(
         print(f"Reconciling {len(unmatched)} unmatched quotes via LLM...")
         reconciled_claims = reconcile_unmatched_quotes(unmatched, article_text, model)
         still_unmatched = []
-        for claim in reconciled_claims:
+        for claim in tqdm(reconciled_claims, desc="  Recheck", unit="claim"):
             pos = find_quote_position(claim.source_quote, article_text)
             if pos:
                 placed.append((claim.claim_id, pos))

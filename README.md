@@ -109,52 +109,52 @@ The sourced article becomes a .docx. Each footnote turns into a Word comment anc
 article.md
     │
     ▼
-┌──────────────────────────────────────────────────┐
-│ Stage A: extract_claims()                         │
-│   LLM (DeepSeek V4 Pro) + structured output       │
+┌────────────────────────────────────────────────────┐
+│ Stage A: extract_claims()                          │
+│   LLM (DeepSeek V4 Pro) + structured output        │
 │   Chunks article (~300 words), extracts in parallel│
 │   Quality gate: second pass catches missed claims  │
 │   Output: claims.json                              │
-└──────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
     │
     ▼
-┌──────────────────────────────────────────────────┐
-│ Stage B: verify_claim() × N (parallel, async)     │
+┌────────────────────────────────────────────────────┐
+│ Stage B: verify_claim() × N (parallel, async)      │
 │   Claude Agent SDK. One real agent per claim.      │
 │   Tools: Bash (ripgrep), Read, WebSearch, WebFetch │
 │   Tiered search: summaries → originals → web       │
 │   Structured output via json_schema                │
 │   Incremental writes (crash-resistant)             │
 │   Output: claims.json (enriched with verdicts)     │
-└──────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
     │
     ▼
-┌──────────────────────────────────────────────────┐
-│ Stage C: insert_footnote_markers()                │
+┌────────────────────────────────────────────────────┐
+│ Stage C: insert_footnote_markers()                 │
 │   Sliding-window Levenshtein for source_quote      │
 │   → article position mapping                       │
 │   Word-boundary snapping for footnote markers      │
 │   Deduplicates claims with same text               │
 │   Output: article-sourced.md                       │
-└──────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
     │
     ▼
-┌──────────────────────────────────────────────────┐
-│ Stage D: convert()                                │
+┌────────────────────────────────────────────────────┐
+│ Stage D: convert()                                 │
 │   Markdown → Bootstrap 5 HTML                      │
 │   Color-coded pill badges (green/red/orange)       │
 │   Sticky sidebar with expandable source cards      │
 │   Output: article-sourced.html                     │
-└──────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
     │
     ▼
-┌──────────────────────────────────────────────────┐
-│ Stage E: convert()                                │
+┌────────────────────────────────────────────────────┐
+│ Stage E: convert()                                 │
 │   Parses sourced markdown + claims JSON            │
 │   python-docx 1.2.0 native comment API             │
 │   Anchors comments to text runs                    │
 │   Output: article-sourced.docx                     │
-└──────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
 ```
 
 ### Files

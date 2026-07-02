@@ -1,5 +1,6 @@
 # tests/test_startup_check.py
 import pytest
+from pipeline import startup_check as sc
 from pipeline.startup_check import (
     check_ripgrep,
     check_trafilatura,
@@ -33,3 +34,38 @@ def test_fatal_check_failure():
     """Verify validate_startup() returns a bool (True if all fatal checks pass)."""
     result = validate_startup()
     assert isinstance(result, bool)
+
+
+def test_warn_stale_corpus(tmp_path):
+    (tmp_path / "UNCONVERTED.md").write_text("x")
+    warns = sc.warn_stale_corpus(str(tmp_path))
+    assert any("UNCONVERTED.md" in w for w in warns)
+
+    # NEEDS_REVIEW.md also warns
+    (tmp_path / "NEEDS_REVIEW.md").write_text("x")
+    warns2 = sc.warn_stale_corpus(str(tmp_path))
+    assert sum(1 for w in warns2 if "NEEDS_REVIEW.md" in w or "UNCONVERTED.md" in w) == 2
+
+
+def test_warn_stale_corpus_clean(tmp_path):
+    assert sc.warn_stale_corpus(str(tmp_path)) == []
+
+
+def test_warn_missing_vision_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert sc.warn_missing_vision_key(True) != ""
+    assert sc.warn_missing_vision_key(False) == ""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    assert sc.warn_missing_vision_key(True) == ""
+
+
+def test_conversion_tool_checks_present():
+    names = {c.name for c in sc.run_startup_checks()}
+    for tool in ["tesseract", "pdftoppm", "pdftotext", "pandoc", "libreoffice", "antiword"]:
+        assert tool in names, f"missing check for {tool}"
+
+
+def test_conversion_tool_checks_non_fatal():
+    for c in sc.run_startup_checks():
+        if c.name in ("tesseract", "pdftoppm", "pdftotext", "pandoc", "libreoffice", "antiword"):
+            assert c.fatal is False, f"{c.name} should be non-fatal"

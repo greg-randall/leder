@@ -1,10 +1,12 @@
 """Validate that all required external tools are available before pipeline runs."""
 from __future__ import annotations
 
+import os
 import sys
 import subprocess
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -92,7 +94,67 @@ def check_scrape_skill() -> CheckResult:
                        detail="available (invoked at runtime via Skill tool)")
 
 
-_ALL_CHECKS = [check_ripgrep, check_jina, check_obscura, check_trafilatura, check_scrape_skill]
+# ── Non-fatal conversion-tool checks ──────────────────────────────────────
+
+def _check_tool(cmd: str, hint: str) -> CheckResult:
+    path = shutil.which(cmd)
+    if path:
+        return CheckResult(name=cmd, passed=True, fatal=False, detail="installed")
+    return CheckResult(name=cmd, passed=False, fatal=False, detail="NOT FOUND",
+                       install_hint=hint)
+
+
+def check_tesseract() -> CheckResult:
+    return _check_tool("tesseract", "Install: sudo apt install tesseract-ocr")
+
+
+def check_pdftoppm() -> CheckResult:
+    return _check_tool("pdftoppm", "Install: sudo apt install poppler-utils")
+
+
+def check_pdftotext() -> CheckResult:
+    return _check_tool("pdftotext", "Install: sudo apt install poppler-utils")
+
+
+def check_pandoc() -> CheckResult:
+    return _check_tool("pandoc", "Install: sudo apt install pandoc")
+
+
+def check_libreoffice() -> CheckResult:
+    return _check_tool("libreoffice", "Install: sudo apt install libreoffice")
+
+
+def check_antiword() -> CheckResult:
+    return _check_tool("antiword", "Install: sudo apt install antiword")
+
+
+# ── Corpus / vision-key warnings (non-fatal) ─────────────────────────────
+
+def warn_stale_corpus(corpus_root: str) -> list[str]:
+    """Return warning strings if prep left report files behind."""
+    warns = []
+    root = Path(corpus_root)
+    for fname, what in (("UNCONVERTED.md", "unconvertible files"),
+                        ("NEEDS_REVIEW.md", "fallback-converted files to verify")):
+        if (root / fname).exists():
+            warns.append(f"  {fname} exists at corpus root — {what}. See {root / fname}")
+    return warns
+
+
+def warn_missing_vision_key(vision_enabled: bool) -> str:
+    """Warning if vision is on but OPENAI_API_KEY is unset."""
+    if vision_enabled and not os.environ.get("OPENAI_API_KEY"):
+        return ("  prepare.vision_fallback is enabled but OPENAI_API_KEY "
+                "is not set — pip install markitdown[all] and set OPENAI_API_KEY "
+                "for image/PDF vision fallback.")
+    return ""
+
+
+_ALL_CHECKS = [
+    check_ripgrep, check_jina, check_obscura, check_trafilatura, check_scrape_skill,
+    check_tesseract, check_pdftoppm, check_pdftotext, check_pandoc,
+    check_libreoffice, check_antiword,
+]
 
 
 def run_startup_checks() -> list[CheckResult]:

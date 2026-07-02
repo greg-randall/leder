@@ -158,14 +158,11 @@ function smoothScrollTo(el, target, duration) {
         });
         card.classList.add('expanded');
         card.classList.add('flash');
-        // Smooth-scroll card to center of sidebar
-        var sidebarCol = card.closest('.sidebar-col');
-        if (sidebarCol) {
-          var cardTop = card.offsetTop - sidebarCol.offsetTop;
-          var target = cardTop - (sidebarCol.clientHeight / 3) + (card.offsetHeight / 6);
-          smoothScrollTo(sidebarCol, target, 500);
-        }
-        setTimeout(function() { card.classList.remove('flash'); }, 2000);
+        // Scroll the card to the top of the sidebar viewport
+        setTimeout(function() {
+          card.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }, 150);
+        setTimeout(function() { card.classList.remove('flash'); }, 2500);
       }
     });
   });

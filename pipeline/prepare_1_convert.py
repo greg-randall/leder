@@ -27,6 +27,8 @@ try:
     from openai import OpenAI as _OpenAI
     _HAS_MARKITDOWN = True
 except ImportError:
+    _MarkItDown = None  # type: ignore[assignment]
+    _OpenAI = None  # type: ignore[assignment]
     _HAS_MARKITDOWN = False
 
 
@@ -119,6 +121,7 @@ def convert_xml(inpath: Path, outpath: Path):
 def _convert_via_libreoffice(inpath: Path, outpath: Path):
     """Generic LibreOffice headless text conversion."""
     md = outpath.with_suffix(".md")
+    txt = None
     try:
         subprocess.run(
             ["libreoffice", "--headless", "--convert-to", "txt:Text",
@@ -129,10 +132,14 @@ def _convert_via_libreoffice(inpath: Path, outpath: Path):
         if txt.exists() and txt.stat().st_size > 10:
             content = txt.read_text(encoding="utf-8", errors="replace")
             md.write_text(content, encoding="utf-8")
-            txt.unlink()
             return True, len(content), "libreoffice"
-    except Exception:
-        pass
+    except Exception as ex:
+        print(f"  prepare-1 libreoffice failed: {inpath.name}: {type(ex).__name__}: {ex}",
+              file=sys.stderr)
+        return False, 0, "libreoffice"
+    finally:
+        if txt is not None and txt.exists():
+            txt.unlink()
     return False, 0, "libreoffice"
 
 
@@ -151,7 +158,9 @@ def convert_rtf(inpath: Path, outpath: Path):
         )
         if md.exists() and md.stat().st_size > 10:
             return True, md.stat().st_size, "pandoc-rtf"
-    except Exception:
+    except Exception as ex:
+        print(f"  prepare-1 pandoc failed: {inpath.name}: {type(ex).__name__}: {ex}",
+              file=sys.stderr)
         pass
     return _convert_via_libreoffice(inpath, outpath)
 
@@ -199,14 +208,14 @@ def is_meaningful(content: str) -> bool:
 
 def process_file(filepath: Path, src_root: Path, out_root: Path,
                  vision_model: str | None, force: bool,
-                 needs_review: list, md_client=None):
-    """Convert one file. Returns (relpath, status, detail)."""
+                 md_client=None):
+    """Convert one file. Returns (relpath, status, detail, note_or_None)."""
     filepath = Path(filepath)
     name = filepath.name
     ext = filepath.suffix.lower()
 
     if name.startswith(TEMP_FILE_PREFIXES):
-        return str(filepath.relative_to(src_root)), "skip", "temp/lock file"
+        return str(filepath.relative_to(src_root)), "skip", "temp/lock file", None
 
     relpath = filepath.relative_to(src_root)
     outpath = out_root / relpath.parent / relpath.stem
@@ -216,7 +225,7 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
         try:
             existing = md_path.read_text(encoding="utf-8", errors="replace")
             if is_meaningful(existing):
-                return str(relpath), "skip", "already converted"
+                return str(relpath), "skip", "already converted", None
         except Exception:
             pass
 
@@ -226,7 +235,7 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
     if md_client is not None:
         ok, size, method = _convert_with_markitdown(filepath, outpath, md_client, vision_model)
         if ok:
-            return str(relpath), "ok", method
+            return str(relpath), "ok", method, None
 
     # 2. Try a gap-filler if one exists.
     gap_filler = GAP_FILLERS.get(ext)
@@ -234,14 +243,15 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
         try:
             ok, size, method = gap_filler(filepath, outpath)
             if ok:
-                needs_review.append((str(relpath), f"used {method} fallback"))
-                return str(relpath), "ok", method
-        except Exception:
-            pass
+                note = f"used {method} fallback"
+                return str(relpath), "ok", method, note
+        except Exception as ex:
+            print(f"  prepare-1 gap-filler failed: {relpath}: {type(ex).__name__}: {ex}",
+                  file=sys.stderr)
 
     # 3. Nothing worked.
     reason = f"no converter for {ext}" if gap_filler is None else "converter returned empty"
-    return str(relpath), "fail", reason
+    return str(relpath), "fail", reason, None
 
 
 # ── Reporting ─────────────────────────────────────────────────
@@ -316,14 +326,18 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
             for f in files:
                 fut = pool.submit(
                     process_file, f, src_root, out_root, vision_model,
-                    force, needs_review, md_client,
+                    force, md_client,
                 )
                 futmap[fut] = f
             for future in as_completed(futmap):
-                _, status, detail = future.result()
+                _, status, detail, note = future.result()
                 with results_lock:
                     if status == "ok":
                         ok_ct += 1
+                        if note is not None:
+                            needs_review.append((
+                                str(Path(futmap[future]).relative_to(src_root)), note,
+                            ))
                     elif status == "skip":
                         skip_ct += 1
                     else:

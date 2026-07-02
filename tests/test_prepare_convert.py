@@ -1,6 +1,8 @@
 """Tests for prepare-1 converter (MarkItDown + gap-fillers)."""
 from __future__ import annotations
 
+import os
+
 import pipeline.prepare_1_convert as p1
 
 
@@ -49,18 +51,30 @@ def test_convert_xml(tmp_path):
 
 # ── MarkItDown adapter test ───────────────────────────────────
 
-def test_markitdown_adapter(tmp_path, monkeypatch):
-    """MarkItDown adapter returns ok when the SDK produces markdown."""
-    monkeypatch.setattr(p1, "_get_markitdown", lambda model: None)
-    monkeypatch.setattr(
-        p1, "_convert_with_markitdown",
-        lambda filepath, outpath, md_client, model: (True, 100, "markitdown"),
-    )
-    src = tmp_path / "doc.pdf"
-    src.write_text("fake")
-    out = tmp_path / "doc"
-    ok, size, method = p1._convert_with_markitdown(src, out, None, "gpt-4o-mini")
-    assert ok and method == "markitdown"
+class _FakeMarkItDown:
+    """Stand-in for the real MarkItDown class for testing."""
+    def __init__(self, llm_client=None, llm_model=None):
+        self.llm_client = llm_client
+        self.llm_model = llm_model
+
+
+class _FakeOpenAI:
+    """Stand-in for OpenAI class."""
+    def __init__(self, api_key=None):
+        self.api_key = api_key
+
+
+def test_get_markitdown_wiring(monkeypatch):
+    """Verify _get_markitdown returns a client when MarkItDown is present."""
+    monkeypatch.setattr(p1, "_HAS_MARKITDOWN", True)
+    monkeypatch.setattr(p1, "_MarkItDown", _FakeMarkItDown)
+    monkeypatch.setattr(p1, "_OpenAI", _FakeOpenAI)
+    monkeypatch.setattr(os, "environ", {"OPENAI_API_KEY": "sk-test"})
+    client = p1._get_markitdown("gpt-4o-mini")
+    assert client is not None
+    assert client.llm_model == "gpt-4o-mini"
+    assert client.llm_client is not None
+    assert client.llm_client.api_key == "sk-test"
 
 
 # ── Dispatch + gap-filler fallback ────────────────────────────
@@ -75,13 +89,14 @@ def test_process_file_falls_back_to_gap_filler(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(p1, "_HAS_MARKITDOWN", False)
 
-    needs_review = []
-    relpath, status, detail = p1.process_file(
+    relpath, status, detail, note = p1.process_file(
         src_root / "msg.eml", src_root, corpus, "gpt-4o-mini",
-        force=True, needs_review=needs_review,
+        force=True,
     )
     assert status == "ok"
     assert "Hello" in (corpus / "msg.md").read_text()
+    assert note is not None
+    assert "fallback" in note
 
 
 def test_process_file_unconvertible(tmp_path, monkeypatch):
@@ -91,13 +106,13 @@ def test_process_file_unconvertible(tmp_path, monkeypatch):
     (src_root / "mystery.xyz").write_text("???")
 
     monkeypatch.setattr(p1, "_HAS_MARKITDOWN", False)
-    needs_review = []
-    relpath, status, detail = p1.process_file(
+    relpath, status, detail, note = p1.process_file(
         src_root / "mystery.xyz", src_root, corpus, "gpt-4o-mini",
-        force=True, needs_review=needs_review,
+        force=True,
     )
     assert status == "fail"
     assert "no converter" in detail
+    assert note is None
 
 
 # ── Reporting ─────────────────────────────────────────────────

@@ -150,6 +150,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="config.yaml", help=argparse.SUPPRESS
     )
 
+    p1 = subparsers.add_parser("prepare-1", help="Convert raw source files to markdown")
+    p1.add_argument("--config", default="config.yaml")
+    p1.add_argument("--source", help="Override prepare.source_root")
+    p1.add_argument("--force", action="store_true")
+
+    p2 = subparsers.add_parser("prepare-2", help="Summarize converted documents")
+    p2.add_argument("--config", default="config.yaml")
+    p2.add_argument("--model", help="Override prepare.summarize.model")
+    p2.add_argument("--force", action="store_true")
+
+    p3 = subparsers.add_parser("prepare-3", help="Recursive folder + crosscutting rollup")
+    p3.add_argument("--config", default="config.yaml")
+    p3.add_argument("--only", choices=["tree", "crosscutting", "concat"],
+                    help="Run only one rollup phase (default: all)")
+    p3.add_argument("--force", action="store_true")
+
+    pp = subparsers.add_parser("prepare", help="Run prepare-1, prepare-2, prepare-3 in order")
+    pp.add_argument("--config", default="config.yaml")
+    pp.add_argument("--force", action="store_true")
+
     return parser
 
 
@@ -193,7 +213,7 @@ def _resolve_output_path(path: str) -> str:
 
     size = os.path.getsize(path)
     print(f"\n⚠️  Output file exists: {path} ({size:,} bytes)", file=sys.stderr)
-    print(f"    [o] overwrite   [t] timestamp   [q] quit", file=sys.stderr)
+    print("    [o] overwrite   [t] timestamp   [q] quit", file=sys.stderr)
 
     while True:
         try:
@@ -243,6 +263,53 @@ def main() -> None:
 
     # --- Configure provider (DeepSeek or other) ---
     _setup_provider_env(config)
+
+    # --- Corpus prep (prepare-1/2/3 — NOT part of 'all') ---
+    if args.command in ("prepare-1", "prepare-2", "prepare-3", "prepare"):
+        from pipeline import startup_check as _sc
+
+        corpus_root = config.resolve_path(config.corpus.root)
+        prep = config.prepare
+
+        for w in _sc.warn_stale_corpus(corpus_root):
+            print(w, file=sys.stderr)
+        vkey_warn = _sc.warn_missing_vision_key(prep.vision_fallback.enabled)
+        if vkey_warn:
+            print(vkey_warn, file=sys.stderr)
+
+        force = getattr(args, "force", False)
+
+        if args.command in ("prepare-1", "prepare"):
+            from pipeline.prepare_1_convert import run_prepare_1
+            source_root = config.resolve_path(
+                getattr(args, "source", None) or prep.source_root
+            )
+            report = run_prepare_1(
+                source_root=source_root, corpus_root=corpus_root,
+                workers=prep.convert_workers,
+                vision_model=prep.vision_fallback.model if prep.vision_fallback.enabled else None,
+                force=force,
+            )
+            if args.command == "prepare-1":
+                sys.exit(1 if report["failure_count"] else 0)
+
+        if args.command in ("prepare-2", "prepare"):
+            from pipeline.prepare_2_summarize import run_prepare_2
+            run_prepare_2(
+                corpus_root=corpus_root,
+                model=getattr(args, "model", None) or prep.summarize.model,
+                workers=prep.summarize.workers, force=force,
+            )
+
+        if args.command in ("prepare-3", "prepare"):
+            from pipeline.prepare_3_rollup import run_prepare_3
+            run_prepare_3(
+                corpus_root=corpus_root, model=prep.rollup.model,
+                big_call_model=prep.rollup.big_call_model,
+                workers=prep.rollup.workers, crosscutting=prep.rollup.crosscutting,
+                force=force, only=getattr(args, "only", None),
+            )
+        return
 
     # --- 'all' may run the startup check first ---
     if args.command == "all" and not getattr(args, "skip_startup_check", False):

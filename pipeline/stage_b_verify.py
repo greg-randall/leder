@@ -26,6 +26,7 @@ class VerdictOutput(BaseModel):
     source_path: str | None = None
     source_url: str | None = None
     rationale: str
+    source_excerpt: str = ""  # Verbatim text from the source document that supports/contradicts
     human_review: bool
     confidence: float
 
@@ -122,6 +123,10 @@ For each claim, determine:
   GOOD: "The 2020 permit renewal (p. 3) states the facility 'shall irrigate
   165 acres via sprinkler,' matching the claim."
 
+- source_excerpt: The verbatim text from the source document that confirms
+  or contradicts the claim. Copy-paste the exact sentence(s) from the source.
+  This is the evidence the human reviewer will check against."""
+
 ## PACE YOURSELF
 
 Aim to complete verification in 30 turns or fewer. Most claims can be verified
@@ -176,6 +181,7 @@ def parse_verdict(claim: Claim, text: str) -> Claim:
         claim.source_path = data.get("source_path")
         claim.source_url = data.get("source_url")
         claim.rationale = data.get("rationale", "No rationale provided.")
+        claim.source_excerpt = data.get("source_excerpt", "")
         claim.human_review = data.get("human_review", True)
         claim.confidence = data.get("confidence")
     except KeyError as e:
@@ -210,6 +216,7 @@ def _write_incremental(claims: list[Claim], results_by_id: dict[str, Claim], out
                 "source_path": c.source_path,
                 "source_url": c.source_url,
                 "rationale": c.rationale,
+                "source_excerpt": c.source_excerpt,
                 "human_review": c.human_review,
                 "confidence": c.confidence,
                 "reconciled": c.reconciled,
@@ -443,6 +450,7 @@ def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
         claim.source_path = data.get("source_path")
         claim.source_url = data.get("source_url")
         claim.rationale = data.get("rationale", "No rationale provided.")
+        claim.source_excerpt = data.get("source_excerpt", "")
         claim.human_review = data.get("human_review", True)
         claim.confidence = data.get("confidence")
     except KeyError as e:

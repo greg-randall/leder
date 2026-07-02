@@ -266,6 +266,8 @@ def _render_sources(raw: str) -> str:
                 "flags": flags.strip() if flags else "",
             }
             sources.append(current)
+        elif line.strip().startswith("Matched:") and current:
+            current["matched"] = line.strip()[8:].strip().strip('"')
         elif line.strip().startswith("Source:") and current:
             current["source"] = line.strip()[7:].strip()
 
@@ -306,10 +308,19 @@ def _render_sources(raw: str) -> str:
         else:
             source_html = ""
 
+        matched_html = ""
+        if s.get("matched"):
+            matched_html = (
+                f'<div style="margin:0.4em 0;padding:0.4em 0.7em;background:var(--bg);'
+                f'border-left:3px solid var(--{vclass});font-style:italic;font-size:0.9em">'
+                f'{_escape(s["matched"])}</div>'
+            )
+
         html += (
             f'<div class="source {vclass}" id="fn{s["id"]}">'
             f'<span class="badge {vclass}">{_escape(v)}</span>'
             f'<span class="claim">{_escape(s["claim"])}</span>'
+            f'{matched_html}'
             f'<span class="rationale">{_escape(s["rationale"])}</span>'
             f'{source_html}'
             f'<span class="flags">{flags_html}</span>'

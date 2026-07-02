@@ -54,6 +54,7 @@ class Claim:
     source_path: Optional[str] = None
     source_url: Optional[str] = None
     rationale: Optional[str] = None
+    source_excerpt: Optional[str] = None  # Verbatim text from source document
     human_review: Optional[bool] = None
     confidence: Optional[float] = None
 

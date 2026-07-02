@@ -361,7 +361,8 @@ def _save_partial_claims(output_path: str, results_by_idx: dict, total_chunks: i
                 "context": c.context,
                 "verdict": c.verdict, "source_proximity": c.source_proximity,
                 "source_path": c.source_path, "source_url": c.source_url,
-                "rationale": c.rationale, "human_review": c.human_review,
+                "rationale": c.rationale, "source_excerpt": c.source_excerpt,
+                "human_review": c.human_review,
                 "confidence": c.confidence, "reconciled": c.reconciled,
             }
             for c in all_claims

@@ -102,9 +102,14 @@ def build_footnote_block(claims: list[Claim]) -> str:
         if claim.reconciled:
             flags += " 🔧 RECONCILED"
 
+        excerpt = ""
+        if claim.source_excerpt:
+            excerpt = f"\n    Matched: \"{claim.source_excerpt}\""
+
         line = (
             f"[^{n}]: **[{vb}]** {pb} "
             f"{claim.claim_text} — {claim.rationale or 'No rationale provided.'}"
+            f"{excerpt}"
             f"{flags}\n"
             f"    Source: {source_ref}\n"
         )

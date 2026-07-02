@@ -306,6 +306,12 @@ def run_stage_c(
             seen_texts.add(c.claim_text)
     for i, c in enumerate(deduped):
         c.claim_id = f"c{i+1:04d}"
+    dup_removed = len(claims) - len(deduped)
+    if dup_removed:
+        agree = sum(1 for dupes in groups.values() if len(set(c.verdict for c in dupes)) == 1)
+        disagree = len(groups) - agree
+        print(f"Dedup: {len(claims)} → {len(deduped)} ({dup_removed} removed: "
+              f"{agree} groups agreed, {disagree} groups had conflicting verdicts)", file=sys.stderr)
     claims = deduped
 
     placed = []

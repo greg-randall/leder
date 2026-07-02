@@ -79,6 +79,8 @@ Stage A prints `Wrote 219 claims → claims.json`. Stage B prints `Done: 132 ✓
 
 ## 3. How it works
 
+All output filenames below are the CLI defaults. Every stage accepts `--output` (or `--article`, `--claims`, `--input`) if you want different names.
+
 ### Stage A: Decomposition
 
 The article is split into chunks of about 300 words, at paragraph boundaries, then sentence breaks if a chunk is too long. Each chunk goes to an LLM which extracts factual claims as standalone statements. "LA-0304 irrigates 165 acres in Karnes County via sprinkler," not "165 acres." A second pass catches anything the first pass missed. Output: `claims.json`.

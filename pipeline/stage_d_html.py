@@ -187,7 +187,7 @@ def convert(article_sourced_md: str, output_html: str) -> None:
 </div>
 </div>
 </div>
-<div style="display:none">{sources_html}</div>
+<div class="sources" style="display:none">{sources_html}</div>
 {_SCRIPT}
 </body>
 </html>"""
@@ -247,8 +247,38 @@ def _md_to_html(text: str, fn_verdicts: dict[str, str]) -> str:
 
 
 def _render_sources(raw: str) -> str:
-    """Pass-through: sources are parsed by JS from the DOM. Keep them hidden."""
-    return raw
+    """Build HTML source cards (hidden) for the JS sidebar to read from."""
+    if not raw.strip():
+        return ""
+    lines = raw.strip().splitlines()
+    cards = []
+    cur = None
+    for line in lines:
+        m = re.match(r'\[(\^?\d+)\]:\s+\*\*\[(.+?)\]\*\*\s+\[(\w+)\]\s+(.+?)\s+—\s+(.+?)(\s+⚠️.*)?$', line)
+        if m:
+            fn_id, verdict_raw, proximity, claim, rationale, flags = m.groups()
+            cur = {"id": fn_id.lstrip("^"), "verdict": verdict_raw.strip(),
+                   "claim": claim.strip(), "rationale": rationale.strip(),
+                   "matched": "", "source": "", "flags": flags.strip() if flags else ""}
+            cards.append(cur)
+        elif line.strip().startswith("Matched:") and cur:
+            cur["matched"] = line.strip()[8:].strip().strip('"')
+        elif line.strip().startswith("Source:") and cur:
+            cur["source"] = line.strip()[7:].strip()
+    html_parts = []
+    for c in cards:
+        v = c["verdict"]
+        vclass = "supported" if "Supported" in v else ("contradicted" if "Contradicted" in v else "unsupported")
+        html_parts.append(
+            f'<div class="source {vclass}" id="fn{c["id"]}">'
+            f'<span class="badge {vclass}">{_escape(v)}</span>'
+            f'<span class="claim">{_escape(c["claim"])}</span>'
+            f'<span class="rationale">{_escape(c["rationale"])}</span>'
+            f'<span class="src-link">{_escape(c["source"])}</span>'
+            f'<span class="flags">{_escape(c["flags"])}</span>'
+            f'</div>'
+        )
+    return "\n".join(html_parts)
 
 
 def _render_unplaced(text: str) -> str:

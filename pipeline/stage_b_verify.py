@@ -654,15 +654,36 @@ def run_stage_b(
     result_map = {r.claim_id: r for r in results}
     result_map.update({c.claim_id: c for c in already_done})
 
-    # Deduplicate by claim_text: keep the verified version over untouched,
-    # and the latest result over earlier ones (higher claim_id = newer).
-    seen_text: dict[str, Claim] = {}
-    for c in sorted(doc.claims, key=lambda c: c.claim_id):
-        if c.verdict is not None or c.claim_text not in seen_text:
-            seen_text[c.claim_text] = c
-    deduped = list(seen_text.values())
+    # Deduplicate by claim_text, merging verdicts intelligently.
+    # Group by claim_text, then:
+    #   - If all dupes agree on verdict: keep median-length rationale
+    #   - If verdicts disagree: keep one representative per verdict
+    from collections import defaultdict
+    groups: dict[str, list[Claim]] = defaultdict(list)
+    for c in doc.claims:
+        if c.verdict is not None:
+            groups[c.claim_text].append(c)
 
-    # Re-number claims sequentially
+    deduped = []
+    for text, dupes in groups.items():
+        # Group by verdict within this claim_text
+        by_verdict: dict[str, list[Claim]] = defaultdict(list)
+        for c in dupes:
+            by_verdict[c.verdict or "unsupported"].append(c)
+
+        for verdict, vclaims in by_verdict.items():
+            # Pick the one with median rationale length
+            vclaims.sort(key=lambda c: len(c.rationale or ""))
+            deduped.append(vclaims[len(vclaims) // 2])
+
+    # Add untouched claims (verdict is None, not in any group)
+    seen_texts = set(groups.keys())
+    for c in doc.claims:
+        if c.verdict is None and c.claim_text not in seen_texts:
+            deduped.append(c)
+            seen_texts.add(c.claim_text)
+
+    # Re-number sequentially
     for i, c in enumerate(deduped):
         c.claim_id = f"c{i+1:04d}"
 

@@ -114,7 +114,7 @@ def _letters_pos_to_original(l_start: int, l_len: int, original: str) -> tuple[i
 
 
 def insert_footnote_markers(article_text: str, placed_claims: list[tuple[str, tuple[int, int]]]) -> str:
-    """Insert [^N] markers into article_text at claim positions.
+    """Insert [^N] markers at claim positions, snapped to word boundaries.
 
     Processes claims in REVERSE position order so that earlier insertions
     do not shift the positions of later insertions.
@@ -125,7 +125,11 @@ def insert_footnote_markers(article_text: str, placed_claims: list[tuple[str, tu
     for i, (claim_id, (start, end)) in enumerate(reversed(sorted_claims)):
         n = len(placed_claims) - i
         marker = f"[^{n}]"
-        result = result[:end] + marker + result[end:]
+        # Snap to word boundary: if end is mid-word, advance to next space/punctuation
+        insert_at = end
+        while insert_at < len(result) and result[insert_at].isalpha():
+            insert_at += 1
+        result = result[:insert_at] + marker + result[insert_at:]
 
     return result
 

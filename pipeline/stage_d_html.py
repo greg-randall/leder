@@ -29,15 +29,17 @@ _STYLE = """<style>
   a:hover { text-decoration: underline; }
   hr { border: none; border-top: 1px solid var(--border); margin: 3em 0 1.5em; }
 
-  /* Footnote reference markers in body text */
+  /* Footnote reference markers in body text — colored pill badges */
   a.fn-ref {
-    font-size: 0.8em; vertical-align: super; text-decoration: none;
-    font-weight: 700; line-height: 0; margin: 0 0.15em;
+    font-size: 0.75em; vertical-align: super; text-decoration: none;
+    font-weight: 700; line-height: 0; margin: 0 0.12em;
+    padding: 0.1em 0.35em; border-radius: 10px;
+    color: #fff;
   }
-  a.fn-ref:hover { opacity: 0.7; }
-  .fn-ref.supported { color: var(--supported); }
-  .fn-ref.contradicted { color: var(--contradicted); }
-  .fn-ref.unsupported { color: var(--unsupported); }
+  a.fn-ref:hover { opacity: 0.8; }
+  .fn-ref.supported { background: var(--supported); }
+  .fn-ref.contradicted { background: var(--contradicted); }
+  .fn-ref.unsupported { background: var(--unsupported); }
 
   /* Hover: highlight the containing sentence */
   .fn-sentence { border-radius: 3px; transition: background 0.15s; }
@@ -236,7 +238,7 @@ def _render_fn_refs(m: re.Match, fn_verdicts: dict[str, str]) -> str:
         v = fn_verdicts.get(n, "unsupported")
         refs.append(
             f'<a href="#fn{n}" id="fnref{n}" class="fn-ref {v}" '
-            f'title="Footnote {n} — {v}">&#8203;<sup>{n}</sup></a>'
+            f'title="Footnote {n} — {v}">{n}</a>'
         )
     return " ".join(refs)
 

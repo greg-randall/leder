@@ -158,10 +158,11 @@ function smoothScrollTo(el, target, duration) {
         });
         card.classList.add('expanded');
         card.classList.add('flash');
-        // Scroll the card to the top of the sidebar viewport
-        setTimeout(function() {
+        // Scroll after expansion animation finishes (0.5s transition)
+        card.addEventListener('transitionend', function onEnd() {
+          card.removeEventListener('transitionend', onEnd);
           card.scrollIntoView({behavior: 'smooth', block: 'start'});
-        }, 150);
+        });
         setTimeout(function() { card.classList.remove('flash'); }, 2500);
       }
     });

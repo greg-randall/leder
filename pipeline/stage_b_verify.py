@@ -603,6 +603,24 @@ def run_stage_b(
         doc = ClaimsDocument.from_json(f.read())
 
     claims = doc.claims
+
+    # Deduplicate by claim_text BEFORE verification — don't pay twice
+    from collections import defaultdict
+    text_groups: dict[str, list[Claim]] = defaultdict(list)
+    for c in claims:
+        text_groups[c.claim_text].append(c)
+    dup_map: dict[str, str] = {}  # claim_id → representative claim_id
+    unique_claims = []
+    for text, group in text_groups.items():
+        rep = group[0]
+        unique_claims.append(rep)
+        for c in group[1:]:
+            dup_map[c.claim_id] = rep.claim_id
+    if dup_map:
+        print(f"Dedup: {len(claims)} claims → {len(unique_claims)} unique "
+              f"({len(dup_map)} duplicates skipped)", file=sys.stderr)
+    claims = unique_claims
+
     # Resume support: skip supported/contradicted, retry unsupported/untouched
     already_done = [c for c in claims if c.verdict in ("supported", "contradicted")]
     pending = [c for c in claims if c.verdict not in ("supported", "contradicted")]
@@ -653,6 +671,21 @@ def run_stage_b(
     # Merge results back into full claim set (including already-done claims)
     result_map = {r.claim_id: r for r in results}
     result_map.update({c.claim_id: c for c in already_done})
+
+    # Propagate verdicts from verified representatives to skipped duplicates
+    for dup_id, rep_id in dup_map.items():
+        if rep_id in result_map:
+            rep = result_map[rep_id]
+            for c in doc.claims:
+                if c.claim_id == dup_id:
+                    c.verdict = rep.verdict
+                    c.source_proximity = rep.source_proximity
+                    c.source_path = rep.source_path
+                    c.source_url = rep.source_url
+                    c.rationale = rep.rationale
+                    c.source_excerpt = rep.source_excerpt
+                    c.human_review = rep.human_review
+                    c.confidence = rep.confidence
 
     # Deduplicate by claim_text, merging verdicts intelligently.
     # Group by claim_text, then:

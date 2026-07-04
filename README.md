@@ -91,16 +91,33 @@ python3 -m pipeline.cli prepare     # all three in order
 ```
 
 Config lives under `prepare:` in `config.yaml`. `source_root` points to your
-raw documents; output goes to `corpus.root`. The primary converter is
-[MarkItDown](https://github.com/microsoft/markitdown) (`pip install markitdown[all]`),
-which handles PDF, DOCX, XLSX, PPTX, MSG, images, and more with built-in OCR.
-Seven gap-filler converters cover formats MarkItDown lacks: .eml, .doc, .ppt,
-.rtf, .odt/.ods/.odp, .tsv, .xml.
+raw documents; output goes to `corpus.root`.
 
-Set `OPENAI_API_KEY` for image descriptions and improved OCR via
-`gpt-4o-mini` (used by MarkItDown). Files that can't be converted are listed
-in `UNCONVERTED.md` (loud banner + nonzero exit); files using gap-filler
-converters are listed in `NEEDS_REVIEW.md`.
+**How each file type is converted (prepare-1):**
+
+- **Digital PDFs, DOCX, XLSX, PPTX, HTML, MSG, EPUB, ZIP, CSV/JSON/TXT** →
+  [MarkItDown](https://github.com/microsoft/markitdown) (`pip install markitdown[all]`),
+  which preserves tables and structure.
+- **Scanned / image-only PDFs** → MarkItDown returns nothing (it has no OCR), so
+  prepare-1 falls back to local **tesseract** OCR page-by-page, escalating pages
+  whose OCR is thin to **`gpt-4o-mini` vision** (capped at `max_pages_per_doc`).
+- **Image files** (`.png/.jpg/.tif/.tiff/.gif/.bmp/.webp`) → local tesseract OCR;
+  thin results (photos, handwriting, bad scans) escalate to vision. The vision
+  prompt is anti-fabrication (transcribe verbatim, mark `[illegible]`, never
+  guess) — important for fact-checking.
+- **Audio** (`.wav/.mp3/.m4a/.mp4/.flac/.ogg/.aac/.wma`) → local
+  **faster-whisper** (`pip install faster-whisper`). GPU-first: uses CUDA when a
+  subprocess health check confirms it works (needs cuDNN 9), otherwise falls back
+  to CPU with a warning. Set the model/device via `prepare.audio` in `config.yaml`
+  or `--whisper-model` / `--whisper-device` on the CLI.
+- **Gap-fillers** for the rest MarkItDown lacks: `.eml` (stdlib), `.doc/.ppt/.odt/
+  .ods/.odp` (LibreOffice), `.rtf` (pandoc→LibreOffice), `.tsv`, `.xml`.
+
+Set `OPENAI_API_KEY` for the vision escalation. Files that can't be converted are
+listed in `UNCONVERTED.md` (loud banner + nonzero exit); files recovered via OCR,
+vision, whisper, or a gap-filler are listed in `NEEDS_REVIEW.md` with how each was
+recovered. System tools used as needed: tesseract, poppler (pdftoppm), pandoc,
+libreoffice — `python3 -m pipeline.cli check` reports what's installed.
 
 ## 3. How it works
 

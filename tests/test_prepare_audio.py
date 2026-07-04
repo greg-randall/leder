@@ -60,7 +60,7 @@ def test_get_whisper_model_cpu_fallback_warns(monkeypatch, capsys):
 
 def test_get_whisper_model_gpu(monkeypatch):
     monkeypatch.setattr(pa, "_HAS_WHISPER", True)
-    monkeypatch.setattr(pa, "_cuda_available", lambda: True)
+    monkeypatch.setattr(pa, "_gpu_works", lambda: True)
 
     class FakeWM:
         def __init__(self, model, device, compute_type):
@@ -69,6 +69,17 @@ def test_get_whisper_model_gpu(monkeypatch):
     monkeypatch.setattr(pa, "_WhisperModel", FakeWM)
     model, dev = pa.get_whisper_model("medium", "auto")
     assert dev == "cuda"
+
+
+def test_get_whisper_model_gpu_healthcheck_fails_falls_back(monkeypatch, capsys):
+    """CUDA present but GPU health check fails (e.g. missing cuDNN) -> CPU + warning."""
+    monkeypatch.setattr(pa, "_HAS_WHISPER", True)
+    monkeypatch.setattr(pa, "_cuda_available", lambda: True)
+    monkeypatch.setattr(pa, "_gpu_works", lambda: False)
+    monkeypatch.setattr(pa, "_WhisperModel", lambda *a, **k: object())
+    model, dev = pa.get_whisper_model("medium", "auto")
+    assert dev == "cpu"
+    assert "health check" in capsys.readouterr().err
 
 
 def test_get_whisper_model_cuda_requested_no_gpu_warns(monkeypatch, capsys):

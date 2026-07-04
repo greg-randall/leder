@@ -13,6 +13,7 @@ the local cache on first use.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -39,12 +40,40 @@ def _cuda_available() -> bool:
         return False
 
 
+_GPU_CANARY = (
+    "import numpy as np;"
+    "from faster_whisper import WhisperModel;"
+    "m=WhisperModel('tiny',device='cuda',compute_type='float16');"
+    "list(m.transcribe(np.zeros(16000,dtype=np.float32))[0]);"
+    "print('GPUOK')"
+)
+
+
+def _gpu_works() -> bool:
+    """Return True only if GPU transcription actually runs end-to-end.
+
+    A broken CUDA/cuDNN stack (e.g. cuDNN 9 not installed) does not raise a
+    catchable exception — it SEGFAULTS mid-transcription and core-dumps the
+    process. So we validate the GPU in a throwaway subprocess with a tiny model:
+    if the child crashes, the parent survives and falls back to CPU.
+    """
+    if not _cuda_available():
+        return False
+    try:
+        r = subprocess.run([sys.executable, "-c", _GPU_CANARY],
+                           capture_output=True, timeout=180)
+        return r.returncode == 0 and b"GPUOK" in r.stdout
+    except Exception:
+        return False
+
+
 def get_whisper_model(model_size: str = "medium", device: str = "auto"):
     """Build a faster-whisper model. device: 'auto' | 'cuda' | 'cpu'.
 
     Returns (model, resolved_device), or (None, None) if faster-whisper is not
-    installed. Under 'auto'/'cuda', GPU is tried first; on unavailability or
-    failure it falls back to CPU with a prominent warning.
+    installed. Under 'auto'/'cuda', GPU is used only if a subprocess health check
+    confirms GPU transcription actually works; otherwise it falls back to CPU
+    with a prominent warning.
     """
     if not _HAS_WHISPER:
         print("prepare-1: faster-whisper not installed; audio files will be skipped. "
@@ -52,24 +81,32 @@ def get_whisper_model(model_size: str = "medium", device: str = "auto"):
         return None, None
 
     want_gpu = device in ("auto", "cuda")
-    if want_gpu and _cuda_available():
+    use_gpu = False
+    if want_gpu:
+        if not _cuda_available():
+            if device == "cuda":
+                print("⚠  Whisper: device='cuda' requested but no CUDA GPU detected; "
+                      "using CPU.", file=sys.stderr)
+        elif _gpu_works():
+            use_gpu = True
+        else:
+            print("⚠  Whisper: CUDA GPU present but GPU transcription failed a health "
+                  "check (most often missing cuDNN 9) — using CPU to avoid a crash. "
+                  "Install cuDNN 9 (e.g. `pip install nvidia-cudnn-cu12`) for GPU speed.",
+                  file=sys.stderr)
+
+    if use_gpu:
         try:
-            model = _WhisperModel(model_size, device="cuda", compute_type="float16")
-            return model, "cuda"
+            return _WhisperModel(model_size, device="cuda", compute_type="float16"), "cuda"
         except Exception as ex:
-            print(f"⚠  Whisper: GPU init failed ({type(ex).__name__}: {ex}); "
-                  f"falling back to CPU.", file=sys.stderr)
-    elif device == "cuda":
-        print("⚠  Whisper: device='cuda' requested but no CUDA GPU detected; "
-              "falling back to CPU.", file=sys.stderr)
+            print(f"⚠  Whisper: GPU init failed ({type(ex).__name__}: {ex}); using CPU.",
+                  file=sys.stderr)
 
     if want_gpu:
-        print(f"⚠  Whisper running on CPU (no usable GPU). The '{model_size}' model is "
-              f"slow on CPU (often several x real-time). Set prepare.audio.model to a "
-              f"smaller size (e.g. 'small'/'base') or run on a CUDA GPU for speed.",
-              file=sys.stderr)
-    model = _WhisperModel(model_size, device="cpu", compute_type="int8")
-    return model, "cpu"
+        print(f"⚠  Whisper running on CPU. The '{model_size}' model is slow on CPU "
+              f"(often several x real-time); set a smaller prepare.audio.model or "
+              f"install cuDNN 9 for GPU.", file=sys.stderr)
+    return _WhisperModel(model_size, device="cpu", compute_type="int8"), "cpu"
 
 
 def convert_audio(inpath: Path, outpath: Path, whisper_model):

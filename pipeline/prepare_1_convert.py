@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
 """prepare-1: convert raw source files to markdown under corpus.root.
 
-Primary converter: Microsoft MarkItDown (pip install markitdown[all]).
-Covers PDF, DOCX, XLSX, XLS, PPTX, MSG, CSV, EPUB, HTML, ZIP, JSON,
-TXT/MD, images, audio. Seven gap-fillers handle formats MarkItDown
-lacks dedicated converters for: .eml .doc .ppt .rtf .odt/.ods/.odp .tsv .xml.
+Routing per file type:
+  - Images (.png/.jpg/.tif/.gif/.bmp/.webp) -> local tesseract OCR, escalating
+    thin results to the vision model (prepare_ocr). MarkItDown has no local OCR.
+  - Audio (.wav/.mp3/.m4a/.mp4/.flac/.ogg/.aac/.wma) -> local faster-whisper
+    (prepare_audio). MarkItDown transcribes over the network via Google Web Speech.
+  - PDF -> MarkItDown first (digital text layer + tables); if the result is thin
+    (scanned/image-only), fall back to page-by-page OCR + vision (prepare_ocr).
+  - Everything else -> MarkItDown, then 7 gap-fillers (.eml .doc .ppt .rtf
+    .odt/.ods/.odp .tsv .xml), then UNCONVERTED.md.
+
+Files recovered via OCR/vision/whisper/gap-filler are recorded in NEEDS_REVIEW.md.
 """
 from __future__ import annotations
 
 import csv
-import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from pipeline.prepare_ocr import IMAGE_EXTS, ocr_image, ocr_pdf
+from pipeline.prepare_audio import AUDIO_EXTS, convert_audio, get_whisper_model
 
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
@@ -24,25 +35,30 @@ MIN_CONTENT_BYTES = 100
 
 try:
     from markitdown import MarkItDown as _MarkItDown
-    from openai import OpenAI as _OpenAI
     _HAS_MARKITDOWN = True
 except ImportError:
     _MarkItDown = None  # type: ignore[assignment]
-    _OpenAI = None  # type: ignore[assignment]
     _HAS_MARKITDOWN = False
 
 
-def _get_markitdown(vision_model: str | None):
-    """Build a MarkItDown instance, optionally with an OpenAI client for image descriptions."""
+def _get_markitdown():
+    """Build a MarkItDown instance, or None if unavailable/construction fails.
+
+    Images and audio are handled by our own OCR/whisper paths, so MarkItDown
+    needs no LLM client here — it's used for digital PDFs, office docs, HTML,
+    email, archives, etc.
+    """
     if not _HAS_MARKITDOWN:
         return None
-    llm_client = None
-    if vision_model and os.environ.get("OPENAI_API_KEY"):
-        llm_client = _OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _MarkItDown(llm_client=llm_client, llm_model=vision_model)
+    try:
+        return _MarkItDown()
+    except Exception as ex:
+        print(f"prepare-1: MarkItDown init failed ({type(ex).__name__}: {ex}); "
+              "using gap-fillers only.", file=sys.stderr)
+        return None
 
 
-def _convert_with_markitdown(filepath: Path, outpath: Path, md_client, model: str | None):
+def _convert_with_markitdown(filepath: Path, outpath: Path, md_client):
     """Try MarkItDown on a file. Returns (ok, size, method)."""
     if md_client is None:
         return False, 0, "markitdown-unavailable"
@@ -51,8 +67,7 @@ def _convert_with_markitdown(filepath: Path, outpath: Path, md_client, model: st
         text = result.text_content.strip()
         if not text:
             return False, 0, "markitdown-empty"
-        md_path = outpath.with_suffix(".md")
-        md_path.write_text(text, encoding="utf-8")
+        outpath.with_suffix(".md").write_text(text, encoding="utf-8")
         return True, len(text), "markitdown"
     except Exception:
         return False, 0, "markitdown-error"
@@ -119,14 +134,21 @@ def convert_xml(inpath: Path, outpath: Path):
 
 
 def _convert_via_libreoffice(inpath: Path, outpath: Path):
-    """Generic LibreOffice headless text conversion."""
+    """Generic LibreOffice headless text conversion.
+
+    Each call gets an isolated -env:UserInstallation profile so concurrent
+    headless invocations (under the thread pool) don't collide on the shared
+    default profile and hang.
+    """
     md = outpath.with_suffix(".md")
     txt = None
+    profile = tempfile.mkdtemp(prefix="lo_profile_")
     try:
         subprocess.run(
-            ["libreoffice", "--headless", "--convert-to", "txt:Text",
+            ["libreoffice", f"-env:UserInstallation=file://{profile}",
+             "--headless", "--convert-to", "txt:Text",
              "--outdir", str(outpath.parent), str(inpath)],
-            capture_output=True, timeout=120,
+            capture_output=True, timeout=180,
         )
         txt = outpath.parent / (inpath.stem + ".txt")
         if txt.exists() and txt.stat().st_size > 10:
@@ -140,6 +162,7 @@ def _convert_via_libreoffice(inpath: Path, outpath: Path):
     finally:
         if txt is not None and txt.exists():
             txt.unlink()
+        shutil.rmtree(profile, ignore_errors=True)
     return False, 0, "libreoffice"
 
 
@@ -161,13 +184,12 @@ def convert_rtf(inpath: Path, outpath: Path):
     except Exception as ex:
         print(f"  prepare-1 pandoc failed: {inpath.name}: {type(ex).__name__}: {ex}",
               file=sys.stderr)
-        pass
     return _convert_via_libreoffice(inpath, outpath)
 
 
 # ── Converter registry ────────────────────────────────────────
-# MarkItDown tries FIRST for every file (via _convert_with_markitdown).
-# These gap-fillers only fire when MarkItDown fails or is unavailable.
+# MarkItDown is tried first for non-image/non-audio files; these gap-fillers
+# handle formats MarkItDown lacks dedicated converters for (or when it fails).
 
 GAP_FILLERS: dict[str, callable] = {
     ".eml": convert_eml,
@@ -180,18 +202,6 @@ GAP_FILLERS: dict[str, callable] = {
     ".tsv": convert_tsv,
     ".xml": convert_xml,
 }
-
-# MarkItDown handles these natively — no gap-filler needed.
-# But if MarkItDown is unavailable, these become unconvertible
-# (they have no gap-filler).
-MARKITDOWN_FORMATS = frozenset({
-    ".pdf", ".docx", ".xlsx", ".xls", ".pptx", ".msg",
-    ".csv", ".epub", ".html", ".htm", ".zip", ".ipynb",
-    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp", ".webp",
-    ".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma",
-    ".txt", ".md", ".markdown", ".json", ".jsonl",
-    ".ppt",  # MarkItDown has PptxConverter which may handle .ppt too; try it
-})
 
 
 # ── Quality gate ──────────────────────────────────────────────
@@ -206,9 +216,16 @@ def is_meaningful(content: str) -> bool:
 
 # ── Dispatch ──────────────────────────────────────────────────
 
+def _finish(relpath: Path, result):
+    """Turn an (ok, size, method, note) converter result into a process_file tuple."""
+    ok, size, method, note = result
+    if ok:
+        return str(relpath), "ok", method, note
+    return str(relpath), "fail", f"{method} produced no usable text", None
+
+
 def process_file(filepath: Path, src_root: Path, out_root: Path,
-                 vision_model: str | None, force: bool,
-                 md_client=None):
+                 vision_cfg: dict, whisper_model, force: bool, md_client=None):
     """Convert one file. Returns (relpath, status, detail, note_or_None)."""
     filepath = Path(filepath)
     name = filepath.name
@@ -231,25 +248,41 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
 
     (out_root / relpath.parent).mkdir(parents=True, exist_ok=True)
 
-    # 1. Try MarkItDown first (handles 80%+ of formats).
+    # Images -> our OCR path (MarkItDown has no local OCR).
+    if ext in IMAGE_EXTS:
+        return _finish(relpath, ocr_image(filepath, outpath, vision_cfg))
+
+    # Audio -> local whisper (MarkItDown uses network Google Web Speech).
+    if ext in AUDIO_EXTS:
+        ok, size, method, note = convert_audio(filepath, outpath, whisper_model)
+        if ok:
+            return str(relpath), "ok", method, note
+        return str(relpath), "fail", f"audio not transcribed ({method})", None
+
+    # PDF -> MarkItDown first (digital text/tables); OCR fallback if thin.
+    if ext == ".pdf":
+        if md_client is not None:
+            ok, size, method = _convert_with_markitdown(filepath, outpath, md_client)
+            if ok and is_meaningful(md_path.read_text(encoding="utf-8", errors="replace")):
+                return str(relpath), "ok", method, None
+        return _finish(relpath, ocr_pdf(filepath, outpath, vision_cfg))
+
+    # Everything else -> MarkItDown, then gap-fillers.
     if md_client is not None:
-        ok, size, method = _convert_with_markitdown(filepath, outpath, md_client, vision_model)
+        ok, size, method = _convert_with_markitdown(filepath, outpath, md_client)
         if ok:
             return str(relpath), "ok", method, None
 
-    # 2. Try a gap-filler if one exists.
     gap_filler = GAP_FILLERS.get(ext)
     if gap_filler is not None:
         try:
             ok, size, method = gap_filler(filepath, outpath)
             if ok:
-                note = f"used {method} fallback"
-                return str(relpath), "ok", method, note
+                return str(relpath), "ok", method, f"used {method} fallback"
         except Exception as ex:
             print(f"  prepare-1 gap-filler failed: {relpath}: {type(ex).__name__}: {ex}",
                   file=sys.stderr)
 
-    # 3. Nothing worked.
     reason = f"no converter for {ext}" if gap_filler is None else "converter returned empty"
     return str(relpath), "fail", reason, None
 
@@ -277,8 +310,9 @@ def _write_needs_review(out_root: Path, needs_review: list):
             path.unlink()
         return
     lines = ["# NEEDS REVIEW\n",
-             f"**{len(needs_review)} document(s) used a fallback converter.** "
-             "Verify their markdown against the originals.\n\n",
+             f"**{len(needs_review)} document(s) were recovered via OCR, vision, "
+             "audio transcription, or a fallback converter.** Verify their markdown "
+             "against the originals.\n\n",
              "| File | Note |\n| --- | --- |\n"]
     for rel, note in sorted(needs_review):
         lines.append(f"| {rel} | {note} |\n")
@@ -300,8 +334,12 @@ def _print_banner(failures: list):
 # ── Entry point ───────────────────────────────────────────────
 
 def run_prepare_1(source_root: str, corpus_root: str, workers: int,
-                  vision_model: str | None, force: bool) -> dict:
-    """Convert every file under source_root into markdown under corpus_root."""
+                  vision_cfg: dict, audio_cfg: dict, force: bool) -> dict:
+    """Convert every file under source_root into markdown under corpus_root.
+
+    vision_cfg: {enabled, model, min_words, max_pages_per_doc, ocr_images}.
+    audio_cfg:  {enabled, model, device}.
+    """
     from tqdm import tqdm
 
     src_root = Path(source_root)
@@ -313,41 +351,45 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
     needs_review: list[tuple[str, str]] = []
     ok_ct = skip_ct = 0
 
-    md_client = _get_markitdown(vision_model) if _HAS_MARKITDOWN else None
-    if md_client is None and _HAS_MARKITDOWN:
-        print("prepare-1: MarkItDown unavailable; using gap-fillers only.", file=sys.stderr)
-    elif md_client is None:
-        print("prepare-1: MarkItDown not installed; gap-fillers only. "
-              "Install: pip install markitdown[all]", file=sys.stderr)
+    md_client = _get_markitdown()
+    if md_client is None:
+        print("prepare-1: MarkItDown unavailable; non-image/audio files rely on "
+              "gap-fillers only. Install: pip install markitdown[all]", file=sys.stderr)
+
+    # Only load the (large) whisper model if there are audio files to transcribe.
+    whisper_model = None
+    if audio_cfg.get("enabled") and any(f.suffix.lower() in AUDIO_EXTS for f in files):
+        whisper_model, dev = get_whisper_model(
+            audio_cfg.get("model", "medium"), audio_cfg.get("device", "auto"))
+        if whisper_model is not None:
+            print(f"prepare-1: whisper model '{audio_cfg.get('model', 'medium')}' "
+                  f"loaded on {dev}", file=sys.stderr)
 
     with tqdm(total=len(files), desc="prepare-1 convert", unit="file") as pbar:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futmap = {}
             for f in files:
-                fut = pool.submit(
-                    process_file, f, src_root, out_root, vision_model,
-                    force, md_client,
-                )
+                fut = pool.submit(process_file, f, src_root, out_root,
+                                  vision_cfg, whisper_model, force, md_client)
                 futmap[fut] = f
             for future in as_completed(futmap):
                 _, status, detail, note = future.result()
+                rel = str(Path(futmap[future]).relative_to(src_root))
                 with results_lock:
                     if status == "ok":
                         ok_ct += 1
                         if note is not None:
-                            needs_review.append((
-                                str(Path(futmap[future]).relative_to(src_root)), note,
-                            ))
+                            needs_review.append((rel, note))
                     elif status == "skip":
                         skip_ct += 1
                     else:
-                        failures.append((str(Path(futmap[future]).relative_to(src_root)), detail))
+                        failures.append((rel, detail))
                     pbar.update(1)
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)
     _print_banner(failures)
     print(f"prepare-1 done: {ok_ct} converted, {skip_ct} skipped, "
-          f"{len(failures)} failed, {len(needs_review)} fallback-used")
+          f"{len(failures)} failed, {len(needs_review)} recovered-via-fallback")
     return {"failures": failures, "needs_review": needs_review,
             "failure_count": len(failures)}

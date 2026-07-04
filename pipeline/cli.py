@@ -153,6 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
     p1 = subparsers.add_parser("prepare-1", help="Convert raw source files to markdown")
     p1.add_argument("--config", default="config.yaml")
     p1.add_argument("--source", help="Override prepare.source_root")
+    p1.add_argument("--whisper-model", help="Override prepare.audio.model (e.g. small, medium)")
+    p1.add_argument("--whisper-device", choices=["auto", "cuda", "cpu"],
+                    help="Override prepare.audio.device")
     p1.add_argument("--force", action="store_true")
 
     p2 = subparsers.add_parser("prepare-2", help="Summarize converted documents")
@@ -168,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     pp = subparsers.add_parser("prepare", help="Run prepare-1, prepare-2, prepare-3 in order")
     pp.add_argument("--config", default="config.yaml")
+    pp.add_argument("--whisper-model", help="Override prepare.audio.model (e.g. small, medium)")
+    pp.add_argument("--whisper-device", choices=["auto", "cuda", "cpu"],
+                    help="Override prepare.audio.device")
     pp.add_argument("--force", action="store_true")
 
     return parser
@@ -276,22 +282,38 @@ def main() -> None:
         vkey_warn = _sc.warn_missing_vision_key(prep.vision_fallback.enabled)
         if vkey_warn:
             print(vkey_warn, file=sys.stderr)
+        audio_warn = _sc.warn_missing_audio_deps(prep.audio.enabled)
+        if audio_warn:
+            print(audio_warn, file=sys.stderr)
 
         force = getattr(args, "force", False)
+        convert_failures = 0
 
         if args.command in ("prepare-1", "prepare"):
             from pipeline.prepare_1_convert import run_prepare_1
             source_root = config.resolve_path(
                 getattr(args, "source", None) or prep.source_root
             )
+            vision_cfg = {
+                "enabled": prep.vision_fallback.enabled,
+                "model": prep.vision_fallback.model,
+                "min_words": prep.vision_fallback.min_words,
+                "max_pages_per_doc": prep.vision_fallback.max_pages_per_doc,
+                "ocr_images": prep.ocr_images,
+            }
+            audio_cfg = {
+                "enabled": prep.audio.enabled,
+                "model": getattr(args, "whisper_model", None) or prep.audio.model,
+                "device": getattr(args, "whisper_device", None) or prep.audio.device,
+            }
             report = run_prepare_1(
                 source_root=source_root, corpus_root=corpus_root,
                 workers=prep.convert_workers,
-                vision_model=prep.vision_fallback.model if prep.vision_fallback.enabled else None,
-                force=force,
+                vision_cfg=vision_cfg, audio_cfg=audio_cfg, force=force,
             )
+            convert_failures = report["failure_count"]
             if args.command == "prepare-1":
-                sys.exit(1 if report["failure_count"] else 0)
+                sys.exit(1 if convert_failures else 0)
 
         if args.command in ("prepare-2", "prepare"):
             from pipeline.prepare_2_summarize import run_prepare_2
@@ -309,6 +331,13 @@ def main() -> None:
                 workers=prep.rollup.workers, crosscutting=prep.rollup.crosscutting,
                 force=force, only=getattr(args, "only", None),
             )
+
+        # Combined 'prepare': surface prepare-1 failures in the exit code even
+        # though 2 and 3 still ran.
+        if args.command == "prepare" and convert_failures:
+            print(f"prepare: {convert_failures} file(s) failed conversion — "
+                  "see UNCONVERTED.md.", file=sys.stderr)
+            sys.exit(1)
         return
 
     # --- 'all' may run the startup check first ---

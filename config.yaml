@@ -30,6 +30,10 @@ prepare:
     model: "gpt-4o-mini"
     min_words: 20
     max_pages_per_doc: 30
+  audio:
+    enabled: true
+    model: "medium"      # faster-whisper model size (tiny/base/small/medium/large-v3)
+    device: "auto"       # auto = GPU if available else CPU (with a warning)
   summarize:
     model: "deepseek-v4-flash"
     workers: 50

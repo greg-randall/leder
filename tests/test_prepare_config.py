@@ -16,6 +16,30 @@ def _write(tmp_path: Path, body: str) -> str:
     return str(cfg)
 
 
+def test_prepare_audio_defaults(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.audio.enabled is True
+    assert cfg.prepare.audio.model == "medium"
+    assert cfg.prepare.audio.device == "auto"
+
+
+def test_prepare_audio_parsed(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+        prepare:
+          audio: {enabled: false, model: "small", device: "cuda"}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.audio.enabled is False
+    assert cfg.prepare.audio.model == "small"
+    assert cfg.prepare.audio.device == "cuda"
+
+
 def test_prepare_defaults_when_absent(tmp_path):
     cfg_path = _write(tmp_path, """
         article: {path: "article.md"}

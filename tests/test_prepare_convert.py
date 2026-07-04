@@ -1,9 +1,11 @@
-"""Tests for prepare-1 converter (MarkItDown + gap-fillers)."""
+"""Tests for prepare-1 converter: routing (images/audio/pdf), MarkItDown, gap-fillers."""
 from __future__ import annotations
 
-import os
-
 import pipeline.prepare_1_convert as p1
+
+VISION_CFG = {"enabled": False, "model": "gpt-4o-mini", "min_words": 20,
+              "max_pages_per_doc": 30, "ocr_images": True}
+AUDIO_CFG = {"enabled": False, "model": "medium", "device": "auto"}
 
 
 # ── Gap-filler tests ──────────────────────────────────────────
@@ -15,152 +17,195 @@ def test_convert_eml(tmp_path):
         "Subject: Test Subject\r\nDate: Mon, 1 Jan 2024 00:00:00 +0000\r\n\r\n"
         "This is the body."
     )
-    out = tmp_path / "m"
-    ok, size, method = p1.convert_eml(src, out)
+    ok, size, method = p1.convert_eml(src, tmp_path / "m")
     md = (tmp_path / "m.md").read_text()
     assert ok
-    assert "Test Subject" in md
-    assert "alice@example.com" in md
-    assert "This is the body." in md
+    assert "Test Subject" in md and "alice@example.com" in md and "This is the body." in md
     assert method == "eml-stdlib"
 
 
 def test_convert_tsv(tmp_path):
     src = tmp_path / "d.tsv"
     src.write_text("h1\th2\nv1\tv2\nv3\tv4")
-    out = tmp_path / "d"
-    ok, size, method = p1.convert_tsv(src, out)
+    ok, size, method = p1.convert_tsv(src, tmp_path / "d")
     md = (tmp_path / "d.md").read_text()
-    assert ok
-    assert "| h1 | h2 |" in md
-    assert "| v3 | v4 |" in md
-    assert method == "tsv-table"
+    assert ok and "| h1 | h2 |" in md and "| v3 | v4 |" in md and method == "tsv-table"
 
 
 def test_convert_xml(tmp_path):
     src = tmp_path / "d.xml"
     src.write_text("<root><a>1</a></root>")
-    out = tmp_path / "d"
-    ok, size, method = p1.convert_xml(src, out)
+    ok, size, method = p1.convert_xml(src, tmp_path / "d")
     md = (tmp_path / "d.md").read_text()
-    assert ok
-    assert "```xml" in md
-    assert "<root>" in md
-    assert method == "xml-fenced"
+    assert ok and "```xml" in md and "<root>" in md and method == "xml-fenced"
 
 
-# ── MarkItDown adapter test ───────────────────────────────────
+def test_libreoffice_uses_isolated_profile(tmp_path, monkeypatch):
+    """Concurrent-safe: each LibreOffice call gets its own -env:UserInstallation profile."""
+    captured = {}
 
-class _FakeMarkItDown:
-    """Stand-in for the real MarkItDown class for testing."""
-    def __init__(self, llm_client=None, llm_model=None):
-        self.llm_client = llm_client
-        self.llm_model = llm_model
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return None  # no output file -> conversion "fails", but we inspect the cmd
 
-
-class _FakeOpenAI:
-    """Stand-in for OpenAI class."""
-    def __init__(self, api_key=None):
-        self.api_key = api_key
+    monkeypatch.setattr(p1.subprocess, "run", fake_run)
+    p1._convert_via_libreoffice(tmp_path / "a.doc", tmp_path / "a")
+    assert any(str(a).startswith("-env:UserInstallation=file://") for a in captured["cmd"])
 
 
-def test_get_markitdown_wiring(monkeypatch):
-    """Verify _get_markitdown returns a client when MarkItDown is present."""
+# ── MarkItDown wiring ─────────────────────────────────────────
+
+def test_get_markitdown_present(monkeypatch):
     monkeypatch.setattr(p1, "_HAS_MARKITDOWN", True)
-    monkeypatch.setattr(p1, "_MarkItDown", _FakeMarkItDown)
-    monkeypatch.setattr(p1, "_OpenAI", _FakeOpenAI)
-    monkeypatch.setattr(os, "environ", {"OPENAI_API_KEY": "sk-test"})
-    client = p1._get_markitdown("gpt-4o-mini")
-    assert client is not None
-    assert client.llm_model == "gpt-4o-mini"
-    assert client.llm_client is not None
-    assert client.llm_client.api_key == "sk-test"
+    monkeypatch.setattr(p1, "_MarkItDown", lambda: "CLIENT")
+    assert p1._get_markitdown() == "CLIENT"
 
 
-# ── Dispatch + gap-filler fallback ────────────────────────────
+def test_get_markitdown_construction_failure(monkeypatch):
+    """A construction failure returns None (the 'unavailable' warning is reachable)."""
+    monkeypatch.setattr(p1, "_HAS_MARKITDOWN", True)
 
-def test_process_file_falls_back_to_gap_filler(tmp_path, monkeypatch):
-    """When MarkItDown fails, the gap-filler handles .eml."""
+    def boom():
+        raise RuntimeError("missing optional deps")
+
+    monkeypatch.setattr(p1, "_MarkItDown", boom)
+    assert p1._get_markitdown() is None
+
+
+# ── Routing ───────────────────────────────────────────────────
+
+def test_image_routes_to_ocr(tmp_path, monkeypatch):
     src_root = tmp_path / "src"
     corpus = tmp_path / "corpus"
     src_root.mkdir()
-    (src_root / "msg.eml").write_text(
-        "From: x@y.com\r\nSubject: Hello\r\n\r\nBody text."
-    )
-    monkeypatch.setattr(p1, "_HAS_MARKITDOWN", False)
+    (src_root / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setattr(p1, "ocr_image",
+                        lambda inp, outp, vc: (True, 5, "tesseract", "image transcribed via OCR"))
+    rel, status, method, note = p1.process_file(
+        src_root / "x.png", src_root, corpus, VISION_CFG, None, True)
+    assert status == "ok" and method == "tesseract" and note == "image transcribed via OCR"
 
-    relpath, status, detail, note = p1.process_file(
-        src_root / "msg.eml", src_root, corpus, "gpt-4o-mini",
-        force=True,
-    )
+
+def test_audio_routes_to_whisper(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "a.mp3").write_bytes(b"ID3")
+    monkeypatch.setattr(p1, "convert_audio",
+                        lambda inp, outp, wm: (True, 5, "whisper", "audio transcribed via whisper"))
+    rel, status, method, note = p1.process_file(
+        src_root / "a.mp3", src_root, corpus, VISION_CFG, "MODEL", True)
+    assert status == "ok" and method == "whisper" and "whisper" in note
+
+
+def test_audio_fail_when_whisper_unavailable(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "a.mp3").write_bytes(b"ID3")
+    monkeypatch.setattr(p1, "convert_audio",
+                        lambda inp, outp, wm: (False, 0, "whisper-unavailable", None))
+    rel, status, detail, note = p1.process_file(
+        src_root / "a.mp3", src_root, corpus, VISION_CFG, None, True)
+    assert status == "fail" and "audio not transcribed" in detail
+
+
+def test_pdf_scanned_falls_back_to_ocr(tmp_path, monkeypatch):
+    """MarkItDown returns empty on a scanned PDF -> ocr_pdf is invoked."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "scan.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(p1, "_convert_with_markitdown",
+                        lambda fp, op, mc: (False, 0, "markitdown-empty"))
+    calls = []
+
+    def fake_ocr_pdf(inp, outp, vc):
+        calls.append(inp.name)
+        outp.with_suffix(".md").write_text("OCR TEXT")
+        return True, 8, "ocr", "scanned PDF; OCR only"
+
+    monkeypatch.setattr(p1, "ocr_pdf", fake_ocr_pdf)
+    rel, status, method, note = p1.process_file(
+        src_root / "scan.pdf", src_root, corpus, VISION_CFG, None, True, md_client=object())
+    assert status == "ok" and method == "ocr" and calls == ["scan.pdf"]
+
+
+def test_pdf_digital_uses_markitdown(tmp_path, monkeypatch):
+    """A digital PDF with a real text layer stays with MarkItDown (no OCR)."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "digital.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    def fake_mk(fp, op, mc):
+        op.with_suffix(".md").write_text("A" * 200)  # meaningful text
+        return True, 200, "markitdown"
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown", fake_mk)
+    monkeypatch.setattr(p1, "ocr_pdf",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("ocr_pdf should not run")))
+    rel, status, method, note = p1.process_file(
+        src_root / "digital.pdf", src_root, corpus, VISION_CFG, None, True, md_client=object())
+    assert status == "ok" and method == "markitdown"
+
+
+def test_process_file_falls_back_to_gap_filler(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "msg.eml").write_text("From: x@y.com\r\nSubject: Hello\r\n\r\nBody text.")
+    rel, status, detail, note = p1.process_file(
+        src_root / "msg.eml", src_root, corpus, VISION_CFG, None, True, md_client=None)
     assert status == "ok"
     assert "Hello" in (corpus / "msg.md").read_text()
-    assert note is not None
-    assert "fallback" in note
+    assert note is not None and "fallback" in note
 
 
-def test_process_file_unconvertible(tmp_path, monkeypatch):
+def test_process_file_unconvertible(tmp_path):
     src_root = tmp_path / "src"
     corpus = tmp_path / "corpus"
     src_root.mkdir()
     (src_root / "mystery.xyz").write_text("???")
-
-    monkeypatch.setattr(p1, "_HAS_MARKITDOWN", False)
-    relpath, status, detail, note = p1.process_file(
-        src_root / "mystery.xyz", src_root, corpus, "gpt-4o-mini",
-        force=True,
-    )
-    assert status == "fail"
-    assert "no converter" in detail
-    assert note is None
+    rel, status, detail, note = p1.process_file(
+        src_root / "mystery.xyz", src_root, corpus, VISION_CFG, None, True, md_client=None)
+    assert status == "fail" and "no converter" in detail and note is None
 
 
 # ── Reporting ─────────────────────────────────────────────────
 
 def test_write_unconverted(tmp_path):
     p1._write_unconverted(tmp_path, [("bad.xyz", "no converter for .xyz")])
-    report = tmp_path / "UNCONVERTED.md"
-    assert report.exists()
-    assert "bad.xyz" in report.read_text()
+    assert (tmp_path / "UNCONVERTED.md").exists()
+    assert "bad.xyz" in (tmp_path / "UNCONVERTED.md").read_text()
 
 
 def test_clean_run_removes_unconverted(tmp_path):
-    stale = tmp_path / "UNCONVERTED.md"
-    stale.write_text("stale")
+    (tmp_path / "UNCONVERTED.md").write_text("stale")
     p1._write_unconverted(tmp_path, [])
-    assert not stale.exists()
+    assert not (tmp_path / "UNCONVERTED.md").exists()
 
 
 def test_write_needs_review(tmp_path):
-    p1._write_needs_review(tmp_path, [("scan.png", "used .eml fallback")])
-    report = tmp_path / "NEEDS_REVIEW.md"
-    assert report.exists()
-    assert "scan.png" in report.read_text()
+    p1._write_needs_review(tmp_path, [("scan.png", "image transcribed via OCR")])
+    assert (tmp_path / "NEEDS_REVIEW.md").exists()
+    assert "scan.png" in (tmp_path / "NEEDS_REVIEW.md").read_text()
 
 
-# ── run_prepare_1 end-to-end ─────────────────────────────────
+# ── run_prepare_1 end-to-end (gap-fillers only, no markitdown/whisper) ─────
 
 def test_run_prepare_1_end_to_end(tmp_path, monkeypatch):
     src = tmp_path / "src"
     corpus = tmp_path / "corpus"
     src.mkdir()
-    xml_content = (
-        '<?xml version="1.0"?><doc>'
-        'Hello world this is enough text to pass the meaningful check.'
-        '</doc>'
-    )
-    (src / "a.xml").write_text(xml_content)
-    (src / "b.eml").write_text(
-        "From: x@y.com\r\nSubject: S\r\n\r\nBody text."
-    )
+    (src / "a.xml").write_text('<?xml version="1.0"?><doc>enough text to be fine</doc>')
+    (src / "b.eml").write_text("From: x@y.com\r\nSubject: S\r\n\r\nBody text.")
     monkeypatch.setattr(p1, "_HAS_MARKITDOWN", False)
     report = p1.run_prepare_1(
         source_root=str(src), corpus_root=str(corpus),
-        workers=2, vision_model="gpt-4o-mini", force=True,
-    )
+        workers=2, vision_cfg=VISION_CFG, audio_cfg=AUDIO_CFG, force=True)
     assert report["failure_count"] == 0
-    assert (corpus / "a.md").exists()
-    assert (corpus / "b.md").exists()
+    assert (corpus / "a.md").exists() and (corpus / "b.md").exists()
     assert not (corpus / "UNCONVERTED.md").exists()
 
 
@@ -172,7 +217,6 @@ def test_run_prepare_1_reports_unconvertible(tmp_path, monkeypatch):
     monkeypatch.setattr(p1, "_HAS_MARKITDOWN", False)
     report = p1.run_prepare_1(
         source_root=str(src), corpus_root=str(corpus),
-        workers=1, vision_model="gpt-4o-mini", force=True,
-    )
+        workers=1, vision_cfg=VISION_CFG, audio_cfg=AUDIO_CFG, force=True)
     assert report["failure_count"] == 1
     assert (corpus / "UNCONVERTED.md").exists()

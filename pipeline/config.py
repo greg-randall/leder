@@ -1,7 +1,6 @@
 """Load and validate pipeline configuration."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -57,11 +56,18 @@ class PrepareRollupConfig:
     crosscutting: bool = True
 
 @dataclass
+class AudioConfig:
+    enabled: bool = True
+    model: str = "medium"
+    device: str = "auto"   # auto = GPU if available else CPU (with warning)
+
+@dataclass
 class PrepareConfig:
     source_root: str = "raw-source-docs/"
     convert_workers: int = 8
     ocr_images: bool = True
     vision_fallback: VisionFallbackConfig = field(default_factory=VisionFallbackConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
     summarize: PrepareSummarizeConfig = field(default_factory=PrepareSummarizeConfig)
     rollup: PrepareRollupConfig = field(default_factory=PrepareRollupConfig)
 
@@ -73,6 +79,7 @@ class PrepareConfig:
             convert_workers=raw.get("convert_workers", 8),
             ocr_images=raw.get("ocr_images", True),
             vision_fallback=VisionFallbackConfig(**(raw.get("vision_fallback") or {})),
+            audio=AudioConfig(**(raw.get("audio") or {})),
             summarize=PrepareSummarizeConfig(**(raw.get("summarize") or {})),
             rollup=PrepareRollupConfig(**(raw.get("rollup") or {})),
         )

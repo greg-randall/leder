@@ -128,6 +128,23 @@ def check_antiword() -> CheckResult:
     return _check_tool("antiword", "Install: sudo apt install antiword")
 
 
+def check_faster_whisper() -> CheckResult:
+    """Check faster-whisper (local audio transcription) and note GPU vs CPU."""
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError:
+        return CheckResult(name="faster-whisper", passed=False, fatal=False,
+                           detail="NOT FOUND (audio files will be skipped)",
+                           install_hint="Install: pip install faster-whisper")
+    try:
+        import ctranslate2
+        gpu = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        gpu = False
+    return CheckResult(name="faster-whisper", passed=True, fatal=False,
+                       detail=f"installed ({'CUDA GPU' if gpu else 'CPU only — slow for larger models'})")
+
+
 # ── Corpus / vision-key warnings (non-fatal) ─────────────────────────────
 
 def warn_stale_corpus(corpus_root: str) -> list[str]:
@@ -150,10 +167,22 @@ def warn_missing_vision_key(vision_enabled: bool) -> str:
     return ""
 
 
+def warn_missing_audio_deps(audio_enabled: bool) -> str:
+    """Warning if audio transcription is on but faster-whisper is not installed."""
+    if not audio_enabled:
+        return ""
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError:
+        return ("  prepare.audio is enabled but faster-whisper is not installed — "
+                "audio files will be skipped. Install: pip install faster-whisper")
+    return ""
+
+
 _ALL_CHECKS = [
     check_ripgrep, check_jina, check_obscura, check_trafilatura, check_scrape_skill,
     check_tesseract, check_pdftoppm, check_pdftotext, check_pandoc,
-    check_libreoffice, check_antiword,
+    check_libreoffice, check_antiword, check_faster_whisper,
 ]
 
 

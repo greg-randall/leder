@@ -13,6 +13,9 @@ the local cache on first use.
 """
 from __future__ import annotations
 
+import glob
+import os
+import site
 import subprocess
 import sys
 import threading
@@ -40,6 +43,42 @@ def _cuda_available() -> bool:
         return False
 
 
+def _nvidia_lib_dirs() -> list:
+    """Lib dirs of pip-installed CUDA/cuDNN packages (site-packages/nvidia/*/lib).
+
+    These are NOT on the default dynamic-loader path, so CTranslate2 can't find
+    cuDNN at runtime unless we help it (see _preload_nvidia_libs).
+    """
+    dirs = []
+    bases = list(site.getsitepackages())
+    try:
+        bases.append(site.getusersitepackages())
+    except Exception:
+        pass
+    for base in bases:
+        for sub in ("nvidia/cudnn/lib", "nvidia/cublas/lib"):
+            d = os.path.join(base, sub)
+            if os.path.isdir(d) and d not in dirs:
+                dirs.append(d)
+    return dirs
+
+
+def _preload_nvidia_libs() -> None:
+    """Make pip-installed cuDNN/cuBLAS discoverable for in-process GPU inference.
+
+    Changing LD_LIBRARY_PATH after the process has started does not affect dlopen,
+    but an RTLD_GLOBAL preload does — so GPU transcription works out of the box
+    (just `pip install nvidia-cudnn-cu12`) with no environment fiddling.
+    """
+    import ctypes
+    for d in _nvidia_lib_dirs():
+        for lib in sorted(glob.glob(os.path.join(d, "*.so*"))):
+            try:
+                ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+
+
 _GPU_CANARY = (
     "import numpy as np;"
     "from faster_whisper import WhisperModel;"
@@ -59,9 +98,15 @@ def _gpu_works() -> bool:
     """
     if not _cuda_available():
         return False
+    # The canary is a fresh process, so LD_LIBRARY_PATH IS honored at its startup —
+    # point it at the pip-installed cuDNN/cuBLAS so the health check is accurate.
+    env = dict(os.environ)
+    extra = os.pathsep.join(_nvidia_lib_dirs())
+    if extra:
+        env["LD_LIBRARY_PATH"] = extra + os.pathsep + env.get("LD_LIBRARY_PATH", "")
     try:
         r = subprocess.run([sys.executable, "-c", _GPU_CANARY],
-                           capture_output=True, timeout=180)
+                           capture_output=True, timeout=180, env=env)
         return r.returncode == 0 and b"GPUOK" in r.stdout
     except Exception:
         return False
@@ -97,6 +142,7 @@ def get_whisper_model(model_size: str = "medium", device: str = "auto"):
 
     if use_gpu:
         try:
+            _preload_nvidia_libs()  # make cuDNN/cuBLAS resolvable in this process
             return _WhisperModel(model_size, device="cuda", compute_type="float16"), "cuda"
         except Exception as ex:
             print(f"⚠  Whisper: GPU init failed ({type(ex).__name__}: {ex}); using CPU.",

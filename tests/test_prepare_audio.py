@@ -61,6 +61,7 @@ def test_get_whisper_model_cpu_fallback_warns(monkeypatch, capsys):
 def test_get_whisper_model_gpu(monkeypatch):
     monkeypatch.setattr(pa, "_HAS_WHISPER", True)
     monkeypatch.setattr(pa, "_gpu_works", lambda: True)
+    monkeypatch.setattr(pa, "_preload_nvidia_libs", lambda: None)
 
     class FakeWM:
         def __init__(self, model, device, compute_type):

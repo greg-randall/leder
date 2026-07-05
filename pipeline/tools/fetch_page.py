@@ -51,10 +51,10 @@ def _try_obscura(url: str, timeout: int = 30) -> tuple[str | None, str]:
     return None, "obscura"
 
 
-def _try_archive_is(url: str, timeout: int = 45) -> tuple[str | None, str]:
-    """Fetch via archive.is paywall bypass (Playwright browser)."""
+def _try_archive_is(url: str, timeout: int = 60) -> tuple[str | None, str]:
+    """Fetch via archive.is paywall bypass (Camoufox stealth browser)."""
     try:
-        from playwright.sync_api import sync_playwright
+        from camoufox.sync_api import Camoufox
         import trafilatura
 
         # Strip query params / fragments — archive.is indexes by clean URL
@@ -62,28 +62,27 @@ def _try_archive_is(url: str, timeout: int = 45) -> tuple[str | None, str]:
         clean_url = urlunparse(parsed._replace(query="", fragment=""))
         archive_url = f"https://archive.is/newest/{clean_url}"
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
+        with Camoufox(headless=True, geoip=True, humanize=True) as browser:
             page = browser.new_page()
 
             # Warm up: visit archive.is homepage to set Cloudflare cookies
             try:
                 page.goto("https://archive.is/", wait_until="load",
-                          timeout=20_000)
+                          timeout=int(timeout * 1000))
             except Exception:
                 pass
-            time.sleep(3)
+            time.sleep(4)
 
             # Navigate to snapshot
             try:
-                page.goto(archive_url, wait_until="load", timeout=30_000)
+                page.goto(archive_url, wait_until="load",
+                          timeout=int(timeout * 1000))
             except Exception:
                 pass
             time.sleep(3)
 
             final_url = page.url
             html = page.content()
-            browser.close()
 
         # If we stayed on /newest/ or bounced to homepage, no snapshot exists
         if "/newest/" in final_url or final_url.rstrip("/") in (

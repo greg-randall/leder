@@ -3,17 +3,22 @@
 
 Usage: python3 pipeline/tools/fetch_page.py <url> <target_id>
 
-Called by Stage B agents during verification. Two tiers:
+Called by Stage B agents during verification. Four tiers:
   1. jina.ai (r.jina.ai) — free, fast, clean markdown
-  2. playwright — real headless browser for JS/paywall pages
+  2. obscura — headless browser, handles bot-protected / JS pages
+  3. playwright — real headless browser, last resort for JS-heavy pages
+  4. archive.is — paywall bypass via snapshot (slow, rate-limited)
 
 Saves the RAW content (no summarization) to web_cache/<target_id>/page.md
 and prints it to stdout so the agent can read it directly.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
+import time
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 
 def _try_jina(url: str, timeout: int = 30) -> tuple[str | None, str]:
@@ -28,8 +33,75 @@ def _try_jina(url: str, timeout: int = 30) -> tuple[str | None, str]:
     return None, "jina.ai"
 
 
+def _try_obscura(url: str, timeout: int = 30) -> tuple[str | None, str]:
+    """Fetch via obscura headless browser, extract markdown with trafilatura."""
+    try:
+        import trafilatura
+        r = subprocess.run(
+            ["obscura", "fetch", url, "--dump", "html", "--timeout", str(timeout)],
+            capture_output=True, text=True, timeout=timeout + 15,
+        )
+        if r.returncode == 0 and len(r.stdout) > 200:
+            text = trafilatura.extract(r.stdout, output_format="markdown",
+                                       include_comments=False)
+            if text and len(text) > 200:
+                return text, "obscura"
+    except Exception as e:
+        print(f"  obscura: {type(e).__name__}: {e}", file=sys.stderr)
+    return None, "obscura"
+
+
+def _try_archive_is(url: str, timeout: int = 45) -> tuple[str | None, str]:
+    """Fetch via archive.is paywall bypass (Playwright browser)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        import trafilatura
+
+        # Strip query params / fragments — archive.is indexes by clean URL
+        parsed = urlparse(url)
+        clean_url = urlunparse(parsed._replace(query="", fragment=""))
+        archive_url = f"https://archive.is/newest/{clean_url}"
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+
+            # Warm up: visit archive.is homepage to set Cloudflare cookies
+            try:
+                page.goto("https://archive.is/", wait_until="load",
+                          timeout=20_000)
+            except Exception:
+                pass
+            time.sleep(3)
+
+            # Navigate to snapshot
+            try:
+                page.goto(archive_url, wait_until="load", timeout=30_000)
+            except Exception:
+                pass
+            time.sleep(3)
+
+            final_url = page.url
+            html = page.content()
+            browser.close()
+
+        # If we stayed on /newest/ or bounced to homepage, no snapshot exists
+        if "/newest/" in final_url or final_url.rstrip("/") in (
+            "https://archive.is", "https://archive.ph",
+        ):
+            return None, "archive.is"
+
+        text = trafilatura.extract(html, output_format="markdown",
+                                   include_comments=False)
+        if text and len(text) > 200:
+            return text, "archive.is"
+    except Exception as e:
+        print(f"  archive.is: {type(e).__name__}: {e}", file=sys.stderr)
+    return None, "archive.is"
+
+
 def _try_playwright(url: str, timeout: int = 30) -> tuple[str | None, str]:
-    """Fetch via Playwright headless Chromium."""
+    """Fetch via Playwright headless Chromium (direct, no archive)."""
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -59,7 +131,7 @@ def main():
 
     content = None
     method = None
-    for fetcher in (_try_jina, _try_playwright):
+    for fetcher in (_try_jina, _try_obscura, _try_playwright, _try_archive_is):
         content, method = fetcher(url)
         if content:
             break

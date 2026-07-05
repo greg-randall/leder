@@ -386,6 +386,9 @@ async def _verify_claim_async(
 
         if structured_output and isinstance(structured_output, dict):
             result = _populate_claim_from_dict(claim, structured_output)
+            # Stash the raw output so callers using FindingOutput can extract
+            # fields the old Claim model doesn't carry (recommended_action, metadata).
+            result._raw_output = structured_output
         else:
             result = parse_verdict(claim, full_text)
     except asyncio.TimeoutError:
@@ -435,6 +438,14 @@ async def _verify_target_async(
     elif result.verdict == "unsupported":
         sev = Severity.WARNING
 
+    # Fields from old Claim model
+    rec_action = None
+    meta = {}
+    # New FindingOutput fields flow through _raw_output (stashed during struct output processing)
+    raw = getattr(result, "_raw_output", None) or {}
+    rec_action = raw.get("recommended_action")
+    meta = raw.get("metadata", {})
+
     return Finding(
         finding_id=f"{target['playbook']}-{len(target.get('target_text',''))}",
         check_type=target["playbook"],
@@ -443,11 +454,13 @@ async def _verify_target_async(
         anchor_text=target["anchor_text"],
         context=target.get("context", ""),
         agent_summary=result.rationale or "",
+        recommended_action=rec_action,
         source_path=result.source_path,
         source_url=result.source_url,
         source_excerpt=result.source_excerpt,
         confidence=result.confidence,
         human_review=result.human_review,
+        metadata=meta,
     )
 
 

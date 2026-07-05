@@ -2,7 +2,7 @@
 
 Each claim gets a real Claude Code agent session via the Claude Agent SDK.
 Claims are verified in parallel with configurable concurrency.
-Results are written incrementally — crash-resistant.
+Results are written incrementally and are crash-resistant.
 """
 from __future__ import annotations
 

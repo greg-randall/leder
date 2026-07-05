@@ -548,13 +548,23 @@ def _backfill_web_cache(claims: list[Claim], web_cache_dir: str) -> None:
 
 def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
     """Populate claim fields from a structured output dict. Falls back to
-    agent_failure_result on missing required fields."""
+    agent_failure_result on missing required fields.
+
+    Accepts both legacy (verdict) and new FindingOutput (severity) schemas.
+    """
+    # severity -> verdict mapping (new FindingOutput schema)
+    if "verdict" not in data and "severity" in data:
+        sev = data["severity"]
+        data["verdict"] = {"PASS": "supported", "CRITICAL": "contradicted",
+                           "WARNING": "unsupported"}.get(sev, "unsupported")
+    if "source_proximity" not in data:
+        data["source_proximity"] = "original" if data.get("source_path") else "unverifiable"
     try:
         claim.verdict = data["verdict"]
         claim.source_proximity = data["source_proximity"]
         claim.source_path = data.get("source_path")
         claim.source_url = data.get("source_url")
-        claim.rationale = data.get("rationale", "No rationale provided.")
+        claim.rationale = data.get("rationale") or data.get("agent_summary", "No rationale provided.")
         claim.source_excerpt = data.get("source_excerpt", "")
         claim.human_review = data.get("human_review", True)
         claim.confidence = data.get("confidence")

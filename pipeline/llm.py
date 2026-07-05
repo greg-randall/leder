@@ -21,7 +21,10 @@ def call_text_llm(system: str, user: str, model: str, max_tokens: int = 4096,
         api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY"),
     )
     if stream:
+        import sys
         parts: list[str] = []
+        chars = 0
+        print("  streaming response...", file=sys.stderr, end="", flush=True)
         with client.messages.stream(
             model=model,
             max_tokens=max_tokens,
@@ -32,7 +35,13 @@ def call_text_llm(system: str, user: str, model: str, max_tokens: int = 4096,
         ) as s:
             for event in s:
                 if event.type == "content_block_delta" and event.delta.type == "text_delta":
-                    parts.append(event.delta.text)
+                    text = event.delta.text
+                    parts.append(text)
+                    chars += len(text)
+                    if chars % 2000 < len(text):  # update every ~2k chars
+                        print(f"\r  streaming... {chars:,} chars", file=sys.stderr,
+                              end="", flush=True)
+        print(f"\r  streaming done: {chars:,} chars", file=sys.stderr)
         return "".join(parts)
 
     resp = client.messages.create(

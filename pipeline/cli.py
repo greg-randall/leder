@@ -416,6 +416,7 @@ def main() -> None:
             max_turns=config.stage_b.max_turns,
             debug_count=getattr(args, "debug", 0),
             playbook_dir=config.prepare.playbooks.dir,
+            pricing=config.pricing,
         )
         if hasattr(doc, 'findings'):
             verified_count = len(doc.findings)

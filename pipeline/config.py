@@ -112,6 +112,7 @@ class PipelineConfig:
     stage_b: StageBConfig = field(default_factory=StageBConfig)
     stage_c: StageCConfig = field(default_factory=StageCConfig)
     prepare: PrepareConfig = field(default_factory=PrepareConfig)
+    pricing: dict = field(default_factory=dict)
     project_root: str = ""
 
     @classmethod
@@ -148,6 +149,7 @@ class PipelineConfig:
             stage_b=StageBConfig(**raw.get("stage_b", {})),
             stage_c=StageCConfig(**raw.get("stage_c", {})),
             prepare=PrepareConfig.from_raw(raw.get("prepare")),
+            pricing=raw.get("pricing", {}),
         )
         config.project_root = str(Path(path).resolve().parent)
         return config

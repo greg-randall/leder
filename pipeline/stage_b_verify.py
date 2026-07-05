@@ -698,6 +698,7 @@ def run_stage_b(
     debug_count: int = 0,
     targets_path: str = "",
     playbook_dir: str = "pipelines/",
+    pricing: dict | None = None,
 ) -> ClaimsDocument | FindingsDocument:
     """Load claims.json, verify each claim, write enriched claims.json.
 
@@ -771,25 +772,24 @@ def run_stage_b(
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(doc.to_json())
         print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
-        # Cost estimate (DeepSeek API pricing: https://api-docs.deepseek.com/quick_start/pricing)
-        # deepseek-v4-pro: $0.435/1M input, $0.87/1M output
+        # Cost estimate (pricing from config.yaml, rates per 1M tokens)
+        rates = (pricing or {}).get(
+            os.environ.get("ANTHROPIC_MODEL", "deepseek-v4-pro"),
+            {"input": 0.435, "output": 0.87},  # fallback to pro pricing
+        )
         try:
             import tiktoken
             enc = tiktoken.get_encoding("o200k_base")
-            # System prompt: playbook verification prompt + injected article_summary
-            #   (~3,700 tokens from actual tiktoken count of pipelines/fact_check.yaml)
-            sys_tokens = 3700
+            sys_tokens = 3700  # playbook prompt + injected article_summary
             prompt_tokens = sum(
                 sys_tokens +
                 len(enc.encode(t.get("target_text", ""))) +
                 len(enc.encode(t.get("context", "")))
                 for t in targets_list
             )
-            # Output: agent returns structured JSON + tool-call chatlog. Actual output
-            #   varies widely by claim complexity; 2,500 is a rough per-claim average.
-            out_tokens = len(findings_list) * 2500
-            cost = (prompt_tokens / 1_000_000 * 0.435 +
-                    out_tokens / 1_000_000 * 0.87)
+            out_tokens = len(findings_list) * 2500  # agent response + tool-call log
+            cost = (prompt_tokens / 1_000_000 * rates["input"] +
+                    out_tokens / 1_000_000 * rates["output"])
             print(f"  Cost estimate: ${cost:.3f}  "
                   f"({prompt_tokens:,} in / {out_tokens:,} out tokens)", file=sys.stderr)
         except ImportError:

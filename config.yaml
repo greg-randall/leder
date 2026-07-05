@@ -8,6 +8,11 @@ output:
   dir: "."
   web_cache_dir: "web_cache/"
 
+pricing:
+  deepseek-v4-pro:  { input: 0.435, output: 0.87  }   # per 1M tokens
+  deepseek-v4-flash: { input: 0.14,  output: 0.28  }
+  deepseek-v4-pro[1m]: { input: 0.435, output: 0.87 }
+
 stage_a:
   model: "deepseek-v4-pro"
   quality_gate: true

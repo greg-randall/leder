@@ -727,6 +727,7 @@ def run_stage_b(
     targets_path: str = "",
     playbook_dir: str = "pipelines/",
     pricing: dict | None = None,
+    debug_ids: list[int] | None = None,
 ) -> ClaimsDocument | FindingsDocument:
     """Load claims.json, verify each claim, write enriched claims.json.
 
@@ -751,10 +752,15 @@ def run_stage_b(
         summary = data.get("article_summary", "")
         article_file = data.get("article_file", "")
 
-        debug_dir = None
-        if debug_count > 0:
-            debug_dir = os.path.join(os.path.dirname(output_path) or ".", "debug")
-            print(f"Debug mode: logs -> {debug_dir}/", file=sys.stderr)
+        base_debug_dir = os.path.join(os.path.dirname(output_path) or ".", "debug")
+        if debug_count > 0 or debug_ids:
+            os.makedirs(base_debug_dir, exist_ok=True)
+            if debug_ids:
+                print(f"Debug mode: logging targets {debug_ids} -> {base_debug_dir}/",
+                      file=sys.stderr)
+            else:
+                print(f"Debug mode: logging {debug_count} random targets -> "
+                      f"{base_debug_dir}/", file=sys.stderr)
 
         print(f"Stage B: {len(targets_list)} targets. Model: {os.environ.get('ANTHROPIC_MODEL', '?')}", file=sys.stderr)
 
@@ -778,11 +784,18 @@ def run_stage_b(
 
             async def _one(i, t):
                 async with sem:
+                    # Per-target debug: debug_ids (explicit indices) or random sample
+                    t_debug_dir = None
+                    if debug_ids:
+                        if i in debug_ids:
+                            t_debug_dir = base_debug_dir
+                    elif debug_count > 0 and i < debug_count:
+                        t_debug_dir = base_debug_dir
                     pb = _get_playbook(t["playbook"], playbook_dir)
                     prompt = _build_verification_prompt(pb, summary, t["target_text"], t.get("context", ""))
                     finding = await _verify_target_async(
                         t, prompt, pb.allowed_tools, corpus_root,
-                        timeout, max_turns, debug_dir, summary,
+                        timeout, max_turns, t_debug_dir, summary,
                     )
                     if finding is not None:
                         with findings_lock:

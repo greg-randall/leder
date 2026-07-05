@@ -116,6 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug", type=int, default=0, metavar="N",
         help="Randomly sample N claims, save agent transcripts to debug/",
     )
+    b_parser.add_argument(
+        "--debug-ids", type=str, default=None, metavar="1,3,5",
+        help="Debug specific target indices (comma-separated, 0-based)",
+    )
 
     c_parser = subparsers.add_parser(
         "stage-c", help="Rebuild article with footnotes"
@@ -415,6 +419,10 @@ def main() -> None:
             timeout=config.stage_b.timeout,
             max_turns=config.stage_b.max_turns,
             debug_count=getattr(args, "debug", 0),
+            debug_ids=(
+                [int(x.strip()) for x in args.debug_ids.split(",")]
+                if getattr(args, "debug_ids", None) else None
+            ),
             playbook_dir=config.prepare.playbooks.dir,
             pricing=config.pricing,
         )

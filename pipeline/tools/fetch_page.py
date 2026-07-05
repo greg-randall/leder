@@ -128,7 +128,30 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
         page.set_viewport_size({"width": 1920, "height": 1080})
 
         page.goto("https://archive.is/", wait_until="load", timeout=30_000)
-        time.sleep(4)
+        time.sleep(2)
+
+        # Jiggle mouse + scroll to look human
+        vp = page.viewport_size or {"width": 1920, "height": 1080}
+        w, h = vp["width"], vp["height"]
+        for _ in range(random.randint(4, 8)):
+            page.mouse.move(
+                random.randint(80, w - 80), random.randint(80, h - 80),
+                steps=random.randint(8, 20),
+            )
+            time.sleep(random.uniform(0.1, 0.4))
+        for _ in range(random.randint(2, 4)):
+            page.mouse.wheel(0, random.choice([-1, 1]) * random.randint(100, 400))
+            time.sleep(random.uniform(0.2, 0.6))
+
+        # Try clicking Cloudflare Turnstile if present
+        try:
+            turnstile = page.frame_locator(
+                "iframe[src*='challenges.cloudflare.com']")
+            turnstile.locator("input[type='checkbox']").click(timeout=3000)
+            print("  archive.is: clicked Turnstile", file=sys.stderr)
+            time.sleep(3)
+        except Exception:
+            pass
 
         page.goto(f"https://archive.is/newest/{clean_url}", wait_until="load", timeout=30_000)
         time.sleep(3)

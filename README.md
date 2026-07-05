@@ -8,7 +8,7 @@ You have a long article making factual claims, and a folder of source documents 
 
 It handles a mix of local files (permits, reports, emails, spreadsheets, anything that converts to markdown) and web sources. Swap the article and corpus and it works the same way.
 
-And because every check is a YAML playbook, not hardcoded Python, adding a new editorial review (Math Check, Quote Precision, Right of Reply) means writing two prompts and a tool list. The rest is configuration.
+And because every check is a YAML playbook, not hardcoded Python, adding a new editorial review (Math Check, Quote Precision, Right of Reply) means writing a few prompts, picking some tools, and writing a display template. The rest is configuration.
 
 ## 2. Quickstart
 

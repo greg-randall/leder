@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -59,26 +60,28 @@ def _try_archive_is(url: str, timeout: int = 60) -> tuple[str | None, str]:
         # Strip query params / fragments — archive.is indexes by clean URL
         parsed = urlparse(url)
         clean_url = urlunparse(parsed._replace(query="", fragment=""))
-        archive_url = f"https://archive.is/newest/{clean_url}"
 
-        with Camoufox(headless=True, geoip=True, humanize=True) as browser:
+        with Camoufox(
+            headless=True, geoip=True, humanize=True, os="windows",
+        ) as browser:
             page = browser.new_page()
+            page.set_viewport_size({"width": 1920, "height": 1080})
 
-            # Warm up: visit archive.is homepage, wait for the search input to render
+            # Warm up: visit homepage, let Cloudflare cookies settle
             try:
-                page.goto("https://archive.is/", wait_until="domcontentloaded",
-                          timeout=20_000)
-                page.wait_for_selector('input[type="text"]', timeout=10_000)
-            except Exception:
-                pass  # Cloudflare challenge or network issue — continue anyway
-
-            # Navigate to snapshot, then wait for actual content (not a redirect loop)
-            try:
-                page.goto(archive_url, wait_until="domcontentloaded",
+                page.goto("https://archive.is/", wait_until="load",
                           timeout=30_000)
-                page.wait_for_load_state("networkidle", timeout=15_000)
             except Exception:
-                pass  # Timeout is OK — grab whatever rendered
+                pass
+            time.sleep(4)
+
+            # Navigate to snapshot
+            try:
+                page.goto(f"https://archive.is/newest/{clean_url}",
+                          wait_until="load", timeout=30_000)
+            except Exception:
+                pass
+            time.sleep(3)
 
             final_url = page.url
             html = page.content()
@@ -118,13 +121,31 @@ def _try_playwright(url: str, timeout: int = 30) -> tuple[str | None, str]:
     return None, "playwright"
 
 
+def _dump_debug(url: str, cache_dir: Path) -> None:
+    """Save raw HTML + screenshot for debugging fetch failures."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            (cache_dir / "debug.html").write_text(page.content(), encoding="utf-8")
+            page.screenshot(path=str(cache_dir / "debug.png"), full_page=True)
+            browser.close()
+            print(f"  [debug] saved {cache_dir}/debug.html + debug.png", file=sys.stderr)
+    except Exception as e:
+        print(f"  [debug] screenshot failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python3 pipeline/tools/fetch_page.py <url> <target_id>", file=sys.stderr)
+        print("Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> [--debug]",
+              file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
     target_id = sys.argv[2]
+    debug = "--debug" in sys.argv
 
     cache_dir = Path("web_cache") / target_id
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -162,12 +183,14 @@ def main():
     if content:
         out_path.write_text(content, encoding="utf-8")
         print(f"[fetch_page] {url} -> {out_path}  ({method})", file=sys.stderr)
-        # Print to stdout so the agent can read it via $(python3 ...)
         print(content)
     else:
         out_path.write_text(f"(failed to fetch {url})\n", encoding="utf-8")
         print(f"[fetch_page] FAILED: {url} — all methods exhausted", file=sys.stderr)
         print(f"(failed to fetch {url})")
+
+    if debug and not content:
+        _dump_debug(url, cache_dir)
 
 
 if __name__ == "__main__":

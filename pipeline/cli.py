@@ -444,7 +444,8 @@ def main() -> None:
         output_path = _resolve_output_path(output_path)
         run_stage_c(
             article_path=article_path,
-            claims_path=claims_path,
+            claims_path=args_claims_c,
+            findings_path=args_findings,
             output_path=output_path,
             model=config.stage_a.model,
         )

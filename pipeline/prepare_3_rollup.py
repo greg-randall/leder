@@ -181,12 +181,23 @@ def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
     root = Path(corpus_root)
 
     if only in (None, "tree"):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from tqdm import tqdm
         failures: list = []
         print("prepare-3: counting folders...", file=sys.stderr, end=" ", flush=True)
         total = sum(1 for _ in root.rglob("*") if _.is_dir()) + 1
         print(f"{total} found")
         pbar = tqdm(total=total, desc="prepare-3 folders", unit="folder")
+        # Parallelize sibling folders at each level. Top-level dirs are siblings.
+        subdirs = sorted(c for c in root.iterdir() if c.is_dir())
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            futures = {
+                pool.submit(summarize_folder, d, root, model, force, failures, pbar): d
+                for d in subdirs
+            }
+            for future in as_completed(futures):
+                future.result()
+        # Root itself (depends on all subdirs done).
         summarize_folder(root, root, model, force, failures, pbar)
         pbar.close()
         root_summary = root / "_FOLDER_SUMMARY.md"

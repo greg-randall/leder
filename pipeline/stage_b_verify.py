@@ -716,7 +716,7 @@ def run_stage_b(
     """
     if targets_path:
         import json as _json
-        from pipeline.finding import FindingsDocument
+        from pipeline.finding import Finding, FindingsDocument
 
         data = _json.loads(open(targets_path, encoding="utf-8").read())
         targets_list = data["targets"]

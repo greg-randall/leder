@@ -474,6 +474,34 @@ def _is_summary_path(path: str | None) -> bool:
     return any(m in path for m in summary_markers)
 
 
+def _summarize_web_cache(web_cache_dir: str) -> None:
+    """Create minimal _summary.md for each web_cache page so tiered search
+    finds them on re-runs. Free — takes the first paragraph of each page
+    as its summary, no LLM calls."""
+    wc = _Path(web_cache_dir)
+    if not wc.is_dir():
+        return
+    pages = sorted(wc.glob("*/page.md"))
+    if not pages:
+        return
+    count = 0
+    for page in pages:
+        summary = page.parent / "_summary.md"
+        if summary.exists() and summary.stat().st_size > 10:
+            continue
+        text = page.read_text(encoding="utf-8", errors="replace").strip()
+        # Grab first paragraph as the summary — cheap, effective for search
+        first_para = text.split("\n\n")[0] if text else "(empty)"
+        summary.write_text(
+            f"**Summary:** Web-cached page. {first_para[:300]}\n\n"
+            f"**Facts:** *(see page.md for full content)*\n",
+            encoding="utf-8")
+        count += 1
+    if count:
+        print(f"  Web cache: wrote {count} _summary.md files for tiered search",
+              file=sys.stderr)
+
+
 def _backfill_web_cache(claims: list[Claim], web_cache_dir: str) -> None:
     """For any claim with a source_url but no cached page, try to fetch it.
 
@@ -772,6 +800,7 @@ def run_stage_b(
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(doc.to_json())
         print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
+        _summarize_web_cache(web_cache_dir)
         # Cost estimate (pricing from config.yaml, rates per 1M tokens)
         rates = (pricing or {}).get(
             os.environ.get("ANTHROPIC_MODEL", "deepseek-v4-pro"),
@@ -929,6 +958,7 @@ def run_stage_b(
     unverified = [c for c in doc.claims if c.claim_id not in result_map]
     # Backfill missing web cache entries using obscura
     _backfill_web_cache(verified, web_cache_dir)
+    _summarize_web_cache(web_cache_dir)
 
     supported = sum(1 for c in verified if c.verdict == "supported")
     contradicted = sum(1 for c in verified if c.verdict == "contradicted")

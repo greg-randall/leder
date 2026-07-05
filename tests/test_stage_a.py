@@ -168,5 +168,5 @@ def test_run_stage_a_playbook_path_writes_targets_json(tmp_path, monkeypatch):
     data = json.loads(open(output).read())
     assert data["article_file"] == str(article)
     assert len(data["targets"]) == 1
-    assert data["targets"][0]["playbook"] == "Test Check"
+    assert data["targets"][0]["playbook"] == "test_check"  # slug, not display name
     assert data["targets"][0]["target_text"] == "t1"

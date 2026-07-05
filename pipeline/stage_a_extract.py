@@ -246,7 +246,7 @@ def _extract_targets_from_text(text: str, model: str, playbook,
             targets = [Target(
                 target_text=t["target_text"],
                 anchor_text=t["anchor_text"],
-                playbook=playbook.name,
+                playbook=getattr(playbook, 'slug', playbook.name),
                 claim_type=t.get("claim_type"),
             ) for t in args.get("targets", [])]
             return targets, args.get("article_title", ""), args.get("article_summary", "")
@@ -260,7 +260,7 @@ def _extract_targets_from_text(text: str, model: str, playbook,
                     targets = [Target(
                         target_text=t["target_text"],
                         anchor_text=t["anchor_text"],
-                        playbook=playbook.name,
+                        playbook=getattr(playbook, 'slug', playbook.name),
                         claim_type=t.get("claim_type"),
                     ) for t in args.get("targets", [])]
                     return targets, args.get("article_title", ""), args.get("article_summary", "")
@@ -504,7 +504,9 @@ def run_stage_a(
         for name in playbook_names:
             yaml_path = _Path(playbook_dir) / f"{name}.yaml"
             if yaml_path.exists():
-                playbooks.append(load_playbook(str(yaml_path)))
+                pb = load_playbook(str(yaml_path))
+                pb.slug = name  # filename stem = canonical ID for stage-b lookup
+                playbooks.append(pb)
 
         if not playbooks:
             raise ValueError(f"No playbooks found in {playbook_dir} matching {playbook_names}")

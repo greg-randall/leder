@@ -54,7 +54,10 @@ def test_structured_output_missing_field_falls_back():
         claim_type="numeric",
     )
     # Missing source_proximity
-    result = _populate_claim_from_dict(claim, {"verdict": "supported", "rationale": "ok", "human_review": False, "confidence": 0.5})
+    result = _populate_claim_from_dict(
+        claim,
+        {"verdict": "supported", "rationale": "ok", "human_review": False, "confidence": 0.5},
+    )
     assert result.verdict == "unsupported"
     assert result.human_review is True
 
@@ -76,11 +79,13 @@ def test_parse_verdict_valid_json():
         source_quote="Test claim.",
         claim_type="numeric",
     )
-    agent_output = """
-I searched the corpus and found the relevant permit.
-
-{"verdict":"supported","source_proximity":"original","source_path":"LA-0304/permits/2020.md","source_url":null,"rationale":"The permit confirms 165 acres of irrigation.","human_review":false,"confidence":0.95}
-"""
+    agent_output = (
+        "I searched the corpus and found the relevant permit.\n\n"
+        '{"verdict":"supported","source_proximity":"original",'
+        '"source_path":"LA-0304/permits/2020.md","source_url":null,'
+        '"rationale":"The permit confirms 165 acres of irrigation.",'
+        '"human_review":false,"confidence":0.95}\n'
+    )
     result = parse_verdict(claim, agent_output)
     assert result.verdict == "supported"
     assert result.source_proximity == "original"
@@ -202,3 +207,27 @@ def test_verify_claim_integration():
     assert result.verdict is not None
     assert result.rationale is not None
     assert len(result.rationale) > 5
+
+
+def test_build_verification_prompt_injects_variables():
+    from pipeline.playbook import Playbook
+    from pipeline.stage_b_verify import _build_verification_prompt
+
+    pb = Playbook(name="t", extraction_prompt="E",
+                  verification_prompt="S:{{article_summary}} C:{{target_text}} X:{{context}}")
+    r = _build_verification_prompt(pb, "Sum", "Claim", "Ctx")
+    assert "Sum" in r and "Claim" in r and "Ctx" in r
+
+
+def test_get_playbook_caches(tmp_path):
+    pd = tmp_path / "p"
+    pd.mkdir()
+    (pd / "tc.yaml").write_text(
+        "name: TC\nextraction:\n  prompt: E\n"
+        "verification:\n  prompt: V\n  allowed_tools: [Read, WebSearch]"
+    )
+    from pipeline.stage_b_verify import _get_playbook, _PLAYBOOK_CACHE
+    _PLAYBOOK_CACHE.clear()
+    pb = _get_playbook("tc", str(pd))
+    assert pb.name == "TC" and pb.allowed_tools == ["Read", "WebSearch"]
+    assert _get_playbook("tc", str(pd)) is pb  # cached

@@ -12,11 +12,13 @@ import os
 import re
 import sys
 
-from typing import Literal
+from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from pipeline.models import Claim, ClaimsDocument, Article, Corpus
+from pathlib import Path as _Path
+
+from pipeline.models import Claim, ClaimsDocument
 
 
 class VerdictOutput(BaseModel):
@@ -29,6 +31,19 @@ class VerdictOutput(BaseModel):
     source_excerpt: str = ""  # Verbatim text from the source document that supports/contradicts
     human_review: bool
     confidence: float
+
+
+class FindingOutput(BaseModel):
+    """Structured output schema for playbook-driven verification agents."""
+    severity: str = Field(description="PASS, WARNING, or CRITICAL")
+    agent_summary: str = Field(description="1-2 sentences explaining the finding")
+    recommended_action: Optional[str] = Field(default=None)
+    source_path: Optional[str] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    source_excerpt: Optional[str] = Field(default=None)
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    human_review: Optional[bool] = Field(default=None)
+    metadata: dict = Field(default_factory=dict)
 
 
 AGENT_SYSTEM_PROMPT = """You are a fact-checker verifying claims against a corpus of documents.
@@ -148,6 +163,7 @@ searched for.
 
 # ---- helpers ----
 
+
 def agent_failure_result(claim: Claim) -> Claim:
     claim.verdict = "unsupported"
     claim.source_proximity = "unverifiable"
@@ -230,6 +246,25 @@ def _write_incremental(claims: list[Claim], results_by_id: dict[str, Claim], out
     os.replace(tmp, output_path)
 
 
+# ---- playbook helpers ----
+
+_PLAYBOOK_CACHE = {}
+
+
+def _get_playbook(name: str, playbook_dir: str):
+    if name not in _PLAYBOOK_CACHE:
+        from pipeline.playbook import load_playbook
+        _PLAYBOOK_CACHE[name] = load_playbook(str(_Path(playbook_dir) / f"{name}.yaml"))
+    return _PLAYBOOK_CACHE[name]
+
+
+def _build_verification_prompt(playbook, article_summary: str, target_text: str, context: str) -> str:
+    return (playbook.verification_prompt
+            .replace("{{article_summary}}", article_summary)
+            .replace("{{target_text}}", target_text)
+            .replace("{{context}}", context))
+
+
 # ---- async agent logic ----
 
 async def _verify_claim_async(
@@ -240,6 +275,8 @@ async def _verify_claim_async(
     max_turns: int = 30,
     debug_dir: str | None = None,
     article_summary: str = "",
+    allowed_tools: list[str] | None = None,
+    output_schema: dict | None = None,
 ) -> Claim:
     from claude_agent_sdk import (
         query, ClaudeAgentOptions,
@@ -303,13 +340,15 @@ async def _verify_claim_async(
     _sf.close()
     settings_path = _sf.name
 
+    tools = allowed_tools if allowed_tools is not None else ["Read", "Bash", "WebSearch", "WebFetch"]
+    schema = output_schema if output_schema is not None else VerdictOutput.model_json_schema()
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
-        allowed_tools=["Read", "Bash", "WebSearch", "WebFetch"],
+        allowed_tools=tools,
         permission_mode="acceptEdits",
         cwd=corpus_root,
         max_turns=max_turns,
-        output_format={"type": "json_schema", "schema": VerdictOutput.model_json_schema()},
+        output_format={"type": "json_schema", "schema": schema},
         settings=settings_path,
     )
 
@@ -361,6 +400,55 @@ async def _verify_claim_async(
         os.unlink(settings_path)
 
     return result
+
+
+async def _verify_target_async(
+    target, system_prompt, allowed_tools, corpus_root,
+    timeout, max_turns, debug_dir, article_summary,
+):
+    """Verify one target dict via a playbook's prompt+tools, returning a Finding or None."""
+    from pipeline.models import Claim
+    from pipeline.finding import Finding, Severity
+
+    claim = Claim(
+        claim_id=f"{target['playbook']}-{hash(target.get('target_text',''))}",
+        claim_text=target["target_text"],
+        source_quote=target["anchor_text"],
+        claim_type=target.get("claim_type", "generalization"),
+        context=target.get("context", ""),
+    )
+
+    result = await _verify_claim_async(
+        claim, corpus_root, system_prompt, timeout, max_turns,
+        debug_dir, article_summary,
+        allowed_tools=allowed_tools,
+        output_schema=FindingOutput.model_json_schema(),
+    )
+
+    if result.verdict is None:
+        return None
+
+    # Map old verdict to severity
+    sev = Severity.PASS
+    if result.verdict == "contradicted":
+        sev = Severity.CRITICAL
+    elif result.verdict == "unsupported":
+        sev = Severity.WARNING
+
+    return Finding(
+        finding_id=f"{target['playbook']}-{len(target.get('target_text',''))}",
+        check_type=target["playbook"],
+        severity=sev,
+        target_text=target["target_text"],
+        anchor_text=target["anchor_text"],
+        context=target.get("context", ""),
+        agent_summary=result.rationale or "",
+        source_path=result.source_path,
+        source_url=result.source_url,
+        source_excerpt=result.source_excerpt,
+        confidence=result.confidence,
+        human_review=result.human_review,
+    )
 
 
 def _is_summary_path(path: str | None) -> bool:
@@ -509,7 +597,9 @@ async def _verify_claim_with_retry(
     article_summary: str = "",
 ) -> Claim:
     """Verify a claim with one retry if the agent produced no verdict."""
-    result = await _verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns, debug_dir, article_summary)
+    result = await _verify_claim_async(
+        claim, corpus_root, system_prompt, timeout, max_turns, debug_dir, article_summary,
+    )
     if result.verdict is not None:
         return result
     print(f"  Retrying {claim.claim_id}...", file=sys.stderr)
@@ -584,6 +674,8 @@ def run_stage_b(
     timeout: int = 600,
     max_turns: int = 30,
     debug_count: int = 0,
+    targets_path: str = "",
+    playbook_dir: str = "pipelines/",
 ) -> ClaimsDocument:
     """Load claims.json, verify each claim, write enriched claims.json.
 
@@ -596,7 +688,48 @@ def run_stage_b(
         max_turns: Max tool-calling turns per agent (default 30).
         debug_count: If >0, randomly sample N claims and save agent
                      output to debug/ directory alongside output_path.
+        targets_path: Path to targets.json from new Stage A (playbook-driven).
+        playbook_dir: Directory containing playbook YAML files.
     """
+    if targets_path:
+        import json as _json
+        from pipeline.finding import FindingsDocument
+
+        data = _json.loads(open(targets_path, encoding="utf-8").read())
+        targets_list = data["targets"]
+        summary = data.get("article_summary", "")
+        article_file = data.get("article_file", "")
+
+        debug_dir = None
+        if debug_count > 0:
+            debug_dir = os.path.join(os.path.dirname(output_path) or ".", "debug")
+            print(f"Debug mode: logs -> {debug_dir}/", file=sys.stderr)
+
+        print(f"Stage B: {len(targets_list)} targets. Model: {os.environ.get('ANTHROPIC_MODEL', '?')}", file=sys.stderr)
+
+        async def _do():
+            sem = asyncio.Semaphore(concurrency)
+
+            async def _one(i, t):
+                async with sem:
+                    pb = _get_playbook(t["playbook"], playbook_dir)
+                    prompt = _build_verification_prompt(pb, summary, t["target_text"], t.get("context", ""))
+                    return await _verify_target_async(
+                        t, prompt, pb.allowed_tools, corpus_root,
+                        timeout, max_turns, debug_dir, summary,
+                    )
+
+            return await asyncio.gather(*[_one(i, t) for i, t in enumerate(targets_list)])
+
+        results = asyncio.run(_do())
+        findings_list = [r for r in results if r is not None]
+        doc = FindingsDocument(article_file=article_file, article_summary=summary, findings=findings_list)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(doc.to_json())
+        print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
+        return doc
+
+    # --- old path continues below unchanged ---
     import time as time_mod
 
     with open(claims_path, encoding="utf-8") as f:

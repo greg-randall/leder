@@ -98,15 +98,19 @@ def build_folder_user_msg(folder_name, file_summaries, subfolder_summaries) -> s
 
 
 def summarize_folder(folder: Path, corpus_root: Path, model: str, force: bool,
-                     failures: list):
+                     failures: list, counter: dict | None = None):
     """Post-order: summarize children first, then this folder. Returns True if a
     _FOLDER_SUMMARY.md was written (folder had content)."""
     subdirs = sorted(c for c in folder.iterdir() if c.is_dir())
     for d in subdirs:
-        summarize_folder(d, corpus_root, model, force, failures)
+        summarize_folder(d, corpus_root, model, force, failures, counter)
 
     out = folder / "_FOLDER_SUMMARY.md"
     if not force and out.exists() and out.stat().st_size > 20:
+        if counter is not None:
+            counter["done"] += 1
+            print(f"  prepare-3: [{counter['done']}/{counter['total']}] "
+                  f"{str(folder.relative_to(corpus_root)) or '.'} (cached)", file=sys.stderr)
         return True
 
     file_summaries, subfolder_summaries = gather_folder_inputs(folder)
@@ -116,8 +120,16 @@ def summarize_folder(folder: Path, corpus_root: Path, model: str, force: bool,
     # Single-file, no-subfolder folder -> reuse the child summary (no LLM call).
     if len(file_summaries) == 1 and not subfolder_summaries:
         out.write_text(file_summaries[0][1], encoding="utf-8")
+        if counter is not None:
+            counter["done"] += 1
+            print(f"  prepare-3: [{counter['done']}/{counter['total']}] "
+                  f"{str(folder.relative_to(corpus_root)) or '.'} (reused)", file=sys.stderr)
         return True
 
+    if counter is not None:
+        counter["done"] += 1
+        print(f"  prepare-3: [{counter['done']}/{counter['total']}] "
+              f"{str(folder.relative_to(corpus_root)) or '.'}", file=sys.stderr)
     user_msg = build_folder_user_msg(folder.name, file_summaries, subfolder_summaries)
     try:
         overview = call_text_llm(FOLDER_PROMPT, user_msg, model=model,
@@ -175,10 +187,12 @@ def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
     root = Path(corpus_root)
 
     if only in (None, "tree"):
-        print("prepare-3: building recursive folder summaries...")
         failures: list = []
+        total = sum(1 for _ in root.rglob("*")) + 1  # count all subdirs + root
+        counter = {"done": 0, "total": total}
+        print(f"prepare-3: building recursive folder summaries (~{total} folders)...")
         # One post-order pass over the whole tree (recurses into every subdir).
-        summarize_folder(root, root, model, force, failures)
+        summarize_folder(root, root, model, force, failures, counter)
         root_summary = root / "_FOLDER_SUMMARY.md"
         if root_summary.exists():
             shutil.copyfile(root_summary, root / "CORPUS_OVERVIEW.md")

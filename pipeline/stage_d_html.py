@@ -136,9 +136,20 @@ function smoothScrollTo(el, target, duration) {
     card.innerHTML = html;
     cardsContainer.appendChild(card);
 
-    // Click card to expand/collapse
-    card.addEventListener('click', function() {
+    // Add explicit toggle button so text selection doesn't collapse the card
+    var toggleBtn = document.createElement('button');
+    toggleBtn.className = 'sc-toggle';
+    toggleBtn.innerHTML = '▸';
+    toggleBtn.title = 'Expand / collapse';
+    toggleBtn.style.cssText = 'position:absolute;top:4px;right:4px;background:none;border:none;font-size:1.2em;cursor:pointer;padding:0 4px;line-height:1;';
+    card.style.position = 'relative';
+    card.appendChild(toggleBtn);
+
+    // Only toggle on button click, not anywhere on the card
+    toggleBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
       card.classList.toggle('expanded');
+      this.innerHTML = card.classList.contains('expanded') ? '▾' : '▸';
     });
   });
 

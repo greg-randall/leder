@@ -749,6 +749,10 @@ def run_stage_b(
 
         data = _json.loads(open(targets_path, encoding="utf-8").read())
         targets_list = data["targets"]
+        if debug_ids:
+            targets_list = [t for i, t in enumerate(targets_list) if i in debug_ids]
+            print(f"Stage B: {len(targets_list)} targets (debug-ids filter)",
+                  file=sys.stderr)
         summary = data.get("article_summary", "")
         article_file = data.get("article_file", "")
 

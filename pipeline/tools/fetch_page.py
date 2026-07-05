@@ -128,32 +128,19 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
         page.set_viewport_size({"width": 1920, "height": 1080})
 
         page.goto("https://archive.is/", wait_until="load", timeout=30_000)
-        time.sleep(2)
+        time.sleep(4)
 
-        # Jiggle mouse + scroll to look human
-        vp = page.viewport_size or {"width": 1920, "height": 1080}
-        w, h = vp["width"], vp["height"]
-        for _ in range(random.randint(4, 8)):
-            page.mouse.move(
-                random.randint(80, w - 80), random.randint(80, h - 80),
-                steps=random.randint(8, 20),
-            )
-            time.sleep(random.uniform(0.1, 0.4))
-        for _ in range(random.randint(2, 4)):
-            page.mouse.wheel(0, random.choice([-1, 1]) * random.randint(100, 400))
-            time.sleep(random.uniform(0.2, 0.6))
+        # If Cloudflare bounced us off archive.is, give up now
+        if "archive.is" not in page.url:
+            if debug_dir:
+                page.screenshot(path=str(debug_dir / "archive_is_cf_block.png"),
+                                full_page=True)
+            print(f"  archive.is: Cloudflare block (url={page.url[:80]})",
+                  file=sys.stderr)
+            return None, "archive.is"
 
-        # Try clicking Cloudflare Turnstile if present
-        try:
-            turnstile = page.frame_locator(
-                "iframe[src*='challenges.cloudflare.com']")
-            turnstile.locator("input[type='checkbox']").click(timeout=3000)
-            print("  archive.is: clicked Turnstile", file=sys.stderr)
-            time.sleep(3)
-        except Exception:
-            pass
-
-        page.goto(f"https://archive.is/newest/{clean_url}", wait_until="load", timeout=30_000)
+        page.goto(f"https://archive.is/newest/{clean_url}", wait_until="load",
+                  timeout=30_000)
         time.sleep(3)
 
         final_url = page.url
@@ -171,12 +158,15 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
         print(f"  archive.is: no snapshot ({final_url[:80]})", file=sys.stderr)
         return None, "archive.is"
 
+    # Return raw HTML (matching futureheist). Trafilatura extraction happens
+    # downstream — the caller saves page.md from whatever content we return.
     text = trafilatura.extract(html, output_format="markdown", include_comments=False)
     if text and len(text) > 200:
         return text, "archive.is"
-    print(f"  archive.is snapshot found but trafilatura extracted "
-          f"{len(text) if text else 0} bytes from {len(html)} bytes HTML", file=sys.stderr)
-    return None, "archive.is"
+    # If trafilatura failed, return the raw HTML anyway — better than nothing
+    print(f"  archive.is: trafilatura got {len(text) if text else 0} bytes, "
+          f"falling back to raw HTML ({len(html)} bytes)", file=sys.stderr)
+    return html, "archive.is-raw"
 
 
 def main():

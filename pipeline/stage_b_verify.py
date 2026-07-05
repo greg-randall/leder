@@ -771,15 +771,22 @@ def run_stage_b(
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(doc.to_json())
         print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
-        # Cost estimate using tiktoken (deepseek-v4-pro: $0.435/1M in, $0.87/1M out)
+        # Cost estimate (DeepSeek API pricing: https://api-docs.deepseek.com/quick_start/pricing)
+        # deepseek-v4-pro: $0.435/1M input, $0.87/1M output
         try:
             import tiktoken
             enc = tiktoken.get_encoding("o200k_base")
+            # System prompt: playbook verification prompt + injected article_summary
+            #   (~3,700 tokens from actual tiktoken count of pipelines/fact_check.yaml)
+            sys_tokens = 3700
             prompt_tokens = sum(
+                sys_tokens +
                 len(enc.encode(t.get("target_text", ""))) +
-                len(enc.encode(t.get("context", ""))) + 4500  # system prompt ~4.5K tokens
+                len(enc.encode(t.get("context", "")))
                 for t in targets_list
             )
+            # Output: agent returns structured JSON + tool-call chatlog. Actual output
+            #   varies widely by claim complexity; 2,500 is a rough per-claim average.
             out_tokens = len(findings_list) * 2500
             cost = (prompt_tokens / 1_000_000 * 0.435 +
                     out_tokens / 1_000_000 * 0.87)

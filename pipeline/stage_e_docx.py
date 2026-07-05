@@ -18,8 +18,10 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
     with open(claims_json, encoding="utf-8") as f:
         claims_data = json.load(f)
     claims_by_id = {}
-    for c in claims_data["claims"]:
-        claims_by_id[c["claim_id"]] = c
+    items = claims_data.get("findings") or claims_data.get("claims", [])
+    for c in items:
+        cid = c.get("finding_id") or c.get("claim_id", "")
+        claims_by_id[cid] = c
 
     with open(article_sourced_md, encoding="utf-8") as f:
         md_text = f.read()
@@ -73,10 +75,10 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
                 comment_count += 1
 
                 if claim:
-                    severity = claim.get("severity", "WARNING")
-                    if severity == "pass":  # PASS from stage_c
+                    severity = str(claim.get("severity", "WARNING")).upper()
+                    if severity == "PASS":
                         v_symbol = "✓"
-                    elif severity == "critical":
+                    elif severity == "CRITICAL":
                         v_symbol = "✗"
                     else:
                         v_symbol = "?"
@@ -84,7 +86,7 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
                     text = (
                         f"{v_symbol} [{claim.get('check_type', 'check')}]\n"
                         f"Claim: {claim.get('claim_text', '')}\n"
-                        f"Rationale: {claim.get('rationale', '')}"
+                        f"Rationale: {claim.get('agent_summary') or claim.get('rationale', '')}"
                     )
                     sp = claim.get("source_path")
                     su = claim.get("source_url")
@@ -111,9 +113,9 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
     # Save and clean up — flatten "Default Paragraph Font" runs
     doc.save(output_docx)
 
-    passed = sum(1 for c in claims_by_id.values() if c.get("severity") == "pass")
-    criticals = sum(1 for c in claims_by_id.values() if c.get("severity") == "critical")
-    warnings = sum(1 for c in claims_by_id.values() if c.get("severity") == "warning")
+    passed = sum(1 for c in claims_by_id.values() if str(c.get("severity", "")).upper() == "PASS")
+    criticals = sum(1 for c in claims_by_id.values() if str(c.get("severity", "")).upper() == "CRITICAL")
+    warnings = sum(1 for c in claims_by_id.values() if str(c.get("severity", "")).upper() == "WARNING")
 
     print(f"DOCX written → {output_docx}")
     print(f"  {comment_count} comments ({passed}✓/{criticals}✗/{warnings}?)")

@@ -149,7 +149,7 @@ class PipelineConfig:
             stage_c=StageCConfig(**raw.get("stage_c", {})),
             prepare=PrepareConfig.from_raw(raw.get("prepare")),
         )
-        config.project_root = str(Path(path).resolve().parent.parent)
+        config.project_root = str(Path(path).resolve().parent)
         return config
 
     def resolve_path(self, relative_path: str) -> str:

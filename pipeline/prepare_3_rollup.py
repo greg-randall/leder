@@ -102,8 +102,15 @@ def summarize_folder(folder: Path, corpus_root: Path, model: str, force: bool,
     """Post-order: summarize children first, then this folder. Returns True if a
     _FOLDER_SUMMARY.md was written (folder had content)."""
     subdirs = sorted(c for c in folder.iterdir() if c.is_dir())
-    for d in subdirs:
-        summarize_folder(d, corpus_root, model, force, failures, pbar)
+    if len(subdirs) > 1:
+        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+        with _TPE(max_workers=len(subdirs)) as pool:
+            futures = {pool.submit(summarize_folder, d, corpus_root, model, force, failures, pbar): d for d in subdirs}
+            for future in _ac(futures):
+                future.result()
+    else:
+        for d in subdirs:
+            summarize_folder(d, corpus_root, model, force, failures, pbar)
 
     out = folder / "_FOLDER_SUMMARY.md"
     if not force and out.exists() and out.stat().st_size > 20:

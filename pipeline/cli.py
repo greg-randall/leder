@@ -381,8 +381,15 @@ def main() -> None:
         )
         if doc is not None:
             n = getattr(doc, 'total_findings', None)
-            if n is None:
-                n = len(getattr(doc, 'claims', []))
+            if n is None or n == 0:
+                # New playbook path: count from the written file
+                try:
+                    import json
+                    with open(output_path) as f:
+                        data = json.load(f)
+                    n = len(data.get("targets", []))
+                except Exception:
+                    n = len(getattr(doc, 'claims', []))
             print(f"Stage A complete: {n} targets extracted")
 
     # --- Stage B: Claim verification ---

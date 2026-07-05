@@ -21,6 +21,10 @@ stage_b:
 stage_c:
   quote_match_method: "normalized"
 
+playbooks:
+  dir: "pipelines/"
+  active: ["fact_check"]
+
 prepare:
   source_root: "raw-source-docs/"
   convert_workers: 8

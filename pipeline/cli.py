@@ -100,11 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the quality-gate re-read of the article",
     )
+    a_parser.add_argument("--playbooks", help="Comma-separated list of playbooks to run")
 
     b_parser = subparsers.add_parser(
         "stage-b", help="Verify claims against corpus"
     )
-    b_parser.add_argument("--claims", default="claims.json")
+    b_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
+    b_parser.add_argument("--targets", default="targets.json", help="Input targets file")
+    b_parser.add_argument("--findings", default="findings.json", help="Output findings file")
     b_parser.add_argument("--output", default="claims.json")
     b_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
@@ -118,7 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
         "stage-c", help="Rebuild article with footnotes"
     )
     c_parser.add_argument("--article", help="Path to article markdown")
-    c_parser.add_argument("--claims", default="claims.json")
+    c_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
+    c_parser.add_argument("--findings", default="findings.json", help="Input findings file")
     c_parser.add_argument("--output", default="article-sourced.md")
     c_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
@@ -349,6 +353,11 @@ def main() -> None:
 
     # --- Stage A: Claim extraction ---
     if args.command in ("all", "stage-a"):
+        _playbook_names = (  # noqa: F841
+            args.playbooks.split(",")
+            if hasattr(args, "playbooks") and args.playbooks
+            else config.prepare.playbooks.active
+        )
         article_path = (
             getattr(args, "article", None)
             or config.resolve_path(config.article.path)
@@ -372,18 +381,21 @@ def main() -> None:
 
     # --- Stage B: Claim verification ---
     if args.command in ("all", "stage-b"):
-        claims_path = config.resolve_path(
-            getattr(args, "claims", "claims.json")
+        # Backward compat: --claims maps to targets_path
+        args_targets = getattr(args, "targets", "targets.json")
+        args_claims = getattr(args, "claims", None)
+        targets_path = config.resolve_path(
+            args_claims if args_claims is not None else args_targets
         )
         output_path = config.resolve_path(
-            getattr(args, "output", getattr(args, "claims", "claims.json"))
+            getattr(args, "output", getattr(args, "findings", "findings.json"))
         )
 
         from pipeline.stage_b_verify import run_stage_b
 
         output_path = _resolve_output_path(output_path)
         doc = run_stage_b(
-            claims_path=claims_path,
+            targets_path=targets_path,
             output_path=output_path,
             corpus_root=config.resolve_path(config.corpus.root),
             concurrency=config.stage_b.concurrency,
@@ -400,8 +412,11 @@ def main() -> None:
             getattr(args, "article", None)
             or config.resolve_path(config.article.path)
         )
+        # Backward compat: --claims feeds into findings input
+        args_findings = getattr(args, "findings", "findings.json")
+        args_claims_c = getattr(args, "claims", None)
         claims_path = config.resolve_path(
-            getattr(args, "claims", "claims.json")
+            args_claims_c if args_claims_c is not None else args_findings
         )
         output_path = config.resolve_path(
             getattr(args, "output", "article-sourced.md")

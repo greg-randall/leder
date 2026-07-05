@@ -11,19 +11,23 @@ import yaml
 class ArticleConfig:
     path: str
 
+
 @dataclass
 class CorpusConfig:
     root: str
+
 
 @dataclass
 class OutputConfig:
     dir: str = "."
     web_cache_dir: str = "web_cache/"
 
+
 @dataclass
 class StageAConfig:
     model: str = "deepseek-v4-pro"
     quality_gate: bool = True
+
 
 @dataclass
 class StageBConfig:
@@ -32,9 +36,11 @@ class StageBConfig:
     timeout: int = 600
     max_turns: int = 60
 
+
 @dataclass
 class StageCConfig:
     quote_match_method: str = "normalized"
+
 
 @dataclass
 class VisionFallbackConfig:
@@ -43,10 +49,12 @@ class VisionFallbackConfig:
     min_words: int = 20
     max_pages_per_doc: int = 30
 
+
 @dataclass
 class PrepareSummarizeConfig:
     model: str = "deepseek-v4-flash"
     workers: int = 50
+
 
 @dataclass
 class PrepareRollupConfig:
@@ -55,11 +63,19 @@ class PrepareRollupConfig:
     workers: int = 12
     crosscutting: bool = True
 
+
 @dataclass
 class AudioConfig:
     enabled: bool = True
     model: str = "medium"
     device: str = "auto"   # auto = GPU if available else CPU (with warning)
+
+
+@dataclass
+class PlaybooksConfig:
+    dir: str = "pipelines/"
+    active: list[str] = field(default_factory=lambda: ["fact_check"])
+
 
 @dataclass
 class PrepareConfig:
@@ -70,6 +86,7 @@ class PrepareConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     summarize: PrepareSummarizeConfig = field(default_factory=PrepareSummarizeConfig)
     rollup: PrepareRollupConfig = field(default_factory=PrepareRollupConfig)
+    playbooks: PlaybooksConfig = field(default_factory=PlaybooksConfig)
 
     @classmethod
     def from_raw(cls, raw: dict | None) -> "PrepareConfig":
@@ -82,7 +99,9 @@ class PrepareConfig:
             audio=AudioConfig(**(raw.get("audio") or {})),
             summarize=PrepareSummarizeConfig(**(raw.get("summarize") or {})),
             rollup=PrepareRollupConfig(**(raw.get("rollup") or {})),
+            playbooks=PlaybooksConfig(**raw.get("playbooks", {})),
         )
+
 
 @dataclass
 class PipelineConfig:

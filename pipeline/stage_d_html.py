@@ -14,7 +14,7 @@ import html as html_mod
 
 _STYLE = """<style>
   :root {
-    --supported: #2d7d46; --contradicted: #c42b2b; --unsupported: #b08800;
+    --pass: #2d7d46; --warning: #b08800; --critical: #c42b2b;
     --source-bg: #f8f9fa;
   }
   body { font-family: Georgia, 'Times New Roman', serif; }
@@ -28,9 +28,9 @@ _STYLE = """<style>
     padding: 0.1em 0.35em; border-radius: 10px; color: #fff;
   }
   a.fn-ref:hover { filter: brightness(1.2); transform: scale(1.15); }
-  .fn-ref.supported { background: var(--supported); }
-  .fn-ref.contradicted { background: var(--contradicted); }
-  .fn-ref.unsupported { background: var(--unsupported); }
+  .fn-ref.pass { background: var(--pass); }
+  .fn-ref.warning { background: var(--warning); }
+  .fn-ref.critical { background: var(--critical); }
 
   /* Sidebar cards */
   /* Smooth scrolling everywhere */
@@ -49,9 +49,9 @@ _STYLE = """<style>
   a.fn-ref { transition: transform 0.2s ease, filter 0.2s ease; }
   .src-card.expanded { max-height: 60em; cursor: default; }
   .src-card.flash { box-shadow: 0 0 0 3px rgba(45,125,70,0.4); }
-  .src-card.supported { border-left-color: var(--supported); }
-  .src-card.contradicted { border-left-color: var(--contradicted); }
-  .src-card.unsupported { border-left-color: var(--unsupported); }
+  .src-card.pass { border-left-color: var(--pass); }
+  .src-card.warning { border-left-color: var(--warning); }
+  .src-card.critical { border-left-color: var(--critical); }
   .src-card .sc-claim { font-weight: 600; display: inline; font-size: 0.9em; }
   .src-card .sc-rationale, .src-card .sc-matched, .src-card .sc-source,
   .src-card .sc-flags { display: none; }
@@ -67,18 +67,18 @@ _STYLE = """<style>
   .src-card .sc-num { font-size: 0.85em; font-weight: 700; display: inline;
     padding: 0.1em 0.45em; border-radius: 3px;
     margin-right: 0.3em; line-height: 1.6; }
-  .src-card.supported .sc-num { background: var(--supported); color: #fff; }
-  .src-card.contradicted .sc-num { background: var(--contradicted); color: #fff; }
-  .src-card.unsupported .sc-num { background: var(--unsupported); color: #fff; }
+  .src-card.pass .sc-num { background: var(--pass); color: #fff; }
+  .src-card.warning .sc-num { background: var(--warning); color: #fff; }
+  .src-card.critical .sc-num { background: var(--critical); color: #fff; }
 
   /* Unplaced claims */
-  .unplaced { background: #fff0f0; border: 2px solid var(--contradicted);
+  .unplaced { background: #fff0f0; border: 2px solid var(--critical);
     border-radius: 8px; padding: 1em 1.3em; margin-bottom: 2em; }
-  .unplaced h2 { margin-top: 0; color: var(--contradicted); }
+  .unplaced h2 { margin-top: 0; color: var(--critical); }
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --supported: #4ade80; --contradicted: #f87171; --unsupported: #facc15;
+      --pass: #4ade80; --critical: #f87171; --warning: #facc15;
       --source-bg: #212529;
     }
     body { background: #1a1a1a; color: #ddd; }
@@ -120,13 +120,10 @@ function smoothScrollTo(el, target, duration) {
     var srcLink = src.querySelector('.src-link');
     var flags = src.querySelector('.flags');
 
-    var vclass = '';
-    if (badge) {
-      var bt = badge.textContent.trim();
-      if (bt.indexOf('Supported') > -1) vclass = 'supported';
-      else if (bt.indexOf('Contradicted') > -1) vclass = 'contradicted';
-      else vclass = 'unsupported';
-    }
+    var sev = src.getAttribute('data-severity');
+    var vclass = 'warning';
+    if (sev === 'PASS') vclass = 'pass';
+    else if (sev === 'CRITICAL') vclass = 'critical';
     card.className = 'src-card ' + vclass;
     card.id = 'sc-' + fnId;
 
@@ -233,10 +230,13 @@ def _parse_footnote_verdicts(raw: str) -> dict[str, str]:
         m = re.match(r'\[(\^?\d+)\]:\s+\*\*\[(.+?)\]\*\*', line)
         if m:
             fn_id = m.group(1).lstrip("^")
-            v = m.group(2).strip()
-            if "Supported" in v: verdicts[fn_id] = "supported"
-            elif "Contradicted" in v: verdicts[fn_id] = "contradicted"
-            else: verdicts[fn_id] = "unsupported"
+            v = m.group(2).strip().upper()
+            if v in ("PASS", "SUPPORTED"):
+                verdicts[fn_id] = "pass"
+            elif v in ("CRITICAL", "CONTRADICTED"):
+                verdicts[fn_id] = "critical"
+            else:
+                verdicts[fn_id] = "warning"
     return verdicts
 
 
@@ -253,8 +253,9 @@ def _md_to_html(text: str, fn_verdicts: dict[str, str]) -> str:
         refs = []
         for i in range(1, 3):
             n = m.group(i)
-            if not n: break
-            v = fn_verdicts.get(n, "unsupported")
+            if not n:
+                break
+            v = fn_verdicts.get(n, "warning")
             refs.append(
                 f'<a href="#fn{n}" id="fnref{n}" class="fn-ref {v}" '
                 f'title="Footnote {n} — {v}">{n}</a>'
@@ -267,7 +268,8 @@ def _md_to_html(text: str, fn_verdicts: dict[str, str]) -> str:
     result = []
     for block in paragraphs:
         block = block.strip()
-        if not block: continue
+        if not block:
+            continue
         if re.match(r'^<(h[1-4]|ul|ol|li)', block):
             result.append(block)
         else:
@@ -296,11 +298,18 @@ def _render_sources(raw: str) -> str:
             cur["source"] = line.strip()[7:].strip()
     html_parts = []
     for c in cards:
-        v = c["verdict"]
-        vclass = "supported" if "Supported" in v else ("contradicted" if "Contradicted" in v else "unsupported")
+        raw = c["verdict"]
+        ru = raw.upper()
+        if ru in ("PASS", "SUPPORTED"):
+            severity = "PASS"
+        elif ru in ("CRITICAL", "CONTRADICTED"):
+            severity = "CRITICAL"
+        else:
+            severity = "WARNING"
+        vclass = severity.lower()
         html_parts.append(
-            f'<div class="source {vclass}" id="fn{c["id"]}">'
-            f'<span class="badge {vclass}">{_escape(v)}</span>'
+            f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}">'
+            f'<span class="badge {vclass}">{_escape(raw)}</span>'
             f'<span class="claim">{_escape(c["claim"])}</span>'
             f'<span class="rationale">{_escape(c["rationale"])}</span>'
             f'<span class="src-link">{_escape(c["source"])}</span>'
@@ -319,14 +328,19 @@ def _render_unplaced(text: str) -> str:
 
     for line in lines:
         if line.startswith("- **"):
-            if current_block: claim_blocks.append(current_block)
+            if current_block:
+                claim_blocks.append(current_block)
             current_block = {"header": line.lstrip("- ").strip()}
         elif current_block is not None:
             s = line.strip()
-            if s.startswith("Verdict:"): current_block["verdict"] = s.replace("Verdict:", "").strip()
-            elif s.startswith("Source:"): current_block["source"] = s.replace("Source:", "").strip()
-            elif s.startswith("Rationale:"): current_block["rationale"] = s.replace("Rationale:", "").strip()
-            elif s.startswith("Failing quote:"): current_block["quote"] = s.replace("Failing quote:", "").strip()
+            if s.startswith("Verdict:"):
+                current_block["verdict"] = s.replace("Verdict:", "").strip()
+            elif s.startswith("Source:"):
+                current_block["source"] = s.replace("Source:", "").strip()
+            elif s.startswith("Rationale:"):
+                current_block["rationale"] = s.replace("Rationale:", "").strip()
+            elif s.startswith("Failing quote:"):
+                current_block["quote"] = s.replace("Failing quote:", "").strip()
             elif s:
                 for k in ["rationale", "quote", "source"]:
                     if k in current_block:
@@ -335,14 +349,20 @@ def _render_unplaced(text: str) -> str:
         else:
             intro_lines.append(line)
 
-    if current_block: claim_blocks.append(current_block)
+    if current_block:
+        claim_blocks.append(current_block)
 
     html = '<div class="unplaced"><h2>⚠️ Unplaced Claims</h2>\n'
     html += '<p>' + _escape('\n'.join(intro_lines)).replace('\n', '<br>\n') + '</p>\n'
 
     for cb in claim_blocks:
-        v = cb.get("verdict", "")
-        vclass = "supported" if "supported" in v.lower() else ("contradicted" if "contradicted" in v.lower() else "unsupported")
+        v = cb.get("verdict", "").upper()
+        if v in ("PASS", "SUPPORTED"):
+            vclass = "pass"
+        elif v in ("CRITICAL", "CONTRADICTED"):
+            vclass = "critical"
+        else:
+            vclass = "warning"
         html += f'<div class="src-card {vclass} expanded" style="margin:0.5em 0">\n'
         html += f'<span class="sc-num {vclass}">⚠️</span>\n'
         html += f'<span class="sc-claim">{_escape(cb.get("header", ""))}</span>\n'

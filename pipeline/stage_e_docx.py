@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.shared import Pt
 
 
 def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None:
@@ -73,16 +73,16 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
                 comment_count += 1
 
                 if claim:
-                    verdict = claim.get("verdict", "?")
-                    if verdict == "supported":
+                    severity = claim.get("severity", "WARNING")
+                    if severity == "pass":  # PASS from stage_c
                         v_symbol = "✓"
-                    elif verdict == "contradicted":
+                    elif severity == "critical":
                         v_symbol = "✗"
                     else:
                         v_symbol = "?"
 
                     text = (
-                        f"{v_symbol} {verdict.upper()}\n"
+                        f"{v_symbol} [{claim.get('check_type', 'check')}]\n"
                         f"Claim: {claim.get('claim_text', '')}\n"
                         f"Rationale: {claim.get('rationale', '')}"
                     )
@@ -111,13 +111,13 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
     # Save and clean up — flatten "Default Paragraph Font" runs
     doc.save(output_docx)
 
-    supported = sum(1 for c in claims_by_id.values() if c.get("verdict") == "supported")
-    contradicted = sum(1 for c in claims_by_id.values() if c.get("verdict") == "contradicted")
-    unsupported = sum(1 for c in claims_by_id.values() if c.get("verdict") == "unsupported")
+    passed = sum(1 for c in claims_by_id.values() if c.get("severity") == "pass")
+    criticals = sum(1 for c in claims_by_id.values() if c.get("severity") == "critical")
+    warnings = sum(1 for c in claims_by_id.values() if c.get("severity") == "warning")
 
     print(f"DOCX written → {output_docx}")
-    print(f"  {comment_count} comments ({supported}✓/{contradicted}✗/{unsupported}?)")
-    print(f"  Upload to Google Drive → open with Google Docs → comments in sidebar")
+    print(f"  {comment_count} comments ({passed}✓/{criticals}✗/{warnings}?)")
+    print("  Upload to Google Drive → open with Google Docs → comments in sidebar")
 
 
 def _clean(text: str) -> str:

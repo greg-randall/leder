@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import time
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -65,21 +64,21 @@ def _try_archive_is(url: str, timeout: int = 60) -> tuple[str | None, str]:
         with Camoufox(headless=True, geoip=True, humanize=True) as browser:
             page = browser.new_page()
 
-            # Warm up: visit archive.is homepage to set Cloudflare cookies
+            # Warm up: visit archive.is homepage, wait for the search input to render
             try:
-                page.goto("https://archive.is/", wait_until="load",
-                          timeout=int(timeout * 1000))
+                page.goto("https://archive.is/", wait_until="domcontentloaded",
+                          timeout=20_000)
+                page.wait_for_selector('input[type="text"]', timeout=10_000)
             except Exception:
-                pass
-            time.sleep(4)
+                pass  # Cloudflare challenge or network issue — continue anyway
 
-            # Navigate to snapshot
+            # Navigate to snapshot, then wait for actual content (not a redirect loop)
             try:
-                page.goto(archive_url, wait_until="load",
-                          timeout=int(timeout * 1000))
+                page.goto(archive_url, wait_until="domcontentloaded",
+                          timeout=30_000)
+                page.wait_for_load_state("networkidle", timeout=15_000)
             except Exception:
-                pass
-            time.sleep(3)
+                pass  # Timeout is OK — grab whatever rendered
 
             final_url = page.url
             html = page.content()

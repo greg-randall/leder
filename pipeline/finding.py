@@ -24,7 +24,7 @@ class Target:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        return {k: v for k, v in d.items() if v is not None and v != ""}
+        return {k: v for k, v in d.items() if v is not None}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Target":
@@ -56,13 +56,27 @@ class Finding:
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        if isinstance(self.severity, str):
+        VALID = frozenset({"PASS", "WARNING", "CRITICAL"})
+        if isinstance(self.severity, Severity):
+            pass
+        elif isinstance(self.severity, str):
+            if self.severity not in VALID:
+                raise ValueError(
+                    f"Invalid severity: {self.severity}. "
+                    f"Must be one of {sorted(VALID)}")
             self.severity = Severity(self.severity)
+        else:
+            raise ValueError(
+                f"severity must be string or Severity, got {type(self.severity)}")
+
+        if self.confidence is not None and not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(
+                f"confidence must be between 0.0 and 1.0, got {self.confidence}")
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["severity"] = self.severity.value
-        return {k: v for k, v in d.items() if v is not None and v != {} and v != ""}
+        return {k: v for k, v in d.items() if v is not None}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Finding":

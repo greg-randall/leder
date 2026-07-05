@@ -1,4 +1,4 @@
-# L.E.D.E.R. — Linguistic Engine for Draft Evaluation & Review
+# L.E.D.E.R.: Linguistic Engine for Draft Evaluation & Review
 
 A YAML-driven editorial review pipeline. Extract claims, verify facts, check quotes, catch math errors. Whatever your draft needs. One codebase, one `config.yaml`, as many editorial checks as you care to write.
 
@@ -185,7 +185,7 @@ For each target, the runner looks up its playbook, injects `{{article_summary}}`
 
 ### Stage C: Rebuild
 
-Each finding's anchor_text is matched to the article via sliding-window Levenshtein distance (handles smart quotes, ellipses, slight paraphrasing). Findings with the same anchor text merge into one footnote with all badges visible — even when they come from different playbooks. Severity-colored markers go at word boundaries. Output: `article-sourced.md`.
+Each finding's anchor_text is matched to the article via sliding-window Levenshtein distance (handles smart quotes, ellipses, slight paraphrasing). Findings with the same anchor text merge into one footnote with all badges visible, even when they come from different playbooks. Severity-colored markers go at word boundaries. Output: `article-sourced.md`.
 
 ### Stage D: HTML
 

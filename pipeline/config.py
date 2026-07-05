@@ -14,7 +14,7 @@ class ArticleConfig:
 
 @dataclass
 class CorpusConfig:
-    root: str
+    root: str = "./"
 
 
 @dataclass
@@ -79,7 +79,7 @@ class PlaybooksConfig:
 
 @dataclass
 class PrepareConfig:
-    source_root: str = "raw-source-docs/"
+    source_root: str = "source/"
     convert_workers: int = 8
     ocr_images: bool = True
     vision_fallback: VisionFallbackConfig = field(default_factory=VisionFallbackConfig)
@@ -92,7 +92,7 @@ class PrepareConfig:
     def from_raw(cls, raw: dict | None) -> "PrepareConfig":
         raw = raw or {}
         return cls(
-            source_root=raw.get("source_root", "raw-source-docs/"),
+            source_root=raw.get("source_root", "source/"),
             convert_workers=raw.get("convert_workers", 8),
             ocr_images=raw.get("ocr_images", True),
             vision_fallback=VisionFallbackConfig(**(raw.get("vision_fallback") or {})),

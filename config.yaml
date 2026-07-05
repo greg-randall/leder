@@ -2,7 +2,7 @@ article:
   path: "article.md"
 
 corpus:
-  root: "source-docs-and-summaries/"
+  root: "./"
 
 output:
   dir: "."
@@ -26,7 +26,7 @@ playbooks:
   active: ["fact_check"]
 
 prepare:
-  source_root: "raw-source-docs/"
+  source_root: "source/"
   convert_workers: 8
   ocr_images: true
   vision_fallback:

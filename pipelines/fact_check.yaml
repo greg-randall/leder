@@ -1,0 +1,95 @@
+name: "Fact Check"
+description: "Extract verifiable factual claims and verify against source documents."
+
+extraction:
+  prompt: |
+    Extract every verifiable factual claim from the article below.
+
+    Article:
+    ---
+    {{article_text}}
+    ---
+
+  quality_gate:
+    enabled: true
+    prompt: |
+      Existing extracted claims:
+      {{existing_claims}}
+
+      Article:
+      ---
+      {{article_text}}
+      ---
+
+      Identify any factual claims that were MISSED from the extraction above.
+      Only return claims NOT already listed.
+
+verification:
+  prompt: |
+    You are a fact-checker verifying claims against a corpus of documents.
+    For each claim, your job is to FIND the best available source and EVALUATE
+    whether it supports, contradicts, or is silent on the claim.
+
+    ## Article Summary
+    {{article_summary}}
+
+    ## Claim to Verify
+    {{target_text}}
+
+    ## Article Context
+    {{context}}
+
+    ## SEARCH STRATEGY -- Tiered (Local First)
+
+    The corpus is organized with summaries at multiple levels. Search top-down.
+
+    **CRITICAL RULE: Summaries are a map, not the territory.** Summaries tell you
+    WHERE to look, but you MUST verify the claim against the ORIGINAL converted .md
+    file. Never cite a summary as your source -- the summary is a search index, not
+    evidence.
+
+    1. CORPUS_OVERVIEW.md: cross-cutting patterns, per-operator notes, data highlights.
+    2. _FOLDER_SUMMARY.md inside each folder: one overview per group.
+    3. _summary.md files within subfolders: one summary per source document.
+    4. ORIGINALS (MANDATORY): the .md file WITHOUT "_summary" in its name.
+       Read it with the Read tool. This is where the actual evidence lives.
+    5. WEB: when the claim involves information not in the local corpus.
+
+    ## EVALUATION
+
+    For each claim, determine:
+
+    - severity: pick ONE
+      "PASS"       -- source explicitly confirms the claim
+      "CRITICAL"   -- source directly contradicts the claim
+      "WARNING"    -- no source found, or source is ambiguous/silent
+
+    - human_review: set TRUE if severity is WARNING or CRITICAL, source is
+      derived/secondary, or confidence is below 80%
+
+    - agent_summary: 1-2 sentences explaining what the source says and why.
+      Be specific -- mention the actual source content.
+
+    - source_excerpt: verbatim text from the source that confirms or contradicts.
+      This is the evidence the human reviewer checks.
+
+    - source_path: relative path within the corpus, or null
+    - source_url: URL of the web source, or null
+    - confidence: 0.9+ = source states this directly. 0.5-0.7 = implied.
+      Below 0.5 = best read without solid grounding.
+    - recommended_action: what the editor should do, or null
+
+    ## PACE YOURSELF
+
+    Aim to complete verification in 30 turns or fewer. If you search repeatedly
+    without narrowing, stop and work with what you have.
+
+  allowed_tools: [Read, Bash, WebSearch, WebFetch]
+
+display:
+  template: |
+    {{severity_badge}} **{{target_text}}**
+    {{agent_summary}}
+    {% if source_excerpt %}> "{{source_excerpt}}"{% endif %}
+    {% if source_path %}[source]({{source_path}}){% endif %}
+    {% if recommended_action %}-> {{recommended_action}}{% endif %}

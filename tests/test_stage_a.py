@@ -85,3 +85,34 @@ def test_empty_article_raises():
             f.write("")
         with pytest.raises(ValueError):
             run_stage_a(article_path, os.path.join(tmp, "out.json"), tmp, "test")
+
+
+def test_extract_targets_from_text_uses_playbook_prompt(monkeypatch):
+    from pipeline.playbook import Playbook
+    from pipeline.stage_a_extract import _extract_targets_from_text, _extraction_tool_for
+
+    pb = Playbook(
+        name="test_check",
+        extraction_prompt="Extract things from: {{article_text}}",
+        verification_prompt="Verify.",
+    )
+
+    class FakeText:
+        type = "tool_use"
+        input = {"targets": [{"target_text": "t1", "anchor_text": "a1"}],
+                 "article_title": "Title", "article_summary": "Summary"}
+
+    fake_client = type("c", (), {
+        "messages": type("m", (), {
+            "create": lambda self, **kw: type("r", (), {"content": [FakeText()]})()
+        })()
+    })()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake_client)
+
+    targets, title, summary = _extract_targets_from_text(
+        "some article text", "m", pb, _extraction_tool_for(pb))
+    assert len(targets) == 1
+    assert targets[0].target_text == "t1"
+    assert targets[0].playbook == "test_check"
+    assert title == "Title"
+    assert summary == "Summary"

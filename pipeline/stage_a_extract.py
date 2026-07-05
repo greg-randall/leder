@@ -9,6 +9,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from pipeline.finding import Target, FindingsDocument
+from pipeline.playbook import load_playbook
 from pipeline.models import Claim, ClaimsDocument, Article, Corpus
 
 
@@ -139,6 +141,43 @@ _EXTRACTION_TOOL = {
     },
 }
 
+
+def _extraction_tool_for(playbook):
+    """Build the structured-output tool schema for a playbook's extraction pass.
+    The schema is fixed (every playbook extracts Target-shaped objects); only the
+    description varies by playbook name."""
+    return {
+        "name": "extract_targets",
+        "description": f"Extract targets for the '{playbook.name}' check from the article text.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "article_title": {"type": "string",
+                                  "description": "A short title for the article."},
+                "article_summary": {"type": "string",
+                                    "description": "One to two sentences summarizing the article."},
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "target_text": {"type": "string",
+                                            "description": "Standalone, context-injected statement."},
+                            "anchor_text": {"type": "string",
+                                            "description": "Verbatim excerpt from article."},
+                            "claim_type": {"type": "string",
+                                           "enum": ["numeric", "attribution", "legal",
+                                                    "generalization"]},
+                        },
+                        "required": ["target_text", "anchor_text"],
+                    },
+                },
+            },
+            "required": ["targets"],
+        },
+    }
+
+
 _MISSED_CLAIMS_TOOL = {
     "name": "report_missed_claims",
     "description": "Report any factual claims that were missed during extraction.",
@@ -164,6 +203,65 @@ _MISSED_CLAIMS_TOOL = {
         "required": ["missed_claims"],
     },
 }
+
+
+def _extract_targets_from_text(text: str, model: str, playbook,
+                               tool_schema: dict,
+                               quality_gate: bool = False,
+                               existing_target_texts=None):
+    """Run a playbook's extraction prompt against a block of text.
+    Returns (targets, article_title, article_summary).
+    """
+    import anthropic
+    import re as _re
+
+    existing = existing_target_texts or []
+    if quality_gate and existing:
+        user_prompt = (playbook.quality_gate_prompt
+                       .replace("{{existing_claims}}", "\n".join(f"- {c}" for c in existing))
+                       .replace("{{article_text}}", text))
+    else:
+        user_prompt = playbook.extraction_prompt.replace("{{article_text}}", text)
+
+    client = anthropic.Anthropic(
+        api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY"),
+    )
+    response = client.messages.create(
+        model=model,
+        max_tokens=8192,
+        system=playbook.extraction_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+        tools=[tool_schema],
+        tool_choice={"type": "auto"},
+        thinking={"type": "disabled"},
+    )
+    for block in response.content:
+        if block.type == "tool_use":
+            args = block.input
+            targets = [Target(
+                target_text=t["target_text"],
+                anchor_text=t["anchor_text"],
+                playbook=playbook.name,
+                claim_type=t.get("claim_type"),
+            ) for t in args.get("targets", [])]
+            return targets, args.get("article_title", ""), args.get("article_summary", "")
+    # Fallback: try to parse JSON from text response
+    for block in response.content:
+        if block.type == "text" and block.text:
+            match = _re.search(r'\{.*"targets".*\}', block.text, _re.DOTALL)
+            if match:
+                try:
+                    args = json.loads(match.group())
+                    targets = [Target(
+                        target_text=t["target_text"],
+                        anchor_text=t["anchor_text"],
+                        playbook=playbook.name,
+                        claim_type=t.get("claim_type"),
+                    ) for t in args.get("targets", [])]
+                    return targets, args.get("article_title", ""), args.get("article_summary", "")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    raise RuntimeError("LLM did not call the extraction tool or return parseable JSON.")
 
 
 def extract_claims(article_text: str, model: str = "claude-sonnet-5", quality_gate: bool = True,
@@ -381,8 +479,77 @@ def run_stage_a(
     project_name: str,
     model: str = "claude-sonnet-5",
     quality_gate: bool = True,
-) -> ClaimsDocument:
-    """Read article, extract claims, write claims.json. Returns the ClaimsDocument."""
+    playbook_dir: str = "pipelines/",
+    playbook_names: list[str] | None = None,
+) -> ClaimsDocument | FindingsDocument | None:
+    """Read article, extract claims, write claims.json. Returns the ClaimsDocument.
+
+    When playbook_names is provided, uses the generic playbook-driven path
+    and writes targets.json. Otherwise falls back to the old hardcoded
+    fact-check extraction path (backward compatible).
+    """
+    # --- Generic playbook path (new, used when playbook_names is provided) ---
+    if playbook_names:
+        from pathlib import Path as _Path
+
+        article_text = _Path(article_path).read_text(encoding="utf-8")
+        chunks = _chunk_article(article_text)
+
+        playbooks = []
+        for name in playbook_names:
+            yaml_path = _Path(playbook_dir) / f"{name}.yaml"
+            if yaml_path.exists():
+                playbooks.append(load_playbook(str(yaml_path)))
+
+        if not playbooks:
+            raise ValueError(f"No playbooks found in {playbook_dir} matching {playbook_names}")
+
+        all_targets = []
+        article_title = ""
+        article_summary = ""
+
+        for pb in playbooks:
+            tool_schema = _extraction_tool_for(pb)
+            pb_targets = []
+
+            # Phase 1: chunk-based extraction
+            for chunk in chunks:
+                targets, title, summary = _extract_targets_from_text(
+                    chunk, model, pb, tool_schema, quality_gate=False)
+                pb_targets.extend(targets)
+                if title:
+                    article_title = title
+                if summary:
+                    article_summary = summary
+
+            # Phase 2: quality gate (full-article re-read)
+            if quality_gate and pb.quality_gate_enabled:
+                print(f"  Quality gate: {pb.name} ({model})...", file=sys.stderr)
+                existing_texts = [t.target_text for t in pb_targets]
+                missed, _, _ = _extract_targets_from_text(
+                    article_text, model, pb, tool_schema,
+                    quality_gate=True, existing_target_texts=existing_texts)
+                pb_targets.extend(missed)
+
+            all_targets.extend(pb_targets)
+
+        # Write targets.json
+        doc = {
+            "article_file": article_path,
+            "article_title": article_title,
+            "article_summary": article_summary,
+            "targets": [t.to_dict() for t in all_targets],
+        }
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, ensure_ascii=False)
+        print(f"Wrote {len(all_targets)} targets -> {output_path}", file=sys.stderr)
+        return FindingsDocument(
+            article_file=article_path,
+            article_summary=article_summary,
+            findings=[],
+        )
+
+    # --- Old hardcoded path (backward compat) ---
     if not os.path.exists(article_path):
         raise FileNotFoundError(f"Article not found: {article_path}")
 

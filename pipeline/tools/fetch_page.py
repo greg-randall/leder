@@ -39,8 +39,9 @@ def _try_jina(url: str, timeout: int = 30, debug_dir: Path | None = None
 def _try_obscura(url: str, timeout: int = 30, debug_dir: Path | None = None
                  ) -> tuple[str | None, str]:
     r = subprocess.run(
-        ["obscura", "fetch", url, "--dump", "html", "--timeout", str(timeout)],
-        capture_output=True, text=True, timeout=timeout + 15,
+        ["obscura", "fetch", url, "--dump", "html", "--timeout", str(timeout),
+         "--wait-until", "networkidle0"],
+        capture_output=True, text=True, timeout=timeout + 30,
     )
     if debug_dir:
         (debug_dir / "obscura.html").write_text(r.stdout, encoding="utf-8")
@@ -84,6 +85,7 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
                     ) -> tuple[str | None, str]:
     import os
     import random
+    from pathlib import Path as _Path
     from camoufox.sync_api import Camoufox
 
     # Browserforge Screen fingerprinting (randomized viewport within range)
@@ -96,13 +98,23 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
     parsed = urlparse(url)
     clean_url = urlunparse(parsed._replace(query="", fragment=""))
 
-    # Remove display env so Camoufox monitor detection returns None (as futureheist does)
+    # Remove display env so Camoufox monitor detection returns None
     os.environ.pop("DISPLAY", None)
     os.environ.pop("WAYLAND_DISPLAY", None)
 
+    # Persistent context: save Cloudflare cookies to survive across runs
+    user_dir = _Path.home() / ".cache" / "leder-camoufox"
+    user_dir.mkdir(parents=True, exist_ok=True)
+
     with Camoufox(
-        headless=True, geoip=True, humanize=True, os="windows",
-        screen=screen, enable_cache=True,
+        headless="virtual",          # real display context, not detectable as headless
+        humanize=True,
+        os="windows",
+        screen=screen,
+        persistent_context=True,     # save/restore cookies across sessions
+        user_data_dir=str(user_dir),
+        disable_coop=True, i_know_what_im_doing=True,           # allow clicks into cross-origin iframes (Turnstile)
+        geoip=False,
         config={
             "mediaDevices:enabled": True,
             "mediaDevices:micros": 1,

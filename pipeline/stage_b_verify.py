@@ -98,8 +98,12 @@ elsewhere on the filesystem.
 
 5. WEB -- when the claim involves information not in the local corpus.
    Use WebSearch to find relevant pages, then fetch the best match.
-   SAVE what you fetch: write the content to `web_cache/<claim_id>/page.md`
-   (create the directory first). This is the audit trail for human review.
+   SAVE THE RAW CONTENT VERBATIM: write the full text of what you fetched to
+   `web_cache/<claim_id>/page.md` (create the directory first). Do NOT
+   summarize it — this is the evidence trail, and summaries are maps, not
+   territory. If you write a summary to `page.md`, a future agent has no
+   original to verify against. You MAY also write `_notes.md` alongside it
+   with your observations.
    Fetch methods to try:
    - `curl -sL <url> | head -200` for plain text / PDF links
    - WebFetch for JavaScript-heavy pages

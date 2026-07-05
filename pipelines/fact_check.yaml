@@ -54,6 +54,12 @@ verification:
     4. ORIGINALS (MANDATORY): the .md file WITHOUT "_summary" in its name.
        Read it with the Read tool. This is where the actual evidence lives.
     5. WEB: when the claim involves information not in the local corpus.
+       Use WebSearch to find relevant pages, then fetch the best match.
+       SAVE THE RAW CONTENT VERBATIM: write the full text to
+       `web_cache/<target_id>/page.md`. Do NOT summarize it — an agent
+       on a later run needs the original to verify against, and a map of
+       a map is useless. Optionally write `_notes.md` alongside it with
+       your observations. Fetch methods: curl, WebFetch, or jina.ai.
 
     ## EVALUATION
 

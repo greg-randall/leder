@@ -24,3 +24,4 @@ web_cache/
 # But keep these source files
 !/.gitignore
 !/README.md
+~$*

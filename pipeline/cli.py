@@ -353,7 +353,7 @@ def main() -> None:
 
     # --- Stage A: Claim extraction ---
     if args.command in ("all", "stage-a"):
-        _playbook_names = (  # noqa: F841
+        playbook_names: list[str] | None = (
             args.playbooks.split(",")
             if hasattr(args, "playbooks") and args.playbooks
             else config.prepare.playbooks.active
@@ -376,8 +376,14 @@ def main() -> None:
             project_name=config.corpus.project if hasattr(config.corpus, "project") else "",
             model=config.stage_a.model,
             quality_gate=not getattr(args, "no_quality_gate", False),
+            playbook_dir=config.prepare.playbooks.dir,
+            playbook_names=playbook_names,
         )
-        print(f"Stage A complete: {len(doc.claims)} claims extracted")
+        if doc is not None:
+            n = getattr(doc, 'total_findings', None)
+            if n is None:
+                n = len(getattr(doc, 'claims', []))
+            print(f"Stage A complete: {n} targets extracted")
 
     # --- Stage B: Claim verification ---
     if args.command in ("all", "stage-b"):

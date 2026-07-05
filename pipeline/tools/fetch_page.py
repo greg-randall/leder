@@ -214,6 +214,9 @@ def main():
                   file=sys.stderr)
 
     if content:
+        # Prepend the source URL if the fetcher didn't include it (jina does)
+        if method != "jina.ai" and "http" not in content[:200]:
+            content = f"**Source URL:** {url}\n\n{content}"
         out_path.write_text(content, encoding="utf-8")
         print(f"[fetch_page] {url} -> {out_path}  ({method})", file=sys.stderr)
         print(content)

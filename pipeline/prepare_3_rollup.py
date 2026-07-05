@@ -26,8 +26,16 @@ Write these sections:
 
 **Overview:** 3-5 sentences describing what this folder contains as a whole.
 
+**Timeline (if applicable):** A chronological bullet list of the key events you
+can reconstruct from the summaries — applications received, permits issued,
+renewals, inspections, violations, RADs sent, responses filed, reports
+submitted, extensions granted. Put the date (or best-known date) at the start
+of each bullet. Only include events actually supported by the summaries. If
+dates are sparse or the folder isn't chronological (e.g., reference materials,
+form letters), skip this section.
+
 **Key contents & findings:** Bullet list of the substantive matters across the
-documents and sub-collections — who/what/where, notable numbers, dates, names,
+documents and sub-collections — who/what/where, notable numbers, names,
 decisions, deficiencies, or issues. Cite specifics where the inputs give them.
 
 **Open questions / gaps:** Anything the inputs suggest is unresolved, missing,

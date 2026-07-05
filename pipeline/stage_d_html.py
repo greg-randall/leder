@@ -230,10 +230,15 @@ def _parse_footnote_verdicts(raw: str) -> dict[str, str]:
         m = re.match(r'\[(\^?\d+)\]:\s+\*\*\[(.+?)\]\*\*', line)
         if m:
             fn_id = m.group(1).lstrip("^")
-            v = m.group(2).strip().upper()
-            if v in ("PASS", "SUPPORTED"):
+            v = m.group(2).strip()
+            # New format: "✓ fact_check", "✗ fact_check", "? fact_check"
+            if v.startswith("✓"):
                 verdicts[fn_id] = "pass"
-            elif v in ("CRITICAL", "CONTRADICTED"):
+            elif v.startswith("✗"):
+                verdicts[fn_id] = "critical"
+            elif v.upper() in ("PASS", "SUPPORTED"):
+                verdicts[fn_id] = "pass"
+            elif v.upper() in ("CRITICAL", "CONTRADICTED"):
                 verdicts[fn_id] = "critical"
             else:
                 verdicts[fn_id] = "warning"
@@ -299,10 +304,14 @@ def _render_sources(raw: str) -> str:
     html_parts = []
     for c in cards:
         raw = c["verdict"]
-        ru = raw.upper()
-        if ru in ("PASS", "SUPPORTED"):
+        # New format: "✓ fact_check", "✗ fact_check", "? fact_check"
+        if raw.startswith("✓"):
             severity = "PASS"
-        elif ru in ("CRITICAL", "CONTRADICTED"):
+        elif raw.startswith("✗"):
+            severity = "CRITICAL"
+        elif raw.upper() in ("PASS", "SUPPORTED"):
+            severity = "PASS"
+        elif raw.upper() in ("CRITICAL", "CONTRADICTED"):
             severity = "CRITICAL"
         else:
             severity = "WARNING"

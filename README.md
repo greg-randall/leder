@@ -1,10 +1,14 @@
-# Source-Linking Pipeline
+# L.E.D.E.R. — Linguistic Engine for Draft Evaluation & Review
+
+> A YAML-driven editorial review pipeline. Extract claims, verify facts, check quotes, catch math errors — whatever your draft needs. One codebase, one `config.yaml`, as many editorial checks as you care to write.
 
 ## 1. What it is and why
 
-You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. This pipeline does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents (or the web) for evidence, and rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
+You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. LEDER does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents (or the web) for evidence, and rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
 
-It handles a mix of local files (permits, reports, emails, spreadsheets. Anything that converts to markdown.) and web sources. Swap the article and corpus and it works the same way.
+It handles a mix of local files (permits, reports, emails, spreadsheets — anything that converts to markdown) and web sources. Swap the article and corpus and it works the same way.
+
+And because every check is a **YAML playbook** — not hardcoded Python — adding a new editorial review (Math Check, Quote Precision, Right of Reply) means writing two prompts and a tool list. The rest is configuration.
 
 ## 2. Quickstart
 
@@ -32,7 +36,7 @@ python3 -m pipeline.cli check
 
 ### Run it
 
-The pipeline reads `config.yaml` from the project root. This file controls which models to use, how many agents run at once, timeouts, and turn limits. The defaults are sensible. You will want to point `article.path` at your own article and `corpus.root` at your own document folder. Here is the full file:
+The pipeline reads `config.yaml` from the project root. This file controls which models to use, how many agents run at once, timeouts, turn limits, which playbooks are active, and corpus-prep settings. The defaults are sensible. Here is the full file:
 
 ```yaml
 article:
@@ -41,18 +45,44 @@ article:
 corpus:
   root: "source-docs-and-summaries/"
 
+playbooks:
+  dir: "pipelines/"
+  active: ["fact_check"]
+
 stage_a:
   model: "deepseek-v4-pro"
   quality_gate: true
 
 stage_b:
-  model: "deepseek-v4-flash"
+  model: "deepseek-v4-pro"
   concurrency: 32
   timeout: 600
   max_turns: 60
 
 stage_c:
-  quote_match_method: "levenshtein"
+  quote_match_method: "normalized"
+
+prepare:
+  source_root: "raw-source-docs/"
+  convert_workers: 8
+  ocr_images: true
+  vision_fallback:
+    enabled: true
+    model: "gpt-4o-mini"
+    min_words: 20
+    max_pages_per_doc: 30
+  audio:
+    enabled: true
+    model: "medium"
+    device: "auto"
+  summarize:
+    model: "deepseek-v4-flash"
+    workers: 50
+  rollup:
+    model: "deepseek-v4-pro"
+    big_call_model: "deepseek-v4-pro[1m]"
+    workers: 12
+    crosscutting: true
 ```
 
 Full pipeline:
@@ -61,87 +91,155 @@ Full pipeline:
 python3 -m pipeline.cli all
 ```
 
-Runs startup validation, then all five stages. A ~5,000-word article against ~300 documents takes about 15 minutes on DeepSeek V4 Flash.
+Runs startup validation, then all stages. A ~5,000-word article against ~300 documents takes about 15 minutes on DeepSeek V4 Flash.
 
 One stage at a time:
 
 ```bash
-python3 -m pipeline.cli stage-a --article my_article.md --output claims.json
-python3 -m pipeline.cli stage-b --claims claims.json --output claims-verified.json
-python3 -m pipeline.cli stage-c --article my_article.md --claims claims-verified.json --output article-sourced.md
-python3 -m pipeline.cli stage-d --input article-sourced.md --output article-sourced.html
-python3 -m pipeline.cli stage-e --article article-sourced.md --claims claims-verified.json --output article-sourced.docx
+python3 -m pipeline.cli stage-a     # extract claims via playbook prompts
+python3 -m pipeline.cli stage-b     # verify claims against corpus + web
+python3 -m pipeline.cli stage-c     # rebuild article with footnotes
+python3 -m pipeline.cli stage-d     # HTML with color-coded source cards
+python3 -m pipeline.cli stage-e     # .docx with Word comments
 ```
 
 What success looks like:
 
-Stage A prints `Wrote 219 claims → claims.json`. Stage B prints `Done: 132 ✓ / 4 ✗ / 10 ?`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML page with a sidebar of color-coded source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
+Stage A prints `Wrote 219 targets → targets.json`. Stage B prints `Done: 132 findings → findings.json`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML page with a sidebar of severity-colored source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
 
-### Corpus prep (before Stage A)
+### Corpus prep (`prepare-1/2/3`)
 
 The pipeline reads a corpus of summarized markdown from `corpus.root`. Build it
 from a folder of raw source documents with the `prepare` commands (run once when
 your source docs change; NOT part of `all`):
 
 ```bash
-python3 -m pipeline.cli prepare-1   # convert raw files → markdown (MarkItDown + gap-fillers)
-python3 -m pipeline.cli prepare-2   # per-document summaries
+python3 -m pipeline.cli prepare-1   # convert raw files → markdown
+python3 -m pipeline.cli prepare-2   # per-document LLM summaries
 python3 -m pipeline.cli prepare-3   # recursive folder summaries + crosscutting overview
 python3 -m pipeline.cli prepare     # all three in order
 ```
-
-Config lives under `prepare:` in `config.yaml`. `source_root` points to your
-raw documents; output goes to `corpus.root`.
 
 **How each file type is converted (prepare-1):**
 
 - **Digital PDFs, DOCX, XLSX, PPTX, HTML, MSG, EPUB, ZIP, CSV/JSON/TXT** →
   [MarkItDown](https://github.com/microsoft/markitdown) (`pip install markitdown[all]`),
   which preserves tables and structure.
-- **Scanned / image-only PDFs** → MarkItDown returns nothing (it has no OCR), so
-  prepare-1 falls back to local **tesseract** OCR page-by-page, escalating pages
-  whose OCR is thin to **`gpt-4o-mini` vision** (capped at `max_pages_per_doc`).
+- **Scanned / image-only PDFs** → MarkItDown has no OCR, so prepare-1 falls back to local
+  **tesseract** page-by-page, escalating thin pages to **`gpt-4o-mini` vision**
+  (capped at `max_pages_per_doc`).
 - **Image files** (`.png/.jpg/.tif/.tiff/.gif/.bmp/.webp`) → local tesseract OCR;
-  thin results (photos, handwriting, bad scans) escalate to vision. The vision
-  prompt is anti-fabrication (transcribe verbatim, mark `[illegible]`, never
-  guess) — important for fact-checking.
+  thin results escalate to vision. The vision prompt is anti-fabrication (transcribe
+  verbatim, mark `[illegible]`, never guess).
 - **Audio** (`.wav/.mp3/.m4a/.mp4/.flac/.ogg/.aac/.wma`) → local
-  **faster-whisper** (`pip install faster-whisper`). GPU-first: uses CUDA when a
-  subprocess health check confirms it works (needs cuDNN 9), otherwise falls back
-  to CPU with a warning. Set the model/device via `prepare.audio` in `config.yaml`
-  or `--whisper-model` / `--whisper-device` on the CLI.
-- **Gap-fillers** for the rest MarkItDown lacks: `.eml` (stdlib), `.doc/.ppt/.odt/
-  .ods/.odp` (LibreOffice), `.rtf` (pandoc→LibreOffice), `.tsv`, `.xml`.
+  **faster-whisper** (`pip install faster-whisper`). GPU-first with an automatic
+  subprocess health check; falls back to CPU with a warning if cuDNN is missing.
+- **Gap-fillers** for formats MarkItDown lacks: `.eml`, `.doc/.ppt/.odt/.ods/.odp`
+  (LibreOffice), `.rtf` (pandoc→LibreOffice), `.tsv`, `.xml`.
 
 Set `OPENAI_API_KEY` for the vision escalation. Files that can't be converted are
 listed in `UNCONVERTED.md` (loud banner + nonzero exit); files recovered via OCR,
 vision, whisper, or a gap-filler are listed in `NEEDS_REVIEW.md` with how each was
-recovered. System tools used as needed: tesseract, poppler (pdftoppm), pandoc,
-libreoffice — `python3 -m pipeline.cli check` reports what's installed.
+recovered.
+
+### Adding editorial checks (playbooks)
+
+Checks live in `pipelines/` as YAML files — no Python required. Add one to
+`playbooks.active` in `config.yaml` and it runs with the pipeline. Each playbook
+has three parts: an extraction prompt (what to pull out of the article), a
+verification prompt (how to judge it), and a display template (how findings render
+in the HTML sidebar and Word doc).
+
+```yaml
+# pipelines/fact_check.yaml
+name: "Fact Check"
+description: "Extract verifiable factual claims and verify against source documents."
+
+extraction:
+  prompt: |
+    Extract every verifiable factual claim from the article below.
+    Article:
+    ---
+    {{article_text}}
+    ---
+  quality_gate:
+    enabled: true
+    prompt: |
+      Existing extracted claims:
+      {{existing_claims}}
+      Identify any factual claims that were MISSED.
+
+verification:
+  prompt: |
+    You are a fact-checker verifying claims against a corpus of documents.
+    ## Article Summary
+    {{article_summary}}
+    ## Claim to Verify
+    {{target_text}}
+    ## Article Context
+    {{context}}
+    [tiered search strategy, evaluation rubric, output instructions...]
+  allowed_tools: [Read, Bash, WebSearch, WebFetch]
+
+display:
+  template: |
+    {{severity_badge}} **{{target_text}}**
+    {{agent_summary}}
+    {% if source_excerpt %}> "{{source_excerpt}}"{% endif %}
+    {% if source_path %}[source]({{source_path}}){% endif %}
+```
+
+**Runner-injected variables:** `{{article_text}}`, `{{existing_claims}}`,
+`{{article_summary}}`, `{{target_text}}`, `{{context}}` are provided by the
+runner. Playbooks reference them freely.
+
+**But wait — I have the current pipeline working with fact-checking. Does this
+break it?** No. The v1 `active` list contains only `fact_check`, which achieves
+full parity with the old hardcoded pipeline. The old CLI flags (`--claims`) still
+work. New playbooks are added one at a time by adding to `active`.
 
 ## 3. How it works
 
-All output filenames below are the CLI defaults. Every stage accepts `--output` (or `--article`, `--claims`, `--input`) if you want different names.
+### Stage 1: Extraction (replaces old Stage A)
 
-### Stage A: Decomposition
+The runner loads each active playbook, chunks the article (~300 words, paragraph
+boundaries), and dispatches each chunk with the playbook's `extraction.prompt`.
+A quality gate (per-playbook, optional) re-reads the full article to catch
+cross-chunk misses. Output: `targets.json` — every target tagged with its
+originating playbook.
 
-The article is split into chunks of about 300 words, at paragraph boundaries, then sentence breaks if a chunk is too long. Each chunk goes to an LLM which extracts factual claims as standalone statements. "LA-0304 irrigates 165 acres in Karnes County via sprinkler," not "165 acres." A second pass catches anything the first pass missed. Output: `claims.json`.
+### Stage 2: Verification (replaces old Stage B)
 
-### Stage B: Verification
-
-Each claim gets a real Claude Code agent. The agent has access to your filesystem and the web. It searches the local corpus top-down: project-level summaries tell it which case folder to look in, case-level overviews point to the right document category, then it reads the original documents and checks the claim. If the claim is about a statute or a news event that isn't in the local files, the agent searches the web. Each agent returns a verdict (supported, contradicted, or unsupported), a rationale, and a verbatim excerpt from the source. Claims run in parallel, 32 at a time by default. Results save after each claim finishes, so a crash doesn't lose progress.
+For each target, the runner looks up its playbook, injects `{{article_summary}}`,
+`{{target_text}}`, and `{{context}}` into the verification prompt, and spawns a
+Claude Agent SDK agent with the playbook's `allowed_tools`. The agent returns a
+unified **Finding** (severity, agent_summary, source_path, source_excerpt,
+recommended_action, confidence, metadata). Incremental writes mean a crash
+doesn't lose progress. Output: `findings.json`.
 
 ### Stage C: Rebuild
 
-Each claim carries a `source_quote`, the exact text from the article. Stage C matches these quotes back to their positions. It strips everything but letters and spaces, tries an exact match first, then falls back to a sliding-window Levenshtein distance that handles smart quotes, ellipses, and slight paraphrasing. Footnote markers go at word boundaries. Output: `article-sourced.md`.
+Each finding's `anchor_text` is matched to the article via sliding-window
+Levenshtein distance (handles smart quotes, ellipses, slight paraphrasing).
+Findings with the same anchor text — even from different playbooks — merge into
+one footnote with all badges visible. Severity-colored markers go at word
+boundaries. Output: `article-sourced.md`.
 
 ### Stage D: HTML
 
-The sourced markdown becomes a self-contained HTML page using Bootstrap 5. Footnote pills are green for supported, red for contradicted, orange for unsupported. A sticky sidebar on the right shows every source card. Cards start compact. Click to expand. Click a pill in the article and the matching sidebar card opens and scrolls into view. Output: `article-sourced.html`.
+The sourced markdown becomes a self-contained HTML page using Bootstrap 5.
+Footnote pills are green (PASS), yellow (WARNING), or red (CRITICAL). A sticky
+sidebar on the right shows every source card — header is the `check_type`, body
+is rendered through the playbook's `display.template`. Click a pill in the
+article and the matching sidebar card opens and scrolls into view. Output:
+`article-sourced.html`.
 
 ### Stage E: Word document
 
-The sourced article becomes a .docx. Each footnote turns into a Word comment anchored to its text. Comments contain the verdict, claim, rationale, and source path. Upload to Google Drive, open with Google Docs, and all comments show up in the sidebar. Output: `article-sourced.docx`.
+The sourced article becomes a .docx. Each finding turns into a Word comment
+anchored to its text — `[check_type] [severity]` prefix, agent summary, source
+path, and recommended action. Upload to Google Drive, open with Google Docs, all
+comments show up in the sidebar. Output: `article-sourced.docx`.
 
 ## 4. Technical detail
 
@@ -152,49 +250,49 @@ article.md
     │
     ▼
 ┌────────────────────────────────────────────────────┐
-│ Stage A: extract_claims()                          │
-│   LLM (DeepSeek V4 Pro) + structured output        │
-│   Chunks article (~300 words), extracts in parallel│
-│   Quality gate: second pass catches missed claims  │
-│   Output: claims.json                              │
+│ STAGE 1: Extraction (playbook-driven)              │
+│   Load playbooks from YAML                         │
+│   Chunk article (~300 words)                       │
+│   Each chunk → LLM + playbook extraction prompt    │
+│   Quality gate → full-article re-read              │
+│   Output: targets.json (tagged with playbook)      │
 └────────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────────┐
-│ Stage B: verify_claim() × N (parallel, async)      │
-│   Claude Agent SDK. One real agent per claim.      │
-│   Tools: Bash (ripgrep), Read, WebSearch, WebFetch │
-│   Tiered search: summaries → originals → web       │
-│   Structured output via json_schema                │
+│ STAGE 2: Verification (playbook-driven)            │
+│   For each target: resolve playbook → prompt+tools │
+│   Claude Agent SDK. One real agent per target.     │
+│   Tools: per-playbook (Read, Bash, WebSearch, ...) │
+│   Unified FindingOutput schema                     │
 │   Incremental writes (crash-resistant)             │
-│   Output: claims.json (enriched with verdicts)     │
+│   Output: findings.json                            │
 └────────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────────┐
-│ Stage C: insert_footnote_markers()                 │
-│   Sliding-window Levenshtein for source_quote      │
+│ STAGE C: Rebuild                                   │
+│   Sliding-window Levenshtein for anchor_text       │
 │   → article position mapping                       │
-│   Word-boundary snapping for footnote markers      │
-│   Deduplicates claims with same text               │
+│   Severity-colored badges (PASS/WARNING/CRITICAL)  │
+│   Multi-playbook merging at same anchor            │
 │   Output: article-sourced.md                       │
 └────────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────────┐
-│ Stage D: convert()                                 │
+│ STAGE D: HTML                                      │
 │   Markdown → Bootstrap 5 HTML                      │
-│   Color-coded pill badges (green/red/orange)       │
-│   Sticky sidebar with expandable source cards      │
+│   Color-coded pills (green/yellow/red)             │
+│   Sticky sidebar with playbook display templates   │
 │   Output: article-sourced.html                     │
 └────────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────────┐
-│ Stage E: convert()                                 │
-│   Parses sourced markdown + claims JSON            │
-│   python-docx 1.2.0 native comment API             │
-│   Anchors comments to text runs                    │
+│ STAGE E: Word document                             │
+│   Parses sourced markdown + findings JSON          │
+│   Word comments: [check_type] [severity] ...       │
 │   Output: article-sourced.docx                     │
 └────────────────────────────────────────────────────┘
 ```
@@ -208,55 +306,105 @@ g-journalism-run/
 ├── article-sourced.md              # Stage C output
 ├── article-sourced.html            # Stage D output
 ├── article-sourced.docx            # Stage E output
-├── claims.json                     # Intermediate (Stage A → B → C)
-├── web_cache/                      # Fetched page snapshots (per claim)
+├── targets.json                    # Stage 1 output
+├── findings.json                   # Stage 2 output
+├── web_cache/                      # Fetched page snapshots (per target)
 ├── debug/                          # Agent transcripts (--debug mode)
 ├── source-docs-and-summaries/      # Local document corpus
+├── pipelines/                      # Playbook YAML files
+│   └── fact_check.yaml             #   Fact Check playbook (v1)
 ├── requirements.txt
 ├── pipeline/
 │   ├── cli.py                      # Entry point, .env loading, subcommands
-│   ├── config.yaml                 # Model, concurrency, timeout settings
+│   ├── config.yaml                 # Model, concurrency, playbook, prepare settings
 │   ├── config.py                   # Dataclass-based config loader
-│   ├── models.py                   # Claim, ClaimsDocument, enums
-│   ├── startup_check.py            # Prerequisite validation (ripgrep, etc.)
-│   ├── stage_a_extract.py          # Claim extraction with chunking
-│   ├── stage_b_verify.py           # Agent-based verification (Claude Agent SDK)
-│   ├── stage_c_rebuild.py          # Footnote insertion with fuzzy matching
+│   ├── models.py                   # Claim, ClaimsDocument (backward compat)
+│   ├── finding.py                  # Finding, Target, FindingsDocument, Severity
+│   ├── playbook.py                 # Playbook dataclass + YAML loader
+│   ├── template_render.py          # Display template engine
+│   ├── startup_check.py            # Prerequisite validation
+│   ├── stage_a_extract.py          # Generic extraction runner
+│   ├── stage_b_verify.py           # Generic verification runner
+│   ├── stage_c_rebuild.py          # Footnote insertion (findings.json + claims.json)
 │   ├── stage_d_html.py             # Bootstrap HTML with sidebar
 │   ├── stage_e_docx.py             # .docx with Word comments
+│   ├── prepare_1_convert.py        # Corpus prep: MarkItDown + OCR + vision
+│   ├── prepare_2_summarize.py      # Corpus prep: per-document LLM summaries
+│   ├── prepare_3_rollup.py         # Corpus prep: recursive folder rollup
+│   ├── prepare_ocr.py              # OCR + vision fallback for scanned PDFs/images
+│   ├── prepare_audio.py            # Local faster-whisper audio transcription
+│   ├── prepare_vision.py           # Word-count gate + vision escalation
 │   └── tools/
-│       └── __init__.py
+│       └── search_corpus.py
 └── tests/
 ```
 
 ### Key files
 
-**`pipeline/models.py`** is the data contract. `Claim` is a dataclass with Stage A fields (`claim_text`, `source_quote`, `claim_type`, `context`), Stage B fields (`verdict`, `source_proximity`, `source_path`, `source_url`, `rationale`, `source_excerpt`, `human_review`, `confidence`), and a Stage C field (`reconciled`). `ClaimsDocument` wraps article metadata and the claim list with `to_json()` and `from_json()`. Every stage reads and writes this format.
+**`pipeline/finding.py`** is the data contract. `Finding` carries `finding_id`,
+`check_type`, `severity` (PASS/WARNING/CRITICAL), `target_text`, `anchor_text`,
+`agent_summary`, `recommended_action`, `source_path`, `source_url`,
+`source_excerpt`, `confidence`, `human_review`, and `metadata`. `FindingsDocument`
+wraps article metadata and the finding list with `to_json()` / `from_json()`.
 
-**`pipeline/stage_b_verify.py`** is the most complex stage. It uses `claude-agent-sdk`'s `query()` to spawn one Claude Code process per claim. Each agent gets the system prompt (tiered search strategy, evaluation criteria, output schema), the surrounding paragraph from the article, and the claim text. `VerdictOutput` is a pydantic model passed as `output_format`. The SDK validates the JSON before we touch it. `asyncio.Semaphore` controls concurrency. `_write_incremental` saves partial results after every claim. Already-verified claims are skipped on re-run.
+**`pipeline/playbook.py`** defines the Playbook dataclass and `load_playbook(path)`.
+A playbook is a YAML file with `extraction.prompt`, `extraction.quality_gate`,
+`verification.prompt`, `verification.allowed_tools`, and a `display.template`.
 
-**`pipeline/stage_c_rebuild.py`** uses `find_quote_position()` to strip everything but letters and spaces, try an exact match, then fall back to a sliding-window Levenshtein distance via `difflib.SequenceMatcher`. It picks the best match above 60% similarity. `_letters_pos_to_original()` maps positions back to the original article. `insert_footnote_markers()` snaps insertion points to word boundaries.
+**`pipeline/stage_a_extract.py`** chunks the article and dispatches extraction
+prompts per playbook. When `playbook_names` is provided, it uses the generic
+path; when absent, the old hardcoded fact-check path runs for backward compat.
 
-**`pipeline/cli.py`** loads `.env` from the project root, auto-detects DeepSeek, and sets the `ANTHROPIC_*` environment variables. It offers overwrite, timestamp, or quit on file conflicts. All five stages are wired as subcommands, plus `all` and `check`.
+**`pipeline/stage_b_verify.py`** spawns Claude Agent SDK agents with
+playbook-specific prompts and tools. The `FindingOutput` pydantic model enforces
+structured output. `VerdictOutput` is kept for backward compat.
+
+**`pipeline/stage_c_rebuild.py`** accepts either `findings.json` (new) or
+`claims.json` (old) and produces the same footnoted markdown. Severity maps to
+badge colors: PASS green, WARNING yellow, CRITICAL red.
+
+**`pipeline/prepare_1_convert.py`** is the corpus-prep converter. Routing:
+- Images → tesseract → vision if thin
+- Audio → local faster-whisper
+- PDF → MarkItDown first, OCR fallback if empty
+- Everything else → MarkItDown → gap-fillers → UNCONVERTED.md
 
 ### Provider setup
 
-The pipeline detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, and related variables. Stage B agents use the Claude Agent SDK, which spawns Claude Code CLI processes. These inherit the environment and use DeepSeek through the Anthropic-compatible endpoint.
+The pipeline detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures
+`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, and related
+variables. Stage 2 agents use the Claude Agent SDK, which spawns Claude Code CLI
+processes. These inherit the environment and use DeepSeek through the
+Anthropic-compatible endpoint.
+
+### Backward compatibility
+
+The old `claims.json` format still works. The `--claims` flag on `stage-b` and
+`stage-c` is accepted (routed internally). Old `Claim`/`ClaimsDocument` classes
+in `models.py` are untouched. The old hardcoded fact-check path in `stage_a` and
+`stage_b` still runs when no playbook config is provided.
 
 ### Debug mode
 
-Stage B supports `--debug N` to randomly sample N claims and save full agent transcripts:
+Stage B supports `--debug N` to randomly sample N claims and save full agent
+transcripts:
 
 ```bash
-python3 -m pipeline.cli stage-b --claims claims.json --debug 10
+python3 -m pipeline.cli stage-b --targets targets.json --debug 10
 ```
 
-Writes `debug/{claim_id}.log` (text output) and `debug/{claim_id}.jsonl` (full message stream with every tool call and result).
+Writes `debug/{claim_id}.log` (text output) and `debug/{claim_id}.jsonl` (full
+message stream with every tool call and result).
 
 ### Web cache
 
-Agents save web-fetched pages to `web_cache/{claim_id}/`. After Stage B finishes, a backfill step scans for claims with a `source_url` but no cached page, and fetches them via obscura, then Jina, then curl.
+Agents save web-fetched pages to `web_cache/{target_id}/`. After Stage B
+finishes, a backfill step scans for findings with a `source_url` but no cached
+page, and fetches them via obscura, then Jina, then curl.
 
 ### Resume and deduplication
 
-Stage B skips claims that already have a `supported` or `contradicted` verdict. Stage A deduplicates identical claim text before dispatching agents. Stage C deduplicates by claim text in the output: if all copies agree on verdict, it keeps the median-length rationale. If they disagree, it keeps one representative per verdict.
+Stage B skips targets that already have a finding in incremental output. Stage A
+loads playbooks once and caches them. Stage C deduplicates by `(target_text,
+check_type)` — findings from different playbooks on the same anchor merge into
+one footnote with all badges visible.

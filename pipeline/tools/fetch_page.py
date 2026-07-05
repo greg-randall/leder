@@ -130,12 +130,34 @@ def main():
     cache_dir.mkdir(parents=True, exist_ok=True)
     out_path = cache_dir / "page.md"
 
+    _PAYWALL_SIGNALS = (
+        "Supported by", "Subscribe to continue", "Already a subscriber?",
+        "Create a free account", "To continue reading", "Please sign in",
+        "You've reached your limit", "subscribers only",
+    )
+
     content = None
     method = None
-    for fetcher in (_try_jina, _try_obscura, _try_playwright, _try_archive_is):
-        content, method = fetcher(url)
-        if content:
-            break
+
+    # Tier 1: jina.ai — fast, free, but fails on paywalls
+    jina_result, _ = _try_jina(url)
+    if jina_result:
+        content, method = jina_result, "jina.ai"
+    else:
+        # Jina hit a paywall/CAPTCHA — try archive.is for the full article
+        content, method = _try_archive_is(url)
+        if not content:
+            # No archive.is snapshot — fall back to obscura / playwright
+            for fetcher in (_try_obscura, _try_playwright):
+                content, method = fetcher(url)
+                if content:
+                    break
+        # Quality gate: if the best we got looks like a paywall stub, flag it
+        if content and any(signal.lower() in content[:500].lower()
+                           for signal in _PAYWALL_SIGNALS):
+            print(f"  WARNING: content may be a paywall preview "
+                  f"({len(content)} chars). Consider finding an alternate source.",
+                  file=sys.stderr)
 
     if content:
         out_path.write_text(content, encoding="utf-8")

@@ -101,17 +101,20 @@ def _try_archive_is(url: str, timeout: int = 45) -> tuple[str | None, str]:
 
 
 def _try_playwright(url: str, timeout: int = 30) -> tuple[str | None, str]:
-    """Fetch via Playwright headless Chromium (direct, no archive)."""
+    """Fetch via Playwright headless Chromium, extract markdown with trafilatura."""
     try:
+        import trafilatura
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
             page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
-            text = page.inner_text("body")
+            html = page.content()
             browser.close()
-            if text and len(text) > 100:
-                return text, "playwright"
+        text = trafilatura.extract(html, output_format="markdown",
+                                   include_comments=False)
+        if text and len(text) > 200:
+            return text, "playwright"
     except Exception as e:
         print(f"  playwright: {type(e).__name__}: {e}", file=sys.stderr)
     return None, "playwright"

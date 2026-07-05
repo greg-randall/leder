@@ -198,13 +198,15 @@ def main():
     if jina_result:
         content, method = jina_result, "jina.ai"
     else:
-        # Jina hit a paywall — try archive.is for the full article
-        content, method = _try_archive_is(url, debug_dir=debug_dir)
-        if not content:
-            for fetcher in (_try_obscura, _try_playwright):
-                content, method = fetcher(url, debug_dir=debug_dir)
-                if content:
-                    break
+        # Tier 2: obscura / playwright
+        for fetcher in (_try_obscura, _try_playwright):
+            content, method = fetcher(url, debug_dir=debug_dir)
+            if content:
+                break
+        # Tier 3: archive.is (opt-in via --archive-is — slow, hit-or-miss)
+        use_archive = "--archive-is" in sys.argv
+        if not content and use_archive:
+            content, method = _try_archive_is(url, debug_dir=debug_dir)
         if content and any(signal.lower() in content[:500].lower()
                            for signal in _PAYWALL_SIGNALS):
             print(f"  WARNING: content may be a paywall preview "

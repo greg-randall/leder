@@ -731,7 +731,19 @@ def run_stage_b(
         print(f"Stage B: {len(targets_list)} targets. Model: {os.environ.get('ANTHROPIC_MODEL', '?')}", file=sys.stderr)
 
         from tqdm import tqdm
+        import threading as _thr
         pbar = tqdm(total=len(targets_list), desc="  Stage B agents", unit="target")
+        findings_lock = _thr.Lock()
+        findings_by_id: dict[str, Finding] = {}
+
+        def _save_findings():
+            with findings_lock:
+                doc = FindingsDocument(
+                    article_file=article_file, article_summary=summary,
+                    findings=list(findings_by_id.values()),
+                )
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(doc.to_json())
 
         async def _do():
             sem = asyncio.Semaphore(concurrency)
@@ -740,12 +752,16 @@ def run_stage_b(
                 async with sem:
                     pb = _get_playbook(t["playbook"], playbook_dir)
                     prompt = _build_verification_prompt(pb, summary, t["target_text"], t.get("context", ""))
-                    result = await _verify_target_async(
+                    finding = await _verify_target_async(
                         t, prompt, pb.allowed_tools, corpus_root,
                         timeout, max_turns, debug_dir, summary,
                     )
+                    if finding is not None:
+                        with findings_lock:
+                            findings_by_id[finding.finding_id] = finding
+                        _save_findings()
                     pbar.update(1)
-                    return result
+                    return finding
 
             return await asyncio.gather(*[_one(i, t) for i, t in enumerate(targets_list)])
 

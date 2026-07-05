@@ -116,3 +116,57 @@ def test_extract_targets_from_text_uses_playbook_prompt(monkeypatch):
     assert targets[0].playbook == "test_check"
     assert title == "Title"
     assert summary == "Summary"
+
+
+def test_run_stage_a_playbook_path_writes_targets_json(tmp_path, monkeypatch):
+    """run_stage_a with playbook_names writes targets.json tagged with playbook."""
+    article = tmp_path / "article.md"
+    article.write_text(
+        "Some article text about a very important topic. "
+        "Another sentence with more context. "
+        "Yet another sentence to reach the minimum word threshold required."
+    )
+    output = str(tmp_path / "targets.json")
+
+    # Build a minimal playbook in a temp dir
+    pd = tmp_path / "playbooks"
+    pd.mkdir()
+    (pd / "test_check.yaml").write_text("""
+        name: Test Check
+        extraction:
+          prompt: "Extract from: {{article_text}}"
+        verification:
+          prompt: Verify.
+    """)
+
+    # Mock the LLM so no real API call
+    class FakeTargetTool:
+        type = "tool_use"
+        input = {"targets": [{"target_text": "t1", "anchor_text": "a1"}],
+                 "article_title": "T", "article_summary": "S"}
+
+    fake = type("c", (), {
+        "messages": type("m", (), {
+            "create": lambda self, **kw: type("r", (), {"content": [FakeTargetTool()]})()
+        })()
+    })()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+
+    from pipeline.stage_a_extract import run_stage_a
+    run_stage_a(
+        article_path=str(article),
+        output_path=output,
+        corpus_root="",
+        project_name="",
+        model="m",
+        quality_gate=False,
+        playbook_dir=str(pd),
+        playbook_names=["test_check"],
+    )
+
+    import json
+    data = json.loads(open(output).read())
+    assert data["article_file"] == str(article)
+    assert len(data["targets"]) == 1
+    assert data["targets"][0]["playbook"] == "Test Check"
+    assert data["targets"][0]["target_text"] == "t1"

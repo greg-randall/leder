@@ -223,6 +223,11 @@ def _extract_targets_from_text(text: str, model: str, playbook,
     else:
         user_prompt = playbook.extraction_prompt.replace("{{article_text}}", text)
 
+    _leftover = _re.findall(r"\{\{.*?\}\}", user_prompt)
+    if _leftover:
+        print(f"  stage-a: unsubstituted placeholders in user prompt: {_leftover}",
+              file=sys.stderr)
+
     client = anthropic.Anthropic(
         api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY"),
     )
@@ -510,6 +515,11 @@ def run_stage_a(
 
         for pb in playbooks:
             tool_schema = _extraction_tool_for(pb)
+            # Warn about unknown placeholders in the playbook's extraction prompt
+            _unsub = re.findall(r"\{\{(?!article_text)(?!existing_claims)\w+\}\}", pb.extraction_prompt)
+            if _unsub:
+                print(f"  stage-a: unknown placeholders in '{pb.name}' extraction prompt: {_unsub}",
+                      file=sys.stderr)
             pb_targets = []
 
             # Phase 1: chunk-based extraction

@@ -183,10 +183,10 @@ def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
     if only in (None, "tree"):
         from tqdm import tqdm
         failures: list = []
+        print("prepare-3: counting folders...", file=sys.stderr, end=" ", flush=True)
         total = sum(1 for _ in root.rglob("*") if _.is_dir()) + 1
-        print(f"prepare-3: found {total} folders to summarize")
+        print(f"{total} found")
         pbar = tqdm(total=total, desc="prepare-3 folders", unit="folder")
-        # One post-order pass over the whole tree (recurses into every subdir).
         summarize_folder(root, root, model, force, failures, pbar)
         pbar.close()
         root_summary = root / "_FOLDER_SUMMARY.md"

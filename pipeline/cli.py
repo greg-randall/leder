@@ -415,9 +415,13 @@ def main() -> None:
             timeout=config.stage_b.timeout,
             max_turns=config.stage_b.max_turns,
             debug_count=getattr(args, "debug", 0),
+            playbook_dir=config.prepare.playbooks.dir,
         )
-        verified_count = sum(1 for c in doc.claims if c.verdict is not None)
-        print(f"Stage B complete: {verified_count} claims verified")
+        if hasattr(doc, 'findings'):
+            verified_count = len(doc.findings)
+        else:
+            verified_count = sum(1 for c in doc.claims if c.verdict is not None)
+        print(f"Stage B complete: {verified_count} findings")
 
     # --- Stage C: Article rebuild with footnotes ---
     if args.command in ("all", "stage-c"):

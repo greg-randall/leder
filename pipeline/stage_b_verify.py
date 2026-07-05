@@ -678,7 +678,7 @@ async def _verify_all(
 # ---- public entry point ----
 
 def run_stage_b(
-    claims_path: str,
+    claims_path: str = "",
     output_path: str,
     corpus_root: str,
     web_cache_dir: str = "",

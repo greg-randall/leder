@@ -3,17 +3,15 @@
 
 Usage: python3 pipeline/tools/fetch_page.py <url> <target_id>
 
-Called by Stage B agents during verification. Three tiers:
+Called by Stage B agents during verification. Two tiers:
   1. jina.ai (r.jina.ai) — free, fast, clean markdown
-  2. obscura  — headless browser, handles bot-protected pages
-  3. playwright — real browser for JS-heavy pages
+  2. playwright — real headless browser for JS/paywall pages
 
 Saves the RAW content (no summarization) to web_cache/<target_id>/page.md
 and prints it to stdout so the agent can read it directly.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -23,25 +21,11 @@ def _try_jina(url: str, timeout: int = 30) -> tuple[str | None, str]:
     try:
         import httpx
         r = httpx.get(f"https://r.jina.ai/{url}", timeout=timeout, follow_redirects=True)
-        if r.status_code == 200 and len(r.text) > 200:
+        if r.status_code == 200 and len(r.text) > 500 and "CAPTCHA" not in r.text:
             return r.text, "jina.ai"
     except Exception as e:
         print(f"  jina.ai: {type(e).__name__}: {e}", file=sys.stderr)
     return None, "jina.ai"
-
-
-def _try_obscura(url: str, timeout: int = 60) -> tuple[str | None, str]:
-    """Fetch via obscura headless browser."""
-    try:
-        r = subprocess.run(
-            ["obscura", "fetch", url, "--dump", "markdown", "--timeout", str(timeout)],
-            capture_output=True, text=True, timeout=timeout + 15,
-        )
-        if r.returncode == 0 and len(r.stdout) > 100:
-            return r.stdout, "obscura"
-    except Exception as e:
-        print(f"  obscura: {type(e).__name__}: {e}", file=sys.stderr)
-    return None, "obscura"
 
 
 def _try_playwright(url: str, timeout: int = 30) -> tuple[str | None, str]:
@@ -75,7 +59,7 @@ def main():
 
     content = None
     method = None
-    for fetcher in (_try_jina, _try_obscura, _try_playwright):
+    for fetcher in (_try_jina, _try_playwright):
         content, method = fetcher(url)
         if content:
             break

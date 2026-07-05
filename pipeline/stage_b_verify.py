@@ -771,6 +771,13 @@ def run_stage_b(
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(doc.to_json())
         print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
+        # Rough cost estimate (deepseek-v4-pro: $0.435/1M in, $0.87/1M out)
+        est_prompt_tokens = sum(len(t["target_text"]) + 5000 for t in targets_list)
+        est_output_tokens = len(findings_list) * 2000
+        est_cost = (est_prompt_tokens / 1_000_000 * 0.435 +
+                    est_output_tokens / 1_000_000 * 0.87)
+        print(f"  Estimated cost: ${est_cost:.3f}  "
+              f"(~{est_prompt_tokens:,} prompt tokens, ~{est_output_tokens:,} output tokens)", file=sys.stderr)
         return doc
 
     # --- old path continues below unchanged ---

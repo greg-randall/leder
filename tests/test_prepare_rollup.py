@@ -44,7 +44,7 @@ def test_crosscutting_uses_big_call_model(tmp_path, monkeypatch):
     _mk(corpus / "A" / "doc_summary.md", "**Summary:** a.")
     seen = {}
 
-    def fake_llm(system, user, model, max_tokens=4096):
+    def fake_llm(system, user, model, max_tokens=4096, stream=False):
         seen[model] = max_tokens
         return "x"
 

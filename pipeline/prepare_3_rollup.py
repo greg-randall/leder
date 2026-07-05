@@ -182,7 +182,8 @@ def build_crosscutting(corpus_root: Path, big_call_model: str):
     user_msg = "\n".join(parts)
     try:
         overview = call_text_llm(CROSSCUTTING_PROMPT, user_msg,
-                                 model=big_call_model, max_tokens=BIG_CALL_MAX_TOKENS)
+                                 model=big_call_model, max_tokens=BIG_CALL_MAX_TOKENS,
+                                 stream=True)
     except Exception as ex:
         print(f"  prepare-3 crosscutting failed: {type(ex).__name__}: {ex}",
               file=sys.stderr)

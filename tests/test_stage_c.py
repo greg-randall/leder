@@ -73,3 +73,24 @@ def test_build_footnote_block():
     assert "HUMAN REVIEW" in block
     assert "RECONCILED" in block
     assert "example.com" in block
+
+
+def test_rebuild_reads_findings_json(tmp_path):
+    import json
+    findings = tmp_path / "f.json"
+    findings.write_text(json.dumps({
+        "article_file": "a.md", "article_summary": "Test.", "total_findings": 1,
+        "findings": [{
+            "finding_id": "fc-001", "check_type": "fact_check", "severity": "PASS",
+            "target_text": "Acme polluted.", "anchor_text": "Acme polluted the river.",
+            "agent_summary": "EPA confirms.",
+        }]
+    }))
+    article = tmp_path / "a.md"
+    article.write_text("Acme polluted the river.")
+    out = tmp_path / "s.md"
+    from pipeline.stage_c_rebuild import run_stage_c
+    run_stage_c(str(article), findings_path=str(findings), output_path=str(out))
+    result = out.read_text()
+    assert "PASS" in result or "✓" in result
+    assert "Acme" in result

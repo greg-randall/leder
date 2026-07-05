@@ -8,8 +8,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+from types import SimpleNamespace
 
-from pipeline.models import Claim, ClaimsDocument, Verdict
+from pipeline.models import Claim, ClaimsDocument, Verdict, SourceProximity, ClaimType
 
 
 def normalize_text(text: str) -> str:
@@ -135,23 +137,48 @@ def insert_footnote_markers(article_text: str, placed_claims: list[tuple[str, tu
 
 
 def build_footnote_block(claims: list[Claim]) -> str:
-    """Build the ## Sources footnote block from verified claims."""
+    """Build the ## Sources footnote block from verified claims.
+
+    Supports both legacy Claim objects (verdict-based badges) and
+    finding-derived objects (check_type + severity badges).
+    When multiple items share the same position (merged via
+    ``_merged_badges``), all badges are rendered in one footnote.
+    """
     lines = ["\n\n---\n\n## Sources\n"]
 
     for i, claim in enumerate(claims):
         n = i + 1
 
-        # Verdict badge
-        if claim.verdict == Verdict.SUPPORTED:
-            vb = "✓ Supported"
-        elif claim.verdict == Verdict.CONTRADICTED:
-            vb = "✗ Contradicted"
+        # Badge(s) — prioritise merged groups, then single finding, then legacy
+        if hasattr(claim, '_merged_badges') and claim._merged_badges:
+            vb = " ".join(claim._merged_badges)
+        elif hasattr(claim, 'check_type') and claim.check_type:
+            sev = claim.severity if hasattr(claim, 'severity') else "WARNING"
+            if sev == "PASS":
+                vb = f"✓ {claim.check_type}"
+            elif sev == "CRITICAL":
+                vb = f"✗ {claim.check_type}"
+            else:
+                vb = f"? {claim.check_type}"
         else:
-            vb = "? Unsupported"
+            # Legacy verdict badges
+            if claim.verdict == Verdict.SUPPORTED:
+                vb = "✓ Supported"
+            elif claim.verdict == Verdict.CONTRADICTED:
+                vb = "✗ Contradicted"
+            else:
+                vb = "? Unsupported"
 
         # Proximity badge
-        prox = claim.source_proximity.value if claim.source_proximity else "unverifiable"
-        pb = f"[{prox}]".capitalize()
+        if hasattr(claim, 'source_proximity') and claim.source_proximity:
+            prox_val = (
+                claim.source_proximity.value
+                if hasattr(claim.source_proximity, 'value')
+                else str(claim.source_proximity)
+            )
+            pb = f"[{prox_val}]".capitalize()
+        else:
+            pb = "[Original]"
 
         # Source reference
         if claim.source_path:
@@ -163,9 +190,9 @@ def build_footnote_block(claims: list[Claim]) -> str:
 
         # Flags
         flags = ""
-        if claim.human_review:
+        if getattr(claim, 'human_review', False):
             flags += " ⚠️ HUMAN REVIEW"
-        if claim.reconciled:
+        if getattr(claim, 'reconciled', False):
             flags += " 🔧 RECONCILED"
 
         excerpt = ""
@@ -250,6 +277,45 @@ Respond with ONLY a JSON object:
     return reconciled
 
 
+def _load_findings(findings_path: str) -> list[dict]:
+    """Load findings.json and return a list of finding dicts.
+
+    Each dict has the fields the rebuild engine needs, plus
+    ``check_type`` and ``severity`` for badge rendering.
+    """
+    from pipeline.finding import FindingsDocument
+
+    with open(findings_path, encoding="utf-8") as f:
+        doc = FindingsDocument.from_json(f.read())
+
+    findings = []
+    for finding in doc.findings:
+        # Map Severity enum → verdict string so the existing pipeline logic
+        # (dedup by verdict, placement, etc.) works unchanged.
+        if finding.severity.value == "PASS":
+            verdict = "supported"
+        elif finding.severity.value == "CRITICAL":
+            verdict = "contradicted"
+        else:
+            verdict = "unsupported"
+
+        findings.append({
+            "claim_id": finding.finding_id,
+            "claim_text": finding.target_text,
+            "source_quote": finding.anchor_text,
+            "verdict": verdict,
+            "check_type": finding.check_type,
+            "severity": finding.severity.value,
+            "rationale": finding.agent_summary,
+            "source_path": finding.source_path,
+            "source_excerpt": finding.source_excerpt,
+            "recommended_action": finding.recommended_action,
+            "human_review": finding.human_review,
+        })
+
+    return findings
+
+
 def build_unplaced_warning(unplaced: list[Claim]) -> str:
     """Build the UNPLACED CLAIMS warning block."""
     lines = [
@@ -270,36 +336,135 @@ def build_unplaced_warning(unplaced: list[Claim]) -> str:
     return "\n".join(lines)
 
 
+def _finding_dicts_to_claim_like_objects(finding_dicts: list[dict]) -> list:
+    """Convert _load_findings dicts to SimpleNamespace objects the pipeline expects."""
+    claim_likes = []
+    for fd in finding_dicts:
+        obj = SimpleNamespace(**fd)
+        obj.verdict = Verdict(fd["verdict"])
+        obj.source_proximity = SourceProximity.ORIGINAL
+        obj.reconciled = False
+        obj.source_url = None
+        obj.claim_type = ClaimType.GENERALIZATION
+        obj.context = ""
+        obj.confidence = None
+        claim_likes.append(obj)
+    return claim_likes
+
+
+def _merge_placed_groups(
+    placed: list[tuple[str, tuple[int, int]]],
+    claim_lookup: dict,
+) -> tuple[list[tuple[str, tuple[int, int]]], list]:
+    """Deduplicate placed claims by position and merge entries with the same position.
+
+    For finding-derived claims that share an anchor position but have
+    different ``check_type``/``severity`` values, produces a single
+    composite entry with combined badges stored in ``_merged_badges``.
+    Returns (deduped_placed, ordered_merged_claims).
+    """
+    from collections import OrderedDict
+
+    # Group by position, preserving insertion order
+    pos_groups: OrderedDict = OrderedDict()
+    for cid, pos in placed:
+        pos_groups.setdefault(pos, []).append(cid)
+
+    deduped_placed = []
+    merged_claims = []
+
+    for pos, cids in pos_groups.items():
+        first_cid = cids[0]
+        deduped_placed.append((first_cid, pos))
+
+        if len(cids) == 1:
+            merged_claims.append(claim_lookup[cids[0]])
+        else:
+            group = [claim_lookup[cid] for cid in cids]
+            primary = group[0]
+
+            # Collect badges from every claim in the group
+            badges = []
+            for c in group:
+                if hasattr(c, 'check_type') and c.check_type:
+                    sev = getattr(c, 'severity', "WARNING")
+                    if sev == "PASS":
+                        badges.append(f"✓ {c.check_type}")
+                    elif sev == "CRITICAL":
+                        badges.append(f"✗ {c.check_type}")
+                    else:
+                        badges.append(f"? {c.check_type}")
+                else:
+                    if c.verdict == Verdict.SUPPORTED:
+                        badges.append("✓ Supported")
+                    elif c.verdict == Verdict.CONTRADICTED:
+                        badges.append("✗ Contradicted")
+                    else:
+                        badges.append("? Unsupported")
+
+            if badges:
+                primary._merged_badges = badges
+            merged_claims.append(primary)
+
+    return deduped_placed, merged_claims
+
+
 def run_stage_c(
     article_path: str,
-    claims_path: str,
-    output_path: str,
+    claims_path: str | None = None,
+    output_path: str | None = None,
     model: str = "claude-sonnet-5",
+    findings_path: str | None = None,
 ) -> str:
-    """Rebuild article with source footnotes. Returns output path."""
+    """Rebuild article with source footnotes. Returns output path.
+
+    Accepts either a ``claims_path`` (legacy claims.json) or a
+    ``findings_path`` (findings.json from Stage 2).  When both are
+    ``None`` or ``output_path`` is ``None`` a ``ValueError`` is raised.
+    """
+    if output_path is None:
+        raise ValueError("output_path is required")
+
     with open(article_path, encoding="utf-8") as f:
         article_text = f.read()
 
-    with open(claims_path, encoding="utf-8") as f:
-        doc = ClaimsDocument.from_json(f.read())
+    # ── Load source data ──────────────────────────────────────────
+    if findings_path:
+        finding_dicts = _load_findings(findings_path)
+        claims = _finding_dicts_to_claim_like_objects(finding_dicts)
+    elif claims_path:
+        with open(claims_path, encoding="utf-8") as f:
+            doc = ClaimsDocument.from_json(f.read())
+        claims = doc.claims
+    else:
+        raise ValueError("Either claims_path or findings_path must be provided")
 
-    claims = doc.claims
-
-    # Deduplicate by claim_text: agree → median length, disagree → one per verdict
+    # ── Deduplicate ───────────────────────────────────────────────
+    # For findings with different check_types, use (claim_text, check_type)
+    # as the dedup key so distinct check_types on the same target survive.
     from collections import defaultdict
-    groups: dict[str, list[Claim]] = defaultdict(list)
+    groups: dict = defaultdict(list)
     for c in claims:
         if c.verdict is not None:
-            groups[c.claim_text].append(c)
+            if hasattr(c, 'check_type') and c.check_type:
+                key = (c.claim_text, c.check_type)
+            else:
+                key = c.claim_text
+            groups[key].append(c)
     deduped = []
-    for text, dupes in groups.items():
-        by_verdict: dict[str, list[Claim]] = defaultdict(list)
+    for key, dupes in groups.items():
+        by_verdict: dict[str, list] = defaultdict(list)
         for c in dupes:
             by_verdict[c.verdict or "unsupported"].append(c)
         for vclaims in by_verdict.values():
             vclaims.sort(key=lambda c: len(c.rationale or ""))
             deduped.append(vclaims[len(vclaims) // 2])
-    seen_texts = set(groups.keys())
+    seen_texts = set()
+    for key in groups:
+        if isinstance(key, tuple):
+            seen_texts.add(key[0])
+        else:
+            seen_texts.add(key)
     for c in claims:
         if c.verdict is None and c.claim_text not in seen_texts:
             deduped.append(c)
@@ -308,16 +473,14 @@ def run_stage_c(
         c.claim_id = f"c{i+1:04d}"
     dup_removed = len(claims) - len(deduped)
     if dup_removed:
-        agree = sum(1 for dupes in groups.values() if len(set(c.verdict for c in dupes)) == 1)
-        disagree = len(groups) - agree
-        print(f"Dedup: {len(claims)} → {len(deduped)} ({dup_removed} removed: "
-              f"{agree} groups agreed, {disagree} groups had conflicting verdicts)", file=sys.stderr)
+        print(f"Dedup: {len(claims)} → {len(deduped)} ({dup_removed} removed)",
+              file=sys.stderr)
     claims = deduped
 
+    # ── Mechanical matching ───────────────────────────────────────
     placed = []
     unmatched = []
 
-    # First pass: mechanical matching
     from tqdm import tqdm
     for claim in tqdm(claims, desc="  Matching", unit="claim"):
         pos = find_quote_position(claim.source_quote, article_text)
@@ -328,7 +491,7 @@ def run_stage_c(
 
     print(f"Mechanical match: {len(placed)}/{len(claims)} placed, {len(unmatched)} unmatched")
 
-    # Second pass: LLM reconciliation
+    # ── LLM reconciliation ────────────────────────────────────────
     if unmatched:
         print(f"Reconciling {len(unmatched)} unmatched quotes via LLM...")
         reconciled_claims = reconcile_unmatched_quotes(unmatched, article_text, model)
@@ -346,27 +509,24 @@ def run_stage_c(
     else:
         still_unmatched = []
 
-    # Build output
+    # ── Merge claims sharing the same position ────────────────────
+    claim_lookup = {c.claim_id: c for c in claims}
+    deduped_placed, merged_claims = _merge_placed_groups(placed, claim_lookup)
+
+    # ── Build output ──────────────────────────────────────────────
     output_parts = []
 
     if still_unmatched:
         output_parts.append(build_unplaced_warning(still_unmatched))
         output_parts.append("\n---\n\n")
 
-    if placed:
-        article_with_markers = insert_footnote_markers(article_text, placed)
+    if deduped_placed:
+        article_with_markers = insert_footnote_markers(article_text, deduped_placed)
     else:
         article_with_markers = article_text
 
     output_parts.append(article_with_markers)
-
-    # Footnote block in appearance order
-    sorted_placed = sorted(placed, key=lambda x: x[1][0])
-    placed_ids = [cid for cid, _ in sorted_placed]
-    claim_map = {c.claim_id: c for c in claims}
-    ordered_claims = [claim_map[cid] for cid in placed_ids]
-
-    output_parts.append(build_footnote_block(ordered_claims))
+    output_parts.append(build_footnote_block(merged_claims))
 
     result = "\n".join(output_parts)
 

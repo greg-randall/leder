@@ -46,20 +46,19 @@ def test_structured_output_populates_claim():
 
 
 def test_structured_output_missing_field_falls_back():
-    """Missing required fields should trigger failure fallback."""
+    """Missing source_proximity defaults to 'original' (not a hard failure)."""
     claim = Claim(
         claim_id="c0002",
         claim_text="Test.",
         source_quote="Test.",
         claim_type="numeric",
     )
-    # Missing source_proximity
     result = _populate_claim_from_dict(
         claim,
         {"verdict": "supported", "rationale": "ok", "human_review": False, "confidence": 0.5},
     )
-    assert result.verdict == "unsupported"
-    assert result.human_review is True
+    assert result.verdict == "supported"
+    assert result.source_proximity == "unverifiable"
 
 
 def test_verdict_output_schema():

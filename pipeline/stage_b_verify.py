@@ -679,8 +679,8 @@ async def _verify_all(
 
 def run_stage_b(
     claims_path: str = "",
-    output_path: str,
-    corpus_root: str,
+    output_path: str = "",
+    corpus_root: str = "",
     web_cache_dir: str = "",
     model: str = "",
     concurrency: int = 32,
@@ -689,7 +689,7 @@ def run_stage_b(
     debug_count: int = 0,
     targets_path: str = "",
     playbook_dir: str = "pipelines/",
-) -> ClaimsDocument:
+) -> ClaimsDocument | FindingsDocument:
     """Load claims.json, verify each claim, write enriched claims.json.
 
     Args:

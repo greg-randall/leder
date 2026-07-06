@@ -2,7 +2,7 @@ article:
   path: "article.md"
 
 corpus:
-  root: "./"
+  root: "local-files/"
 
 output:
   dir: "."
@@ -31,7 +31,7 @@ playbooks:
   active: ["fact_check"]
 
 prepare:
-  source_root: "source/"
+  source_root: "local-files/"
   convert_workers: 8
   ocr_images: true
   vision_fallback:

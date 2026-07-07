@@ -62,8 +62,8 @@ def build_user_msg(md_path: Path, content: str):
 def _is_skipped_image_stub(md_path: Path) -> bool:
     """True if this .md is a stub for an image skipped by OCR (tiny/duplicate)."""
     try:
-        first_line = md_path.read_text(encoding="utf-8", errors="replace").split("\n")[0]
-        return first_line.startswith("![") and "skipped" in first_line.lower()
+        head = md_path.read_text(encoding="utf-8", errors="replace")[:200]
+        return "Image skipped" in head
     except Exception:
         return False
 

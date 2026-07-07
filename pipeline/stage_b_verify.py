@@ -95,8 +95,8 @@ elsewhere on the filesystem.
    claim against its content. This is not optional -- this is where the actual
    evidence lives. Cite this file as `source_path`.
    Use the Read tool to open the file.
-   NOTE: Some .md files are image stubs (starting with `![` and containing
-   "skipped"). These images were too small or duplicates — they contain no
+   NOTE: Some .md files are image stubs (containing "Image skipped").
+   These images were too small or duplicates — they contain no
    extractable text. Skip them as evidence sources.
 
 5. WEB — when the claim involves information not in the local corpus.

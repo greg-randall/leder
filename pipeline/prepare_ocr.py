@@ -90,7 +90,8 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
         norm = _normalize_for_tesseract(inpath, Path(td))
         text = _tesseract(norm)
 
-    if vision_cfg.get("enabled") and needs_vision(text, vision_cfg.get("min_words", 20)):
+    if vision_cfg.get("enabled") and needs_vision(text, vision_cfg.get("min_words", 20),
+                                                    language=vision_cfg.get("language", "en")):
         try:
             vtext = vision_extract(inpath, model=model)
             content = PROVENANCE_BANNER.format(model=model) + vtext
@@ -129,7 +130,8 @@ def ocr_pdf(inpath: Path, md_path: Path, vision_cfg: dict):
         cap_hit = False
         for i, png in enumerate(pages, 1):
             text = _tesseract(png)
-            if vision_enabled and needs_vision(text, min_words):
+            if vision_enabled and needs_vision(text, min_words,
+                                                  language=vision_cfg.get("language", "en")):
                 if vision_used < max_vision_pages:
                     try:
                         vtext = vision_extract(png, model=model)

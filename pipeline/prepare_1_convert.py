@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pipeline.prepare_ocr import IMAGE_EXTS, ocr_image, ocr_pdf
 from pipeline.prepare_audio import AUDIO_EXTS, convert_audio, get_whisper_model
+from pipeline.prepare_vision import is_garbled
 
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
@@ -309,8 +310,11 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
     if ext == ".pdf":
         if md_client is not None:
             ok, size, method = _convert_with_markitdown(filepath, md_path, md_client)
-            if ok and is_meaningful(md_path.read_text(encoding="utf-8", errors="replace")):
-                return str(relpath), "ok", method, None
+            if ok:
+                text = md_path.read_text(encoding="utf-8", errors="replace")
+                if is_meaningful(text) and not is_garbled(
+                    text, language=vision_cfg.get("language", "en")):
+                    return str(relpath), "ok", method, None
         return _finish(relpath, ocr_pdf(filepath, md_path, vision_cfg))
 
     # Everything else -> MarkItDown, then gap-fillers.

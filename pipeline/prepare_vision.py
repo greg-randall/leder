@@ -53,8 +53,33 @@ def count_real_words(text: str) -> int:
     return len(_WORD_RE.findall(text or ""))
 
 
-def needs_vision(ocr_text: str, min_words: int) -> bool:
-    return count_real_words(ocr_text) < min_words
+def is_garbled(text: str, min_words: int = 20, threshold: float = 0.5,
+               language: str = "en") -> bool:
+    """Check if OCR output is garbled nonsense rather than real text.
+
+    Uses a pure-Python spellchecker: if fewer than `threshold` (50%) of
+    alpha tokens are real words in `language`, the text is likely OCR noise.
+    Only runs on text with at least `min_words` tokens.
+    """
+    words = _WORD_RE.findall(text or "")
+    if len(words) < min_words:
+        return False
+    try:
+        from spellchecker import SpellChecker
+        spell = SpellChecker(language=language)
+        misspelled = spell.unknown(w.lower() for w in words)
+        real_ratio = 1.0 - (len(misspelled) / len(words))
+        return real_ratio < threshold
+    except ImportError:
+        return False
+
+
+def needs_vision(ocr_text: str, min_words: int, language: str = "en") -> bool:
+    if count_real_words(ocr_text) < min_words:
+        return True
+    if is_garbled(ocr_text, language=language):
+        return True
+    return False
 
 
 def _encode_image(img_path: Path):

@@ -364,7 +364,6 @@ def convert_rtf(inpath: Path, md_path: Path):
 # handle formats MarkItDown lacks dedicated converters for (or when it fails).
 
 GAP_FILLERS: dict[str, callable] = {
-    ".eml": convert_eml,
     ".doc": convert_legacy_office,
     ".ppt": convert_legacy_office,
     ".odt": convert_legacy_office,
@@ -441,9 +440,11 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
                     return str(relpath), "ok", method, None
         return _finish(relpath, ocr_pdf(filepath, md_path, vision_cfg))
 
-    # .msg -> our extractor (MarkItDown doesn't extract attachments).
+    # .msg / .eml -> our extractors (MarkItDown only gets body, not attachments).
     if ext == ".msg":
         return _finish(relpath, convert_msg(filepath, md_path))
+    if ext == ".eml":
+        return _finish(relpath, convert_eml(filepath, md_path))
 
     # Everything else -> MarkItDown, then gap-fillers.
     if md_client is not None:

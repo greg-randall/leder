@@ -151,14 +151,19 @@ def test_pdf_digital_uses_markitdown(tmp_path, monkeypatch):
 
 
 def test_process_file_falls_back_to_gap_filler(tmp_path, monkeypatch):
+    """Gap-fillers still work for formats not handled directly (.doc, .rtf, etc.)."""
     src_root = tmp_path / "src"
     corpus = tmp_path / "corpus"
     src_root.mkdir()
-    (src_root / "msg.eml").write_text("From: x@y.com\r\nSubject: Hello\r\n\r\nBody text.")
+    (src_root / "test.doc").write_bytes(b"\xd0\xcf\x11\xe0")  # OLE2 magic
+    def fake_lo(inpath, md_path):
+        md_path.write_text("libreoffice output")
+        return True, 19, "libreoffice"
+    monkeypatch.setattr(p1, "_convert_via_libreoffice", fake_lo)
     rel, status, detail, note = p1.process_file(
-        src_root / "msg.eml", src_root, corpus, VISION_CFG, None, True, md_client=None)
+        src_root / "test.doc", src_root, corpus, VISION_CFG, None, True, md_client=None)
     assert status == "ok"
-    assert "Hello" in (corpus / "msg.eml.md").read_text()
+    assert "libreoffice output" in (corpus / "test.doc.md").read_text()
     assert note is not None and "fallback" in note
 
 

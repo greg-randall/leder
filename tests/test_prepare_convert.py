@@ -17,7 +17,7 @@ def test_convert_eml(tmp_path):
         "Subject: Test Subject\r\nDate: Mon, 1 Jan 2024 00:00:00 +0000\r\n\r\n"
         "This is the body."
     )
-    ok, size, method = p1.convert_eml(src, tmp_path / "m")
+    ok, size, method = p1.convert_eml(src, tmp_path / "m.md")
     md = (tmp_path / "m.md").read_text()
     assert ok
     assert "Test Subject" in md and "alice@example.com" in md and "This is the body." in md
@@ -27,7 +27,7 @@ def test_convert_eml(tmp_path):
 def test_convert_tsv(tmp_path):
     src = tmp_path / "d.tsv"
     src.write_text("h1\th2\nv1\tv2\nv3\tv4")
-    ok, size, method = p1.convert_tsv(src, tmp_path / "d")
+    ok, size, method = p1.convert_tsv(src, tmp_path / "d.md")
     md = (tmp_path / "d.md").read_text()
     assert ok and "| h1 | h2 |" in md and "| v3 | v4 |" in md and method == "tsv-table"
 
@@ -35,7 +35,7 @@ def test_convert_tsv(tmp_path):
 def test_convert_xml(tmp_path):
     src = tmp_path / "d.xml"
     src.write_text("<root><a>1</a></root>")
-    ok, size, method = p1.convert_xml(src, tmp_path / "d")
+    ok, size, method = p1.convert_xml(src, tmp_path / "d.md")
     md = (tmp_path / "d.md").read_text()
     assert ok and "```xml" in md and "<root>" in md and method == "xml-fenced"
 
@@ -158,7 +158,7 @@ def test_process_file_falls_back_to_gap_filler(tmp_path, monkeypatch):
     rel, status, detail, note = p1.process_file(
         src_root / "msg.eml", src_root, corpus, VISION_CFG, None, True, md_client=None)
     assert status == "ok"
-    assert "Hello" in (corpus / "msg.md").read_text()
+    assert "Hello" in (corpus / "msg.eml.md").read_text()
     assert note is not None and "fallback" in note
 
 
@@ -205,7 +205,7 @@ def test_run_prepare_1_end_to_end(tmp_path, monkeypatch):
         source_root=str(src), corpus_root=str(corpus),
         workers=2, vision_cfg=VISION_CFG, audio_cfg=AUDIO_CFG, force=True)
     assert report["failure_count"] == 0
-    assert (corpus / "a.md").exists() and (corpus / "b.md").exists()
+    assert (corpus / "a.xml.md").exists() and (corpus / "b.eml.md").exists()
     assert not (corpus / "UNCONVERTED.md").exists()
 
 
@@ -220,3 +220,63 @@ def test_run_prepare_1_reports_unconvertible(tmp_path, monkeypatch):
         workers=1, vision_cfg=VISION_CFG, audio_cfg=AUDIO_CFG, force=True)
     assert report["failure_count"] == 1
     assert (corpus / "UNCONVERTED.md").exists()
+
+
+# ── Stem collision: sibling formats get unique .md names ─────────
+
+def test_sibling_formats_produce_unique_md_files(tmp_path, monkeypatch):
+    """When a .doc and .pdf share a stem, both get their own .md output.
+
+    Before the fix, letter.doc and letter.pdf both mapped to letter.md, and the
+    first one processed (alphabetically, .doc) would block the second via the
+    already-converted check, silently discarding the PDF's content.
+    """
+    src = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src.mkdir()
+
+    # Create two sibling source files sharing a stem.
+    (src / "letter.doc").write_bytes(b"\xd0\xcf\x11\xe0")  # OLE2 magic
+    (src / "letter.pdf").write_bytes(b"%PDF-1.4 fake pdf content")
+
+    # Simulate .doc conversion (via LibreOffice fallback) producing short content.
+    def fake_libreoffice(inpath, md_path):
+        md_path.write_text("short doc content " * 7, encoding="utf-8")  # ~133 chars, passes is_meaningful
+        return True, 18, "libreoffice"
+
+    # Simulate .pdf conversion (via MarkItDown) producing rich content.
+    def fake_markitdown_pdf(inpath, md_path, md_client):
+        md_path.write_text("rich pdf content with all pages " * 7, encoding="utf-8")  # passes is_meaningful
+        return True, 34, "markitdown"
+
+    # Route .pdf through MarkItDown, .doc through LibreOffice.
+    def fake_markitdown(inpath, md_path, md_client):
+        if inpath.suffix == ".pdf":
+            return fake_markitdown_pdf(inpath, md_path, md_client)
+        return False, 0, "markitdown-empty"
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown", fake_markitdown)
+    monkeypatch.setattr(p1, "_convert_via_libreoffice", fake_libreoffice)
+
+    # Process both files.
+    rel1, status1, method1, note1 = p1.process_file(
+        src / "letter.doc", src, corpus, VISION_CFG, None, True, md_client=object())
+    rel2, status2, method2, note2 = p1.process_file(
+        src / "letter.pdf", src, corpus, VISION_CFG, None, True, md_client=object())
+
+    # Both should succeed.
+    assert status1 == "ok"
+    assert status2 == "ok"
+
+    # Each produces its own .md file — no clobbering.
+    doc_md = corpus / "letter.doc.md"
+    pdf_md = corpus / "letter.pdf.md"
+    assert doc_md.exists(), f"Expected {doc_md} to exist"
+    assert pdf_md.exists(), f"Expected {pdf_md} to exist"
+
+    # Each contains the correct content from its source.
+    assert "short doc content" in doc_md.read_text()
+    assert "rich pdf content with all pages" in pdf_md.read_text()
+
+    # The old collision-prone name should NOT exist.
+    assert not (corpus / "letter.md").exists()

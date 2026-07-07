@@ -155,7 +155,7 @@ def get_whisper_model(model_size: str = "medium", device: str = "auto"):
     return _WhisperModel(model_size, device="cpu", compute_type="int8"), "cpu"
 
 
-def convert_audio(inpath: Path, outpath: Path, whisper_model):
+def convert_audio(inpath: Path, md_path: Path, whisper_model):
     """Transcribe an audio file locally via faster-whisper.
 
     Returns (ok, size, method, note). ok is False if whisper is unavailable
@@ -164,8 +164,6 @@ def convert_audio(inpath: Path, outpath: Path, whisper_model):
     inpath = Path(inpath)
     if whisper_model is None:
         return False, 0, "whisper-unavailable", None
-
-    md_path = outpath.with_suffix(".md")
     try:
         with _model_lock:
             segments, info = whisper_model.transcribe(str(inpath))

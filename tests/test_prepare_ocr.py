@@ -13,7 +13,7 @@ def test_ocr_image_thin_escalates_to_vision(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr, "vision_extract",
                         lambda p, model: "## Transcription\nreal recovered text\n\n## Description\nA form.")
     vc = {"enabled": True, "model": "gpt-4o-mini", "min_words": 20, "ocr_images": True}
-    ok, size, method, note = ocr.ocr_image(img, tmp_path / "x", vc)
+    ok, size, method, note = ocr.ocr_image(img, tmp_path / "x.md", vc)
     md = (tmp_path / "x.md").read_text()
     assert ok and method == "vision"
     assert "real recovered text" in md
@@ -28,7 +28,7 @@ def test_ocr_image_rich_ocr_skips_vision(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(ocr, "vision_extract", lambda p, model: called.append(1) or "X")
     vc = {"enabled": True, "model": "m", "min_words": 20, "ocr_images": True}
-    ok, size, method, note = ocr.ocr_image(img, tmp_path / "x", vc)
+    ok, size, method, note = ocr.ocr_image(img, tmp_path / "x.md", vc)
     assert ok and method == "tesseract" and called == []
 
 
@@ -36,7 +36,7 @@ def test_ocr_image_disabled_reference_stub(tmp_path):
     img = tmp_path / "x.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n")
     vc = {"enabled": True, "model": "m", "min_words": 20, "ocr_images": False}
-    ok, size, method, note = ocr.ocr_image(img, tmp_path / "x", vc)
+    ok, size, method, note = ocr.ocr_image(img, tmp_path / "x.md", vc)
     md = (tmp_path / "x.md").read_text()
     assert ok and method == "image-ref" and "OCR disabled" in md and note is None
 
@@ -58,7 +58,7 @@ def test_ocr_pdf_page_cap(tmp_path, monkeypatch):
     vcalls = []
     monkeypatch.setattr(ocr, "vision_extract", lambda p, model: vcalls.append(1) or "VISION PAGE")
     vc = {"enabled": True, "model": "m", "min_words": 20, "max_pages_per_doc": 1}
-    ok, size, method, note = ocr.ocr_pdf(pdf, tmp_path / "scan", vc)
+    ok, size, method, note = ocr.ocr_pdf(pdf, tmp_path / "scan.md", vc)
     md = (tmp_path / "scan.md").read_text()
     assert ok and method == "ocr+vision"
     assert len(vcalls) == 1                 # cap of 1 honored

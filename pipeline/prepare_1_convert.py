@@ -58,7 +58,7 @@ def _get_markitdown():
         return None
 
 
-def _convert_with_markitdown(filepath: Path, outpath: Path, md_client):
+def _convert_with_markitdown(filepath: Path, md_path: Path, md_client):
     """Try MarkItDown on a file. Returns (ok, size, method)."""
     if md_client is None:
         return False, 0, "markitdown-unavailable"
@@ -67,7 +67,7 @@ def _convert_with_markitdown(filepath: Path, outpath: Path, md_client):
         text = result.text_content.strip()
         if not text:
             return False, 0, "markitdown-empty"
-        outpath.with_suffix(".md").write_text(text, encoding="utf-8")
+        md_path.write_text(text, encoding="utf-8")
         return True, len(text), "markitdown"
     except Exception:
         return False, 0, "markitdown-error"
@@ -75,11 +75,11 @@ def _convert_with_markitdown(filepath: Path, outpath: Path, md_client):
 
 # ── Gap-fillers ───────────────────────────────────────────────
 
-def _write_md(outpath: Path, content: str):
-    (outpath.with_suffix(".md")).write_text(content, encoding="utf-8")
+def _write_md(md_path: Path, content: str):
+    md_path.write_text(content, encoding="utf-8")
 
 
-def convert_eml(inpath: Path, outpath: Path):
+def convert_eml(inpath: Path, md_path: Path):
     """MIME .eml -> markdown with From/To/Date/Subject header block + decoded body."""
     from email import policy
     from email.parser import BytesParser
@@ -94,20 +94,20 @@ def convert_eml(inpath: Path, outpath: Path):
         body = body_part.get_content() if body_part else ""
         md = (f"# {subject}\n\n**From:** {sender}\n**To:** {to}\n"
               f"**Date:** {date}\n\n---\n\n{body}")
-        _write_md(outpath, md)
+        _write_md(md_path, md)
         return True, len(md), "eml-stdlib"
     except Exception:
         return False, 0, "eml-stdlib"
 
 
-def convert_tsv(inpath: Path, outpath: Path):
+def convert_tsv(inpath: Path, md_path: Path):
     """TSV -> markdown table (all rows, no cap)."""
     try:
         with open(inpath, newline="", encoding="utf-8", errors="replace") as f:
             reader = csv.reader(f, delimiter="\t")
             rows = list(reader)
         if not rows:
-            _write_md(outpath, "*(empty)*\n")
+            _write_md(md_path, "*(empty)*\n")
             return True, 0, "tsv-table"
         lines = []
         for i, row in enumerate(rows):
@@ -116,44 +116,43 @@ def convert_tsv(inpath: Path, outpath: Path):
             if i == 0:
                 lines.append("| " + " | ".join(["---"] * len(cells)) + " |")
         content = "\n".join(lines) + "\n"
-        _write_md(outpath, content)
+        _write_md(md_path, content)
         return True, len(content), "tsv-table"
     except Exception:
         return False, 0, "tsv-table"
 
 
-def convert_xml(inpath: Path, outpath: Path):
+def convert_xml(inpath: Path, md_path: Path):
     """XML -> fenced code block."""
     try:
         raw = inpath.read_text(encoding="utf-8", errors="replace")
         content = f"```xml\n{raw}\n```\n"
-        _write_md(outpath, content)
+        _write_md(md_path, content)
         return True, len(content), "xml-fenced"
     except Exception:
         return False, 0, "xml-fenced"
 
 
-def _convert_via_libreoffice(inpath: Path, outpath: Path):
+def _convert_via_libreoffice(inpath: Path, md_path: Path):
     """Generic LibreOffice headless text conversion.
 
     Each call gets an isolated -env:UserInstallation profile so concurrent
     headless invocations (under the thread pool) don't collide on the shared
     default profile and hang.
     """
-    md = outpath.with_suffix(".md")
     txt = None
     profile = tempfile.mkdtemp(prefix="lo_profile_")
     try:
         subprocess.run(
             ["libreoffice", f"-env:UserInstallation=file://{profile}",
              "--headless", "--convert-to", "txt:Text",
-             "--outdir", str(outpath.parent), str(inpath)],
+             "--outdir", str(md_path.parent), str(inpath)],
             capture_output=True, timeout=180,
         )
-        txt = outpath.parent / (inpath.stem + ".txt")
+        txt = md_path.parent / (inpath.stem + ".txt")
         if txt.exists() and txt.stat().st_size > 10:
             content = txt.read_text(encoding="utf-8", errors="replace")
-            md.write_text(content, encoding="utf-8")
+            md_path.write_text(content, encoding="utf-8")
             return True, len(content), "libreoffice"
     except Exception as ex:
         print(f"  prepare-1 libreoffice failed: {inpath.name}: {type(ex).__name__}: {ex}",
@@ -166,25 +165,24 @@ def _convert_via_libreoffice(inpath: Path, outpath: Path):
     return False, 0, "libreoffice"
 
 
-def convert_legacy_office(inpath: Path, outpath: Path):
+def convert_legacy_office(inpath: Path, md_path: Path):
     """Covers .doc .ppt .odt .ods .odp — all LibreOffice headless."""
-    return _convert_via_libreoffice(inpath, outpath)
+    return _convert_via_libreoffice(inpath, md_path)
 
 
-def convert_rtf(inpath: Path, outpath: Path):
+def convert_rtf(inpath: Path, md_path: Path):
     """RTF via pandoc; fallback to LibreOffice."""
-    md = outpath.with_suffix(".md")
     try:
         subprocess.run(
-            ["pandoc", str(inpath), "-f", "rtf", "-t", "gfm", "-o", str(md)],
+            ["pandoc", str(inpath), "-f", "rtf", "-t", "gfm", "-o", str(md_path)],
             capture_output=True, timeout=60,
         )
-        if md.exists() and md.stat().st_size > 10:
-            return True, md.stat().st_size, "pandoc-rtf"
+        if md_path.exists() and md_path.stat().st_size > 10:
+            return True, md_path.stat().st_size, "pandoc-rtf"
     except Exception as ex:
         print(f"  prepare-1 pandoc failed: {inpath.name}: {type(ex).__name__}: {ex}",
               file=sys.stderr)
-    return _convert_via_libreoffice(inpath, outpath)
+    return _convert_via_libreoffice(inpath, md_path)
 
 
 # ── Converter registry ────────────────────────────────────────
@@ -235,8 +233,7 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
         return str(filepath.relative_to(src_root)), "skip", "temp/lock file", None
 
     relpath = filepath.relative_to(src_root)
-    outpath = out_root / relpath.parent / relpath.stem
-    md_path = outpath.with_suffix(".md")
+    md_path = out_root / relpath.parent / (relpath.name + ".md")
 
     if not force and md_path.exists() and md_path.stat().st_size > 0:
         try:
@@ -250,11 +247,11 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
 
     # Images -> our OCR path (MarkItDown has no local OCR).
     if ext in IMAGE_EXTS:
-        return _finish(relpath, ocr_image(filepath, outpath, vision_cfg))
+        return _finish(relpath, ocr_image(filepath, md_path, vision_cfg))
 
     # Audio -> local whisper (MarkItDown uses network Google Web Speech).
     if ext in AUDIO_EXTS:
-        ok, size, method, note = convert_audio(filepath, outpath, whisper_model)
+        ok, size, method, note = convert_audio(filepath, md_path, whisper_model)
         if ok:
             return str(relpath), "ok", method, note
         return str(relpath), "fail", f"audio not transcribed ({method})", None
@@ -262,21 +259,21 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
     # PDF -> MarkItDown first (digital text/tables); OCR fallback if thin.
     if ext == ".pdf":
         if md_client is not None:
-            ok, size, method = _convert_with_markitdown(filepath, outpath, md_client)
+            ok, size, method = _convert_with_markitdown(filepath, md_path, md_client)
             if ok and is_meaningful(md_path.read_text(encoding="utf-8", errors="replace")):
                 return str(relpath), "ok", method, None
-        return _finish(relpath, ocr_pdf(filepath, outpath, vision_cfg))
+        return _finish(relpath, ocr_pdf(filepath, md_path, vision_cfg))
 
     # Everything else -> MarkItDown, then gap-fillers.
     if md_client is not None:
-        ok, size, method = _convert_with_markitdown(filepath, outpath, md_client)
+        ok, size, method = _convert_with_markitdown(filepath, md_path, md_client)
         if ok:
             return str(relpath), "ok", method, None
 
     gap_filler = GAP_FILLERS.get(ext)
     if gap_filler is not None:
         try:
-            ok, size, method = gap_filler(filepath, outpath)
+            ok, size, method = gap_filler(filepath, md_path)
             if ok:
                 return str(relpath), "ok", method, f"used {method} fallback"
         except Exception as ex:

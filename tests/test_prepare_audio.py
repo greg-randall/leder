@@ -19,7 +19,7 @@ def test_convert_audio_writes_transcript(tmp_path):
         def transcribe(self, path):
             return [_Seg(" Hello "), _Seg("world ")], _Info()
 
-    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a", FakeModel())
+    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a.md", FakeModel())
     md = (tmp_path / "a.md").read_text()
     assert ok and method == "whisper"
     assert "Hello world" in md
@@ -28,7 +28,7 @@ def test_convert_audio_writes_transcript(tmp_path):
 
 
 def test_convert_audio_unavailable(tmp_path):
-    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a", None)
+    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a.md", None)
     assert not ok and method == "whisper-unavailable" and note is None
 
 
@@ -37,7 +37,7 @@ def test_convert_audio_no_speech(tmp_path):
         def transcribe(self, path):
             return [], _Info()
 
-    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a", FakeModel())
+    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a.md", FakeModel())
     md = (tmp_path / "a.md").read_text()
     assert ok and "no speech detected" in md
 

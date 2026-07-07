@@ -71,14 +71,13 @@ def _pdf_to_page_pngs(pdf_path: Path, outdir: Path, dpi: int = 300) -> list[Path
     return sorted(outdir.glob("page-*.png"))
 
 
-def ocr_image(inpath: Path, outpath: Path, vision_cfg: dict):
+def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
     """OCR an image file; escalate to vision when OCR is thin.
 
     Returns (ok, size, method, note). `note` (non-None) flags the file for
     NEEDS_REVIEW.md. Honors vision_cfg keys: ocr_images, enabled, model, min_words.
     """
     inpath = Path(inpath)
-    md_path = outpath.with_suffix(".md")
     model = vision_cfg.get("model", "gpt-4o-mini")
 
     if not vision_cfg.get("ocr_images", True):
@@ -108,14 +107,13 @@ def ocr_image(inpath: Path, outpath: Path, vision_cfg: dict):
     return True, len(content), "tesseract", note
 
 
-def ocr_pdf(inpath: Path, outpath: Path, vision_cfg: dict):
+def ocr_pdf(inpath: Path, md_path: Path, vision_cfg: dict):
     """OCR a scanned PDF page-by-page; escalate thin pages to vision (capped).
 
     Returns (ok, size, method, note). ok is False if the PDF could not be
     rasterized or produced no text at all (caller reports it as unconvertible).
     """
     inpath = Path(inpath)
-    md_path = outpath.with_suffix(".md")
     model = vision_cfg.get("model", "gpt-4o-mini")
     min_words = vision_cfg.get("min_words", 20)
     max_vision_pages = vision_cfg.get("max_pages_per_doc", 30)

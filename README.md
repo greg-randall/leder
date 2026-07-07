@@ -34,69 +34,38 @@ Check that everything is in place:
 python3 -m pipeline.cli check
 ```
 
-### Run it
+### Set up your corpus
 
-The pipeline reads `config.yaml` from the project root. This file controls which models to use, how many agents run at once, timeouts, turn limits, which playbooks are active, and corpus-prep settings. The defaults are sensible.
+Drop source documents (PDFs, DOCs, images, spreadsheets) into `corpus/`. Organize them however you like — by operator, by document type, by date. The pipeline preserves your folder structure.
 
-```yaml
-article:
-  path: "article.md"
+Then build the search index:
 
-corpus:
-  root: "corpus/"
-
-playbooks:
-  dir: "pipelines/"
-  active: ["fact_check"]
-
-stage_a:
-  model: "deepseek-v4-pro"
-  quality_gate: true
-
-stage_b:
-  model: "deepseek-v4-pro"
-  concurrency: 32
-  timeout: 600
-  max_turns: 60
-
-stage_c:
-  quote_match_method: "normalized"
-
-prepare:
-  source_root: "raw-source-docs/"
-  convert_workers: 8
-  ocr_images: true
-  vision_fallback:
-    enabled: true
-    model: "gpt-4o-mini"
-    min_words: 20
-    max_pages_per_doc: 30
-  audio:
-    enabled: true
-    model: "medium"
-    device: "auto"
-  summarize:
-    model: "deepseek-v4-flash"
-    workers: 50
-  rollup:
-    model: "deepseek-v4-pro"
-    big_call_model: "deepseek-v4-pro[1m]"
-    workers: 12
-    crosscutting: true
+```bash
+python3 -m pipeline.cli prepare     # convert → summarize → rollup (all three)
 ```
 
-Full pipeline:
+Or step by step:
+
+```bash
+python3 -m pipeline.cli prepare-1   # convert raw files to markdown
+python3 -m pipeline.cli prepare-2   # per-document LLM summaries
+python3 -m pipeline.cli prepare-3   # recursive folder summaries + crosscutting overview
+```
+
+Run these whenever your source documents change. They're not part of `all` — Stage B will refuse to run if the corpus isn't prepped (use `--force-run` to bypass).
+
+### Run the pipeline
 
 ```bash
 python3 -m pipeline.cli all
 ```
 
-Runs startup validation, then all stages. About 15 minutes for a 5,000-word article against 300 documents on DeepSeek V4 Flash.
+Runs startup validation, then all five stages. About 15 minutes for a 5,000-word article against 300 documents on DeepSeek V4 Flash.
 
 One stage at a time:
 
 ```bash
-python3 -m pipeline.cli stage-a     # extract claims via playbook prompts
+python3 -m pipeline.cli stage-a     # extract claims from article
 python3 -m pipeline.cli stage-b     # verify claims against corpus + web
 python3 -m pipeline.cli stage-c     # rebuild article with footnotes
 python3 -m pipeline.cli stage-d     # HTML with color-coded source cards
@@ -105,15 +74,16 @@ python3 -m pipeline.cli stage-e     # .docx with Word comments
 
 Stage A prints `Wrote 219 targets → targets.json`. Stage B prints `Done: 132 findings → findings.json`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML page with a sidebar of severity-colored source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
 
-### Corpus prep (`prepare-1/2/3`)
+### Config
 
-The pipeline reads a corpus of summarized markdown from `corpus.root`. Build it from a folder of raw source documents with the `prepare` commands (run once when your source docs change; NOT part of `all`):
+The pipeline reads `config.yaml` from the project root. Defaults are sensible — you only need to change `corpus.root` if your documents live elsewhere.
 
-```bash
-python3 -m pipeline.cli prepare-1   # convert raw files to markdown
-python3 -m pipeline.cli prepare-2   # per-document LLM summaries
-python3 -m pipeline.cli prepare-3   # recursive folder summaries + crosscutting overview
-python3 -m pipeline.cli prepare     # all three in order
+```yaml
+corpus:
+  root: "corpus/"
+
+prepare:
+  source_root: "corpus/"
 ```
 
 How each file type gets converted (prepare-1):

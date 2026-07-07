@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     a_parser = subparsers.add_parser("stage-a", parents=[common], help="Extract claims from article")
     a_parser.add_argument("--article", help="Path to article markdown")
-    a_parser.add_argument("--output", default="claims.json")
+    a_parser.add_argument("--output", default="targets.json")
     a_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
     )

@@ -44,7 +44,7 @@ def test_parser_stage_a_defaults():
     parser = build_parser()
     args = parser.parse_args(["stage-a"])
     assert args.article is None
-    assert args.output == "claims.json"
+    assert args.output == "targets.json"
     assert args.no_quality_gate is False
 
 

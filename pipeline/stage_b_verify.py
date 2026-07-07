@@ -837,9 +837,16 @@ def run_stage_b(
 
     if targets_path:
         if not os.path.exists(targets_path):
-            print(f"ERROR: {targets_path} not found. Run stage-a first to generate it.",
-                  file=sys.stderr)
-            sys.exit(1)
+            # Fall back to claims.json if targets.json doesn't exist
+            alt = os.path.join(os.path.dirname(targets_path) or ".", "claims.json")
+            if os.path.exists(alt):
+                print(f"Note: {targets_path} not found, using {alt} instead.",
+                      file=sys.stderr)
+                targets_path = alt
+            else:
+                print(f"ERROR: {targets_path} not found. Run stage-a first to generate it.",
+                      file=sys.stderr)
+                sys.exit(1)
 
         import json as _json
         from pipeline.finding import Finding, FindingsDocument

@@ -58,6 +58,48 @@ def _get_markitdown():
         return None
 
 
+def _clean_table_newlines(text: str) -> str:
+    """Collapse embedded newlines inside markdown pipe-table cells.
+
+    Some converters preserve line breaks from spreadsheet cells as literal
+    newlines, which breaks table rendering. A pipe-table row must be a single
+    line — it starts and ends with |. When a row is split across lines (mid-cell
+    newlines), we join the fragments back together.
+
+    Only touches lines that contain | (pipe-table rows). Non-table content and
+    already-correct rows pass through unchanged. Separate rows are never merged
+    because each complete row ends with |.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    buf: str | None = None  # accumulates a broken row
+
+    for line in lines:
+        has_pipe = "|" in line
+        if not has_pipe:
+            if buf is not None:
+                out.append(buf)
+                buf = None
+            out.append(line)
+        elif line.strip().endswith("|"):
+            # Row is complete (ends with |)
+            if buf is not None:
+                out.append(buf + " " + line.strip())
+                buf = None
+            else:
+                out.append(line)
+        else:
+            # Row is broken mid-cell — accumulate fragments
+            if buf is not None:
+                buf = buf + " " + line.strip()
+            else:
+                buf = line.strip()
+
+    if buf is not None:
+        out.append(buf)
+    return "\n".join(out)
+
+
 def _convert_with_markitdown(filepath: Path, md_path: Path, md_client):
     """Try MarkItDown on a file. Returns (ok, size, method)."""
     if md_client is None:
@@ -67,6 +109,7 @@ def _convert_with_markitdown(filepath: Path, md_path: Path, md_client):
         text = result.text_content.strip()
         if not text:
             return False, 0, "markitdown-empty"
+        text = _clean_table_newlines(text)
         md_path.write_text(text, encoding="utf-8")
         return True, len(text), "markitdown"
     except Exception:

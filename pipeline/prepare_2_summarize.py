@@ -59,6 +59,15 @@ def build_user_msg(md_path: Path, content: str):
     return user_msg, truncated, orig_tokens
 
 
+def _is_skipped_image_stub(md_path: Path) -> bool:
+    """True if this .md is a stub for an image skipped by OCR (tiny/duplicate)."""
+    try:
+        first_line = md_path.read_text(encoding="utf-8", errors="replace").split("\n")[0]
+        return first_line.startswith("![") and "skipped" in first_line.lower()
+    except Exception:
+        return False
+
+
 def collect_targets(corpus_root: Path):
     """All .md files eligible for summarization (skip INDEX, *_summary.md, and rollup artifacts)."""
     targets = []
@@ -71,6 +80,9 @@ def collect_targets(corpus_root: Path):
         if p.name == "INDEX.md" or p.name.endswith("_summary.md"):
             continue
         if p.name.endswith("_FOLDER_SUMMARY.md") or p.name in skip_names:
+            continue
+        # Skip image stubs (tiny/duplicate images that were not OCR'd)
+        if _is_skipped_image_stub(p):
             continue
         targets.append(p)
     return targets

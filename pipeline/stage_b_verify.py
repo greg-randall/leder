@@ -836,6 +836,11 @@ def run_stage_b(
             sys.exit(1)
 
     if targets_path:
+        if not os.path.exists(targets_path):
+            print(f"ERROR: {targets_path} not found. Run stage-a first to generate it.",
+                  file=sys.stderr)
+            sys.exit(1)
+
         import json as _json
         from pipeline.finding import Finding, FindingsDocument
 

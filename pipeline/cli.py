@@ -461,9 +461,15 @@ def main() -> None:
         from pipeline.stage_c_rebuild import run_stage_c
 
         if not os.path.exists(args_findings):
-            print(f"ERROR: {args_findings} not found. Run stage-b first to generate it.",
-                  file=sys.stderr)
-            sys.exit(1)
+            alt = os.path.join(os.path.dirname(args_findings) or ".", "claims.json")
+            if os.path.exists(alt):
+                print(f"Note: {args_findings} not found, using {alt} instead.",
+                      file=sys.stderr)
+                args_findings = alt
+            else:
+                print(f"ERROR: {args_findings} not found. Run stage-b first to generate it.",
+                      file=sys.stderr)
+                sys.exit(1)
 
         output_path = _resolve_output_path(output_path)
         run_stage_c(

@@ -283,10 +283,38 @@ def _load_findings(findings_path: str) -> list[dict]:
     Each dict has the fields the rebuild engine needs, plus
     ``check_type`` and ``severity`` for badge rendering.
     """
-    from pipeline.finding import FindingsDocument
+    from pipeline.finding import Finding, FindingsDocument
 
     with open(findings_path, encoding="utf-8") as f:
-        doc = FindingsDocument.from_json(f.read())
+        data = json.loads(f.read())
+
+    # Handle both FindingsDocument (findings key) and targets.json format
+    if "findings" in data:
+        doc = FindingsDocument.from_json(json.dumps(data))
+    elif "targets" in data:
+        findings_list = []
+        for t in data["targets"]:
+            findings_list.append(Finding(
+                target_text=t.get("target_text", ""),
+                anchor_text=t.get("anchor_text", ""),
+                playbook=t.get("playbook", "fact_check"),
+                claim_type=t.get("claim_type", t.get("type", "generalization")),
+                verdict=t.get("verdict", "unsupported"),
+                source_proximity=t.get("source_proximity", "unverifiable"),
+                source_path=t.get("source_path", ""),
+                source_url=t.get("source_url", ""),
+                rationale=t.get("rationale", ""),
+                human_review=t.get("human_review", False),
+                confidence=t.get("confidence", 0.0),
+            ))
+        doc = FindingsDocument(
+            article_file=data.get("article_file", ""),
+            article_summary=data.get("article_summary", ""),
+            findings=findings_list,
+        )
+    else:
+        raise ValueError(
+            f"Unknown format in {findings_path}: expected 'findings' or 'targets' key")
 
     findings = []
     for finding in doc.findings:

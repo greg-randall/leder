@@ -85,6 +85,7 @@ _STYLE = """<style>
     .src-card .sc-matched { background: #2d2d2d; }
     .src-card .sc-source a { color: #aaa; }
     .src-card .sc-rationale { color: #aaa; }
+    .sc-toggle:hover { background: #ddd !important; color: #222 !important; }
     .unplaced { background: #2d1a1a; }
   }
 </style>"""
@@ -139,9 +140,16 @@ function smoothScrollTo(el, target, duration) {
     // Add explicit toggle button so text selection doesn't collapse the card
     var toggleBtn = document.createElement('button');
     toggleBtn.className = 'sc-toggle';
-    toggleBtn.innerHTML = '▸';
+    toggleBtn.innerHTML = '▶';
     toggleBtn.title = 'Expand / collapse';
-    toggleBtn.style.cssText = 'position:absolute;top:4px;right:4px;background:none;border:none;font-size:1.2em;cursor:pointer;padding:0 4px;line-height:1;';
+    toggleBtn.setAttribute('aria-label', 'Expand card');
+    toggleBtn.style.cssText = (
+      'position:absolute;top:6px;right:6px;' +
+      'width:30px;height:30px;line-height:30px;text-align:center;' +
+      'font-size:14px;color:#555;' +
+      'background:#f0f0f0;border:none;border-radius:50%;' +
+      'cursor:pointer;padding:0;user-select:none;'
+    );
     card.style.position = 'relative';
     card.appendChild(toggleBtn);
 
@@ -149,7 +157,9 @@ function smoothScrollTo(el, target, duration) {
     toggleBtn.addEventListener('click', function(e) {
       e.stopPropagation();
       card.classList.toggle('expanded');
-      this.innerHTML = card.classList.contains('expanded') ? '▾' : '▸';
+      var expanded = card.classList.contains('expanded');
+      this.innerHTML = expanded ? '▼' : '▶';
+      this.setAttribute('aria-label', expanded ? 'Collapse card' : 'Expand card');
     });
   });
 

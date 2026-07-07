@@ -20,7 +20,6 @@ class CorpusConfig:
 @dataclass
 class OutputConfig:
     dir: str = "."
-    web_cache_dir: str = "web_cache/"
 
 
 @dataclass

@@ -189,7 +189,7 @@ def test_load_config_valid(tmp_path):
             {
                 "article": {"path": "article.md"},
                 "corpus": {"root": "corpus/"},
-                "output": {"dir": ".", "web_cache_dir": "web_cache/"},
+                "output": {"dir": "."},
                 "stage_a": {"model": "deepseek-v4-pro", "quality_gate": True},
                 "stage_b": {"model": "deepseek-v4-flash", "concurrency": 32, "timeout": 600, "max_turns": 60},
             }

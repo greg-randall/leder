@@ -539,7 +539,7 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
     random.shuffle(files)  # mix heavy and light files for smoother progress
     failures: list[tuple[str, str]] = []
     needs_review: list[tuple[str, str]] = []
-    ok_ct = skip_ct = 0
+    ok_ct = skip_ct = tiny_ct = dup_ct = 0
 
     md_client = _get_markitdown()
     if md_client is None:
@@ -566,18 +566,22 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                 f = futmap[future]
                 rel = str(Path(f).relative_to(src_root))
                 try:
-                    _, status, detail, note = future.result(timeout=FILE_TIMEOUT)
+                    _, status, method, note = future.result(timeout=FILE_TIMEOUT)
                 except TimeoutError:
-                    status, detail, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
+                    status, method, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
                 with results_lock:
                     if status == "ok":
                         ok_ct += 1
+                        if method == "image-tiny":
+                            tiny_ct += 1
+                        elif method == "image-dup":
+                            dup_ct += 1
                         if note is not None:
                             needs_review.append((rel, note))
                     elif status == "skip":
                         skip_ct += 1
                     else:
-                        failures.append((rel, detail))
+                        failures.append((rel, method))
                     pbar.update(1)
 
     _write_unconverted(out_root, failures)
@@ -605,18 +609,22 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                     f2 = futmap2[future]
                     rel = str(Path(f2).relative_to(src_root))
                     try:
-                        _, status, detail, note = future.result(timeout=FILE_TIMEOUT)
+                        _, status, method, note = future.result(timeout=FILE_TIMEOUT)
                     except TimeoutError:
-                        status, detail, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
+                        status, method, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
                     with results_lock:
                         if status == "ok":
                             ok_ct += 1
+                            if method == "image-tiny":
+                                tiny_ct += 1
+                            elif method == "image-dup":
+                                dup_ct += 1
                             if note is not None:
                                 needs_review.append((rel, note))
                         elif status == "skip":
                             skip_ct += 1
                         else:
-                            failures.append((rel, detail))
+                            failures.append((rel, method))
                         pbar2.update(1)
 
     _write_unconverted(out_root, failures)
@@ -631,7 +639,13 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
               f"— re-run prepare-1 to process them.",
               file=sys.stderr)
 
-    print(f"prepare-1 done: {ok_ct} converted, {skip_ct} skipped, "
+    details = []
+    if tiny_ct:
+        details.append(f"{tiny_ct} tiny images skipped")
+    if dup_ct:
+        details.append(f"{dup_ct} duplicates skipped")
+    detail_str = f" ({', '.join(details)})" if details else ""
+    print(f"prepare-1 done: {ok_ct} converted{detail_str}, {skip_ct} skipped, "
           f"{len(failures)} failed, {len(needs_review)} recovered-via-fallback")
     return {"failures": failures, "needs_review": needs_review,
             "failure_count": len(failures)}

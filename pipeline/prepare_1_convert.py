@@ -16,6 +16,7 @@ Files recovered via OCR/vision/whisper/gap-filler are recorded in NEEDS_REVIEW.m
 from __future__ import annotations
 
 import csv
+import random
 import shutil
 import subprocess
 import sys
@@ -396,7 +397,12 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
     out_root = Path(corpus_root)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    files = [f for f in sorted(src_root.rglob("*")) if f.is_file()]
+    files = [f for f in sorted(src_root.rglob("*"))
+             if f.is_file()
+             and f.suffix.lower() != ".md"
+             and f.name != ".gitkeep"
+             and not f.name.startswith("._")]  # macOS resource forks
+    random.shuffle(files)  # mix heavy and light files for smoother progress
     failures: list[tuple[str, str]] = []
     needs_review: list[tuple[str, str]] = []
     ok_ct = skip_ct = 0

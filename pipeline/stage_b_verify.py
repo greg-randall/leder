@@ -878,13 +878,15 @@ def run_stage_b(
         findings_lock = _thr.Lock()
         findings_by_id: dict[str, Finding] = {}
 
+        tmp_path = output_path + ".tmp"
+
         def _save_findings():
             with findings_lock:
                 doc = FindingsDocument(
                     article_file=article_file, article_summary=summary,
                     findings=list(findings_by_id.values()),
                 )
-                with open(output_path, "w", encoding="utf-8") as f:
+                with open(tmp_path, "w", encoding="utf-8") as f:
                     f.write(doc.to_json())
 
         async def _do():
@@ -918,8 +920,9 @@ def run_stage_b(
         pbar.close()
         findings_list = [r for r in results if r is not None]
         doc = FindingsDocument(article_file=article_file, article_summary=summary, findings=findings_list)
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(doc.to_json())
+        os.replace(tmp_path, output_path)  # atomic rename
         print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
         _summarize_web_cache(web_cache_dir)
         # Cost estimate (pricing from config.yaml, rates per 1M tokens)
@@ -1071,8 +1074,10 @@ def run_stage_b(
 
     doc.claims = deduped
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    tmp_path2 = output_path + ".tmp"
+    with open(tmp_path2, "w", encoding="utf-8") as f:
         f.write(doc.to_json())
+    os.replace(tmp_path2, output_path)
 
     verified = [c for c in doc.claims if c.claim_id in result_map]
     unverified = [c for c in doc.claims if c.claim_id not in result_map]

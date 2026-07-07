@@ -100,6 +100,11 @@ def _clean_table_newlines(text: str) -> str:
     return "\n".join(out)
 
 
+# Only clean table newlines for formats we know produce pipe tables.
+# Avoids false positives on documents containing | in prose or code.
+_TABLE_FORMATS = {".xlsx", ".xlsm", ".xltx", ".xltm", ".csv", ".tsv", ".ods"}
+
+
 def _convert_with_markitdown(filepath: Path, md_path: Path, md_client):
     """Try MarkItDown on a file. Returns (ok, size, method)."""
     if md_client is None:
@@ -109,7 +114,8 @@ def _convert_with_markitdown(filepath: Path, md_path: Path, md_client):
         text = result.text_content.strip()
         if not text:
             return False, 0, "markitdown-empty"
-        text = _clean_table_newlines(text)
+        if filepath.suffix.lower() in _TABLE_FORMATS:
+            text = _clean_table_newlines(text)
         md_path.write_text(text, encoding="utf-8")
         return True, len(text), "markitdown"
     except Exception:

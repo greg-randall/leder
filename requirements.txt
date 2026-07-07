@@ -10,3 +10,4 @@ tiktoken>=0.7.0
 faster-whisper>=1.0.0
 trafilatura
 pyspellchecker
+extract-msg

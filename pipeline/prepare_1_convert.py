@@ -130,8 +130,79 @@ def _write_md(md_path: Path, content: str):
     md_path.write_text(content, encoding="utf-8")
 
 
+def _sanitize_filename(name: str) -> str:
+    """Strip path separators and nulls from attachment filenames."""
+    return name.replace("/", "_").replace("\\", "_").replace("\x00", "")
+
+
+def _extract_attachments(msg, attach_dir: Path) -> tuple[int, list[str]]:
+    """Walk a parsed email message and extract attachments/nested emails.
+
+    Returns (count, notes). Nested .eml files are saved as .eml so
+    prepare-1 picks them up on the next pass.
+    """
+    attach_dir.mkdir(parents=True, exist_ok=True)
+    idx = 0
+    body_parts = []
+
+    for part in msg.walk():
+        content_type = part.get_content_type()
+        disp = str(part.get("Content-Disposition", ""))
+        filename = part.get_filename()
+
+        if content_type == "message/rfc822":
+            # Nested email — save as .eml
+            idx += 1
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                payload = payload[0] if payload else None
+            if payload:
+                nested = payload
+                subj = ""
+                if hasattr(nested, 'get'):
+                    subj = nested.get("Subject", "")
+                subj = _sanitize_filename(subj[:60]) if subj else "forwarded"
+                out = attach_dir / f"{idx:03d}_{subj}.eml"
+                try:
+                    out.write_bytes(nested.as_bytes())
+                except Exception:
+                    out.write_text(str(nested), encoding="utf-8")
+                body_parts.append(f"(nested email: {out.name})")
+
+        elif filename:
+            # Attachment
+            idx += 1
+            name = _sanitize_filename(filename)
+            out = attach_dir / f"{idx:03d}_{name}"
+            try:
+                payload = part.get_payload(decode=True)
+                if payload:
+                    out.write_bytes(payload)
+                else:
+                    out.write_text(str(part.get_payload()), encoding="utf-8")
+            except Exception:
+                pass
+
+        elif content_type in ("text/plain", "text/html"):
+            try:
+                payload = part.get_payload(decode=True)
+                if payload:
+                    charset = part.get_content_charset() or "utf-8"
+                    body_parts.append(payload.decode(charset, errors="replace"))
+            except Exception:
+                pass
+
+    body = "\n\n".join(body_parts).strip() if body_parts else "(no text body)"
+    notes = f"{idx} attachment(s) extracted" if idx else ""
+    return idx, body, notes
+
+
 def convert_eml(inpath: Path, md_path: Path):
-    """MIME .eml -> markdown with From/To/Date/Subject header block + decoded body."""
+    """MIME .eml -> markdown body + extract attachments/nested emails.
+
+    Attachments and nested emails are saved to {stem}_attachments/ with
+    sequential numbering so prepare-1 converts them on the next pass.
+    """
     from email import policy
     from email.parser import BytesParser
     try:
@@ -141,14 +212,66 @@ def convert_eml(inpath: Path, md_path: Path):
         to = msg.get("To", "(unknown)")
         date = msg.get("Date", "(unknown)")
         subject = msg.get("Subject", "(unknown)")
-        body_part = msg.get_body(preferencelist=("plain", "html"))
-        body = body_part.get_content() if body_part else ""
+
+        attach_dir = md_path.parent / (inpath.stem + "_attachments")
+        count, body, notes = _extract_attachments(msg, attach_dir)
+
         md = (f"# {subject}\n\n**From:** {sender}\n**To:** {to}\n"
               f"**Date:** {date}\n\n---\n\n{body}")
+        if count:
+            md += (f"\n\n---\n\n**Attachments:** {count} file(s) "
+                   f"extracted to [{attach_dir.name}/]({attach_dir.name}/)\n")
         _write_md(md_path, md)
-        return True, len(md), "eml-stdlib"
+        return True, len(md), "eml-extract", notes or None
     except Exception:
-        return False, 0, "eml-stdlib"
+        return False, 0, "eml-extract"
+
+
+def convert_msg(inpath: Path, md_path: Path):
+    """Outlook .msg -> markdown body + extract attachments.
+
+    Same convention as convert_eml: attachments saved to
+    {stem}_attachments/ with sequential numbering.
+    """
+    try:
+        import extract_msg as _em
+    except ImportError:
+        return False, 0, "extract-msg-unavailable"
+    try:
+        msg = _em.Message(str(inpath))
+        sender = msg.sender or "(unknown)"
+        to = msg.to or "(unknown)"
+        date = str(msg.date) if msg.date else "(unknown)"
+        subject = msg.subject or "(unknown)"
+        body = msg.body or "(no text body)"
+
+        attach_dir = md_path.parent / (inpath.stem + "_attachments")
+        count = 0
+        for i, att in enumerate(msg.attachments, 1):
+            try:
+                name = att.longFilename or att.shortFilename or f"attachment_{i}"
+                name = _sanitize_filename(name)
+                attach_dir.mkdir(parents=True, exist_ok=True)
+                out = attach_dir / f"{i:03d}_{name}"
+                with open(str(out), "wb") as f:
+                    if isinstance(att.data, bytes):
+                        f.write(att.data)
+                    else:
+                        f.write(str(att.data).encode("utf-8", errors="replace"))
+                count += 1
+            except Exception:
+                pass
+        msg.close()
+
+        md = (f"# {subject}\n\n**From:** {sender}\n**To:** {to}\n"
+              f"**Date:** {date}\n\n---\n\n{body}")
+        if count:
+            md += (f"\n\n---\n\n**Attachments:** {count} file(s) "
+                   f"extracted to [{attach_dir.name}/]({attach_dir.name}/)\n")
+        _write_md(md_path, md)
+        return True, len(md), "extract-msg", f"{count} attachment(s) extracted" if count else None
+    except Exception:
+        return False, 0, "extract-msg"
 
 
 def convert_tsv(inpath: Path, md_path: Path):
@@ -242,6 +365,7 @@ def convert_rtf(inpath: Path, md_path: Path):
 
 GAP_FILLERS: dict[str, callable] = {
     ".eml": convert_eml,
+    ".msg": convert_msg,
     ".doc": convert_legacy_office,
     ".ppt": convert_legacy_office,
     ".odt": convert_legacy_office,
@@ -327,9 +451,12 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
     gap_filler = GAP_FILLERS.get(ext)
     if gap_filler is not None:
         try:
-            ok, size, method = gap_filler(filepath, md_path)
+            result = gap_filler(filepath, md_path)
+            if len(result) == 3:
+                result = (*result, None)
+            ok, size, method, note = result
             if ok:
-                return str(relpath), "ok", method, f"used {method} fallback"
+                return str(relpath), "ok", method, note or f"used {method} fallback"
         except Exception as ex:
             print(f"  prepare-1 gap-filler failed: {relpath}: {type(ex).__name__}: {ex}",
                   file=sys.stderr)

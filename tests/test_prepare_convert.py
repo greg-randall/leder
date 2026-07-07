@@ -17,11 +17,11 @@ def test_convert_eml(tmp_path):
         "Subject: Test Subject\r\nDate: Mon, 1 Jan 2024 00:00:00 +0000\r\n\r\n"
         "This is the body."
     )
-    ok, size, method = p1.convert_eml(src, tmp_path / "m.md")
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "m.md")
     md = (tmp_path / "m.md").read_text()
     assert ok
     assert "Test Subject" in md and "alice@example.com" in md and "This is the body." in md
-    assert method == "eml-stdlib"
+    assert method == "eml-extract"
 
 
 def test_convert_tsv(tmp_path):

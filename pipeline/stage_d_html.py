@@ -17,7 +17,7 @@ _STYLE = """<style>
     --pass: #2d7d46; --warning: #b08800; --critical: #c42b2b;
     --source-bg: #f8f9fa;
   }
-  body { font-family: Georgia, 'Times New Roman', serif; }
+  body { font-family: Georgia, 'Times New Roman', serif; padding: 2em 0 0 0; }
   h1, h2, h3 { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
   p { margin-bottom: 1.2rem; }
 

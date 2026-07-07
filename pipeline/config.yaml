@@ -39,7 +39,7 @@ prepare:
     language: "en"
     min_words: 20
     max_pages_per_doc: 30
-    min_image_dim: 125
+    min_image_dim: 130
     dedup_images: true
   audio:
     enabled: true

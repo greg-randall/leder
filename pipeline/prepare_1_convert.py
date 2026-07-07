@@ -613,6 +613,15 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)
     _print_banner(failures)
+
+    # Detect nested email attachments — user may need another pass
+    nested = [d for d in sorted(out_root.rglob("*_attachments"))
+              if d.is_dir() and any(d.glob("*.eml")) or any(d.glob("*.msg"))]
+    if nested:
+        print(f"\n  ⚠  {len(nested)} attachment folder(s) contain .eml/.msg files "
+              f"— re-run prepare-1 to process them.",
+              file=sys.stderr)
+
     print(f"prepare-1 done: {ok_ct} converted, {skip_ct} skipped, "
           f"{len(failures)} failed, {len(needs_review)} recovered-via-fallback")
     return {"failures": failures, "needs_review": needs_review,

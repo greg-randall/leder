@@ -25,7 +25,7 @@ from pipeline.prepare_vision import (
 TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 
 # Per-run dedup state — cleared by run_prepare_1
-_seen_hashes: set[int] = set()
+_seen_hashes: list = []
 _dedup_lock = _threading.Lock()
 
 
@@ -33,7 +33,7 @@ def _reset_dedup() -> None:
     """Clear dedup state for a fresh run."""
     global _seen_hashes
     with _dedup_lock:
-        _seen_hashes = set()
+        _seen_hashes = []
 
 
 def _is_tiny_image(filepath: Path, min_dim: int) -> bool:
@@ -56,12 +56,11 @@ def _is_duplicate_image(filepath: Path) -> bool:
             h = phash(img)
         with _dedup_lock:
             for seen in _seen_hashes:
-                if abs(int(h) - int(seen)) <= 4:
+                if abs(h - seen) <= 4:
                     return True
-            _seen_hashes.add(int(h))
+            _seen_hashes.append(h)
         return False
     except Exception:
-        # Can't open or hash — don't block processing
         return False
 
 # Image formats we handle. tesseract (via Leptonica) reads png/jpg/tiff

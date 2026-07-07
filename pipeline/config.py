@@ -48,7 +48,7 @@ class VisionFallbackConfig:
     language: str = "en"
     min_words: int = 20
     max_pages_per_doc: int = 30
-    min_image_dim: int = 125
+    min_image_dim: int = 130
     dedup_images: bool = True
 
 

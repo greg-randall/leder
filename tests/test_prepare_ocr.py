@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pipeline.prepare_ocr as ocr
+from pipeline.prepare_ocr import _is_tiny_image, _is_duplicate_image, _reset_dedup
 
 
 def test_ocr_image_thin_escalates_to_vision(tmp_path, monkeypatch):
@@ -73,3 +74,128 @@ def test_ocr_pdf_no_pages_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr, "_pdf_to_page_pngs", lambda *a, **k: [])
     ok, size, method, note = ocr.ocr_pdf(pdf, tmp_path / "empty", {"enabled": False})
     assert not ok
+
+
+# ── Tiny image filter ──────────────────────────────────────────
+
+def test_is_tiny_image_real(tmp_path):
+    """A real small PNG is detected as tiny."""
+    from PIL import Image
+    img = Image.new("RGB", (50, 50), color="red")
+    path = tmp_path / "tiny.png"
+    img.save(str(path))
+    assert _is_tiny_image(path, 125) is True
+
+
+def test_is_tiny_image_large(tmp_path):
+    """A 500x500 image is not tiny."""
+    from PIL import Image
+    img = Image.new("RGB", (500, 500), color="blue")
+    path = tmp_path / "big.png"
+    img.save(str(path))
+    assert _is_tiny_image(path, 125) is False
+
+
+def test_is_tiny_image_fake_png_not_crash(tmp_path):
+    """Fake/broken PNGs don't crash — return False."""
+    path = tmp_path / "fake.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert _is_tiny_image(path, 125) is False
+
+
+def test_ocr_image_skips_tiny(tmp_path):
+    """A tiny image is skipped with image-tiny status, not OCR'd."""
+    from PIL import Image
+    img = Image.new("RGB", (32, 32), color="red")
+    path = tmp_path / "icon.png"
+    img.save(str(path))
+    vc = {"enabled": False, "min_image_dim": 125}
+    ok, size, method, note = ocr.ocr_image(path, tmp_path / "icon.png.md", vc)
+    assert ok and method == "image-tiny"
+    assert "125x125" in note
+    assert "skipped" in (tmp_path / "icon.png.md").read_text()
+
+
+# ── Duplicate image filter ─────────────────────────────────────
+
+def test_is_duplicate_first_is_false(tmp_path):
+    """First image is never a duplicate."""
+    _reset_dedup()
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (200, 200), color="white")
+    d = ImageDraw.Draw(img)
+    d.text((10, 10), "Unique content", fill="black")
+    path = tmp_path / "a.png"
+    img.save(str(path))
+    assert _is_duplicate_image(path) is False
+
+
+def test_is_duplicate_second_is_true(tmp_path):
+    """Second identical image is detected as duplicate."""
+    _reset_dedup()
+    from PIL import Image, ImageDraw
+
+    def make_img():
+        img = Image.new("RGB", (200, 200), color="white")
+        d = ImageDraw.Draw(img)
+        d.text((10, 10), "Same content", fill="black")
+        return img
+
+    p1 = tmp_path / "a.png"
+    p2 = tmp_path / "b.png"
+    make_img().save(str(p1))
+    make_img().save(str(p2))
+    assert _is_duplicate_image(p1) is False
+    assert _is_duplicate_image(p2) is True
+
+
+def test_is_duplicate_different_image_is_false(tmp_path):
+    """Visually different images are not duplicates."""
+    _reset_dedup()
+    from PIL import Image, ImageDraw
+
+    # Image 1: white background, black text
+    img1 = Image.new("RGB", (200, 200), color="white")
+    d1 = ImageDraw.Draw(img1)
+    d1.text((10, 10), "Completely different content here", fill="black")
+    p1 = tmp_path / "img1.png"
+    img1.save(str(p1))
+
+    # Image 2: dark background, white text, different layout
+    img2 = Image.new("RGB", (200, 200), color="black")
+    d2 = ImageDraw.Draw(img2)
+    d2.text((50, 50), "Nothing alike at all", fill="white")
+    p2 = tmp_path / "img2.png"
+    img2.save(str(p2))
+
+    assert _is_duplicate_image(p1) is False
+    assert _is_duplicate_image(p2) is False
+
+
+def test_ocr_image_skips_duplicate(tmp_path, monkeypatch):
+    """Second identical image is skipped with image-dup status."""
+    _reset_dedup()
+    from PIL import Image, ImageDraw
+
+    def make_img():
+        img = Image.new("RGB", (200, 200), color="white")
+        d = ImageDraw.Draw(img)
+        d.text((10, 10), "Duplicate test", fill="black")
+        return img
+
+    def fake_ocr(p):
+        return "real text from OCR with enough words to be meaningful content here"
+    monkeypatch.setattr(ocr, "_tesseract", fake_ocr)
+
+    p1 = tmp_path / "first.png"
+    p2 = tmp_path / "second.png"
+    make_img().save(str(p1))
+    make_img().save(str(p2))
+
+    vc = {"enabled": False, "dedup_images": True}
+    ok1, _, method1, _ = ocr.ocr_image(p1, tmp_path / "first.png.md", vc)
+    ok2, _, method2, note2 = ocr.ocr_image(p2, tmp_path / "second.png.md", vc)
+
+    assert ok1 and method1 == "tesseract"  # first gets processed
+    assert ok2 and method2 == "image-dup"   # second skipped
+    assert "duplicate" in note2

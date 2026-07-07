@@ -25,7 +25,7 @@ import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from pipeline.prepare_ocr import IMAGE_EXTS, ocr_image, ocr_pdf
+from pipeline.prepare_ocr import IMAGE_EXTS, ocr_image, ocr_pdf, _reset_dedup
 from pipeline.prepare_audio import AUDIO_EXTS, convert_audio, get_whisper_model
 from pipeline.prepare_vision import is_garbled
 
@@ -527,6 +527,8 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
     src_root = Path(source_root)
     out_root = Path(corpus_root)
     out_root.mkdir(parents=True, exist_ok=True)
+
+    _reset_dedup()  # fresh dedup state for this run
 
     files = [f for f in sorted(src_root.rglob("*"))
              if f.is_file()

@@ -16,11 +16,53 @@ import sys
 import tempfile
 from pathlib import Path
 
+import threading as _threading
+
 from pipeline.prepare_vision import (
     needs_vision, vision_extract, PROVENANCE_BANNER,
 )
 
 TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
+
+# Per-run dedup state — cleared by run_prepare_1
+_seen_hashes: set[int] = set()
+_dedup_lock = _threading.Lock()
+
+
+def _reset_dedup() -> None:
+    """Clear dedup state for a fresh run."""
+    global _seen_hashes
+    with _dedup_lock:
+        _seen_hashes = set()
+
+
+def _is_tiny_image(filepath: Path, min_dim: int) -> bool:
+    """True if image is <= min_dim in both dimensions."""
+    try:
+        from PIL import Image
+        with Image.open(filepath) as img:
+            w, h = img.size
+            return w <= min_dim and h <= min_dim
+    except Exception:
+        return False
+
+
+def _is_duplicate_image(filepath: Path) -> bool:
+    """True if a perceptually similar image has already been processed."""
+    try:
+        from imagehash import phash
+        from PIL import Image
+        with Image.open(filepath) as img:
+            h = phash(img)
+        with _dedup_lock:
+            for seen in _seen_hashes:
+                if abs(int(h) - int(seen)) <= 4:
+                    return True
+            _seen_hashes.add(int(h))
+        return False
+    except Exception:
+        # Can't open or hash — don't block processing
+        return False
 
 # Image formats we handle. tesseract (via Leptonica) reads png/jpg/tiff
 # directly; gif/bmp/webp are normalized to PNG with Pillow first.
@@ -79,6 +121,21 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
     """
     inpath = Path(inpath)
     model = vision_cfg.get("model", "gpt-4o-mini")
+
+    # Skip tiny images (email signatures, social icons, etc.)
+    min_dim = vision_cfg.get("min_image_dim", 125)
+    if min_dim > 0 and _is_tiny_image(inpath, min_dim):
+        rel = os.path.relpath(inpath, md_path.parent)
+        content = f"![{inpath.name}]({rel})\n\n*Image skipped — below min_image_dim ({min_dim}px).*\n"
+        md_path.write_text(content, encoding="utf-8")
+        return True, len(content), "image-tiny", f"skipped — <= {min_dim}x{min_dim}px"
+
+    # Skip duplicate images (same attachment forwarded multiple times)
+    if vision_cfg.get("dedup_images", True) and _is_duplicate_image(inpath):
+        rel = os.path.relpath(inpath, md_path.parent)
+        content = f"![{inpath.name}]({rel})\n\n*Image skipped — duplicate of previously processed image.*\n"
+        md_path.write_text(content, encoding="utf-8")
+        return True, len(content), "image-dup", "skipped — duplicate"
 
     if not vision_cfg.get("ocr_images", True):
         rel = os.path.relpath(inpath, md_path.parent)

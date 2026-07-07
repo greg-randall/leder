@@ -39,6 +39,8 @@ prepare:
     language: "en"        # for spellcheck-based garbled-text detection
     min_words: 20
     max_pages_per_doc: 30
+    min_image_dim: 125    # skip OCR/vision on images <= this many pixels
+    dedup_images: true     # skip perceptual duplicate images
   audio:
     enabled: true
     model: "medium"      # faster-whisper model size (tiny/base/small/medium/large-v3)

@@ -36,8 +36,11 @@ prepare:
   vision_fallback:
     enabled: true
     model: "gpt-4o-mini"
+    language: "en"
     min_words: 20
     max_pages_per_doc: 30
+    min_image_dim: 125
+    dedup_images: true
   audio:
     enabled: true
     model: "medium"      # faster-whisper model size (tiny/base/small/medium/large-v3)

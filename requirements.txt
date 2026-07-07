@@ -11,3 +11,4 @@ faster-whisper>=1.0.0
 trafilatura
 pyspellchecker
 extract-msg
+imagehash

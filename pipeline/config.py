@@ -45,6 +45,7 @@ class StageCConfig:
 class VisionFallbackConfig:
     enabled: bool = True
     model: str = "gpt-4o-mini"
+    language: str = "en"
     min_words: int = 20
     max_pages_per_doc: int = 30
 

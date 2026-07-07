@@ -571,6 +571,41 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)
+
+    # Second pass: process any new files extracted from email attachments
+    new_files = [f for f in sorted(src_root.rglob("*"))
+                 if f.is_file()
+                 and f.suffix.lower() != ".md"
+                 and f.name != ".gitkeep"
+                 and not f.name.startswith("._")
+                 and f not in futmap.values()]
+    if new_files:
+        random.shuffle(new_files)
+        print(f"\nprepare-1 pass 2: {len(new_files)} extracted file(s) from "
+              f"email attachments", file=sys.stderr)
+        with tqdm(total=len(new_files), desc="prepare-1 pass 2", unit="file") as pbar2:
+            with ThreadPoolExecutor(max_workers=workers) as pool2:
+                futmap2 = {}
+                for f in new_files:
+                    fut = pool2.submit(process_file, f, src_root, out_root,
+                                       vision_cfg, whisper_model, force, md_client)
+                    futmap2[fut] = f
+                for future in as_completed(futmap2):
+                    _, status, detail, note = future.result()
+                    rel = str(Path(futmap2[future]).relative_to(src_root))
+                    with results_lock:
+                        if status == "ok":
+                            ok_ct += 1
+                            if note is not None:
+                                needs_review.append((rel, note))
+                        elif status == "skip":
+                            skip_ct += 1
+                        else:
+                            failures.append((rel, detail))
+                        pbar2.update(1)
+
+    _write_unconverted(out_root, failures)
+    _write_needs_review(out_root, needs_review)
     _print_banner(failures)
     print(f"prepare-1 done: {ok_ct} converted, {skip_ct} skipped, "
           f"{len(failures)} failed, {len(needs_review)} recovered-via-fallback")

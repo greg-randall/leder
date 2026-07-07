@@ -213,7 +213,7 @@ def convert_eml(inpath: Path, md_path: Path):
         date = msg.get("Date", "(unknown)")
         subject = msg.get("Subject", "(unknown)")
 
-        attach_dir = md_path.parent / (inpath.stem + "_attachments")
+        attach_dir = md_path.parent / (md_path.stem + "_attachments")
         count, body, notes = _extract_attachments(msg, attach_dir)
 
         md = (f"# {subject}\n\n**From:** {sender}\n**To:** {to}\n"
@@ -245,7 +245,7 @@ def convert_msg(inpath: Path, md_path: Path):
         subject = msg.subject or "(unknown)"
         body = msg.body or "(no text body)"
 
-        attach_dir = md_path.parent / (inpath.stem + "_attachments")
+        attach_dir = md_path.parent / (md_path.stem + "_attachments")
         count = 0
         for i, att in enumerate(msg.attachments, 1):
             try:

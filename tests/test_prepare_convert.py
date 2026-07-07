@@ -285,3 +285,74 @@ def test_sibling_formats_produce_unique_md_files(tmp_path, monkeypatch):
 
     # The old collision-prone name should NOT exist.
     assert not (corpus / "letter.md").exists()
+
+
+# ── Email attachment extraction ─────────────────────────────────
+
+def test_eml_extracts_attachments(tmp_path):
+    """Real multipart .eml with a PDF attachment → attachment extracted."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.application import MIMEApplication
+
+    # Build a multipart email with body + PDF attachment
+    msg = MIMEMultipart()
+    msg["From"] = "sender@test.com"
+    msg["To"] = "recipient@test.com"
+    msg["Subject"] = "Test with attachment"
+    msg["Date"] = "Mon, 1 Jan 2024 00:00:00 +0000"
+    msg.attach(MIMEText("Email body text here."))
+    pdf_bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\nxref\n0 1\ntrailer\n<<>>\n%%EOF"
+    att = MIMEApplication(pdf_bytes, _subtype="pdf")
+    att.add_header("Content-Disposition", "attachment", filename="report.pdf")
+    msg.attach(att)
+
+    src = tmp_path / "test.eml"
+    src.write_bytes(msg.as_bytes())
+
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "test.eml.md")
+    assert ok and method == "eml-extract"
+    assert note == "1 attachment(s) extracted"
+
+    # Check attachment was extracted
+    attach_dir = tmp_path / "test.eml_attachments"
+    assert attach_dir.is_dir()
+    extracted = list(attach_dir.iterdir())
+    assert len(extracted) == 1
+    assert extracted[0].name == "001_report.pdf"
+    assert extracted[0].read_bytes() == pdf_bytes
+
+    # Check email body
+    md = (tmp_path / "test.eml.md").read_text()
+    assert "Email body text here" in md
+    assert "1 file(s) extracted" in md
+
+
+def test_eml_extracts_nested_email(tmp_path):
+    """Multipart .eml with a forwarded email → nested .eml saved."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.message import MIMEMessage
+
+    # Build nested email
+    inner = MIMEText("Forwarded message body.")
+    inner["From"] = "nested@test.com"
+    inner["Subject"] = "Forwarded: Important"
+
+    outer = MIMEMultipart()
+    outer["From"] = "sender@test.com"
+    outer["Subject"] = "Fwd: Important"
+    outer.attach(MIMEText("See below."))
+    outer.attach(MIMEMessage(inner))
+
+    src = tmp_path / "fwd.eml"
+    src.write_bytes(outer.as_bytes())
+
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "fwd.eml.md")
+    assert ok
+    assert note == "1 attachment(s) extracted"
+
+    attach_dir = tmp_path / "fwd.eml_attachments"
+    nested_files = list(attach_dir.glob("*.eml"))
+    assert len(nested_files) == 1
+    assert "Forwarded" in nested_files[0].name

@@ -32,6 +32,7 @@ from pipeline.prepare_vision import is_garbled
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
 MIN_CONTENT_BYTES = 100
+FILE_TIMEOUT = 300  # per-file timeout in seconds
 
 # ── Optional: MarkItDown ──────────────────────────────────────
 
@@ -562,8 +563,12 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                                   vision_cfg, whisper_model, force, md_client)
                 futmap[fut] = f
             for future in as_completed(futmap):
-                _, status, detail, note = future.result()
-                rel = str(Path(futmap[future]).relative_to(src_root))
+                f = futmap[future]
+                rel = str(Path(f).relative_to(src_root))
+                try:
+                    _, status, detail, note = future.result(timeout=FILE_TIMEOUT)
+                except TimeoutError:
+                    status, detail, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
                 with results_lock:
                     if status == "ok":
                         ok_ct += 1
@@ -597,8 +602,12 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                                        vision_cfg, whisper_model, force, md_client)
                     futmap2[fut] = f
                 for future in as_completed(futmap2):
-                    _, status, detail, note = future.result()
-                    rel = str(Path(futmap2[future]).relative_to(src_root))
+                    f2 = futmap2[future]
+                    rel = str(Path(f2).relative_to(src_root))
+                    try:
+                        _, status, detail, note = future.result(timeout=FILE_TIMEOUT)
+                    except TimeoutError:
+                        status, detail, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
                     with results_lock:
                         if status == "ok":
                             ok_ct += 1

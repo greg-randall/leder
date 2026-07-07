@@ -31,7 +31,7 @@ playbooks:
   active: ["fact_check"]
 
 prepare:
-  source_root: "source/"
+  source_root: "corpus/"
   convert_workers: 8
   ocr_images: true
   vision_fallback:

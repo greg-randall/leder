@@ -818,7 +818,7 @@ def run_stage_b(
     """
     # Compute web_cache_dir once, before the two code paths diverge.
     if not web_cache_dir:
-        web_cache_dir = os.path.join(os.path.dirname(output_path) or ".", "web_cache")
+        web_cache_dir = os.path.join(corpus_root, "web_cache")
 
     # Pre-flight: corpus must have summaries unless --force-run
     if not force_run:

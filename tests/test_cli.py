@@ -188,7 +188,7 @@ def test_load_config_valid(tmp_path):
         yaml.dump(
             {
                 "article": {"path": "article.md"},
-                "corpus": {"root": "source-docs-and-summaries/"},
+                "corpus": {"root": "corpus/"},
                 "output": {"dir": ".", "web_cache_dir": "web_cache/"},
                 "stage_a": {"model": "deepseek-v4-pro", "quality_gate": True},
                 "stage_b": {"model": "deepseek-v4-flash", "concurrency": 32, "timeout": 600, "max_turns": 60},
@@ -200,7 +200,7 @@ def test_load_config_valid(tmp_path):
 
     assert isinstance(config, PipelineConfig)
     assert config.article.path == "article.md"
-    assert config.corpus.root == "source-docs-and-summaries/"
+    assert config.corpus.root == "corpus/"
     assert config.stage_b.concurrency == 32
 
 

@@ -2,7 +2,7 @@
 docs/
 *.7z
 laws/
-source-docs-and-summaries
+local-files/
 sample-code/
 debug/
 __pycache__/
@@ -10,6 +10,10 @@ __pycache__/
 ~$*
 .pytest_cache/
 web_cache/
+
+# Corpus directory — ships empty, users add their own source files
+/corpus/*
+!/corpus/.gitkeep
 
 # Generated output — claims, sourced articles, exports
 /claims*.json

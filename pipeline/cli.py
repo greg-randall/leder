@@ -155,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         "stage-e", parents=[common], help="Generate .docx with comments from sourced article"
     )
     e_parser.add_argument("--article", default="article-sourced.md")
-    e_parser.add_argument("--claims", default="claims-full-article-verified.json")
+    e_parser.add_argument("--claims", default="findings.json")
     e_parser.add_argument("--output", default="article-sourced.docx")
     e_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
@@ -460,6 +460,11 @@ def main() -> None:
 
         from pipeline.stage_c_rebuild import run_stage_c
 
+        if not os.path.exists(args_findings):
+            print(f"ERROR: {args_findings} not found. Run stage-b first to generate it.",
+                  file=sys.stderr)
+            sys.exit(1)
+
         output_path = _resolve_output_path(output_path)
         run_stage_c(
             article_path=article_path,
@@ -478,6 +483,10 @@ def main() -> None:
         output_path = config.resolve_path(output_path) if config else output_path
 
         from pipeline.stage_d_html import run_stage_d
+        if not os.path.exists(input_path):
+            print(f"ERROR: {input_path} not found. Run stage-c first to generate it.",
+                  file=sys.stderr)
+            sys.exit(1)
         run_stage_d(input_path, output_path)
         print(f"Stage D complete: {output_path}")
 
@@ -485,10 +494,16 @@ def main() -> None:
     if args.command in ("all", "stage-e"):
         article_path = getattr(args, "article", "article-sourced.md")
         article_path = config.resolve_path(article_path) if config else article_path
-        claims_path = getattr(args, "claims", "claims-full-article-verified.json")
+        claims_path = getattr(args, "claims", "findings.json")
         claims_path = config.resolve_path(claims_path) if config else claims_path
         output_path = getattr(args, "output", "article-sourced.docx")
         output_path = config.resolve_path(output_path) if config else output_path
+
+        for fpath, stage in [(article_path, "stage-c"), (claims_path, "stage-b")]:
+            if not os.path.exists(fpath):
+                print(f"ERROR: {fpath} not found. Run {stage} first to generate it.",
+                      file=sys.stderr)
+                sys.exit(1)
 
         from pipeline.stage_e_docx import run_stage_e
         run_stage_e(article_path, claims_path, output_path)

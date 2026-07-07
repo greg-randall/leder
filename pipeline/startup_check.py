@@ -1,10 +1,12 @@
 """Validate that all required external tools are available before pipeline runs."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import subprocess
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -194,8 +196,29 @@ def run_startup_checks() -> list[CheckResult]:
     return results
 
 
-def validate_startup() -> bool:
-    """Run checks and print results. Returns True if all FATAL checks passed."""
+CACHE_FILE = ".prereq-cache.json"
+CACHE_TTL = 86400  # 24 hours
+
+
+def validate_startup(force: bool = False) -> bool:
+    """Run checks and print results. Returns True if all FATAL checks passed.
+
+    Caches a successful result for 24 hours. Pass force=True to re-check.
+    """
+    # Check cache
+    if not force:
+        cache_path = Path(CACHE_FILE)
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text())
+                if time.time() - cache.get("timestamp", 0) < CACHE_TTL:
+                    age = int((time.time() - cache["timestamp"]) / 3600) or 1
+                    print(f"Prerequisites OK (cached from ~{age}h ago — "
+                          f"use --recheck to re-validate)\n")
+                    return True
+            except Exception:
+                pass
+
     print("Checking prerequisites...\n")
     results = run_startup_checks()
     fatal_failures = []
@@ -220,6 +243,11 @@ def validate_startup() -> bool:
         print(f"{len(all_failures)} non-fatal tool(s) missing. Web fetch will skip unavailable tiers.")
     else:
         print("All checks passed.")
+    # Cache successful result
+    try:
+        Path(CACHE_FILE).write_text(json.dumps({"timestamp": time.time()}))
+    except Exception:
+        pass
     return True
 
 

@@ -30,3 +30,4 @@ web_cache/
 !/.gitignore
 !/README.md
 ~$*
+.prereq-cache.json

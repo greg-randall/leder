@@ -87,6 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--skip-startup-check", action="store_true",
                         help="Skip prerequisite tool validation")
+    common.add_argument("--recheck", action="store_true",
+                        help="Force re-check of prerequisites (ignore cache)")
 
     all_parser = subparsers.add_parser("all", parents=[common],
                                         help="Run the full pipeline")
@@ -277,7 +279,7 @@ def main() -> None:
     if args.command == "check":
         from pipeline.startup_check import validate_startup
 
-        ok = validate_startup()
+        ok = validate_startup(force=getattr(args, "recheck", False))
         sys.exit(0 if ok else 1)
 
     # --- Load config for all other commands ---
@@ -289,7 +291,7 @@ def main() -> None:
     # --- Startup check for all commands (unless skipped) ---
     if not getattr(args, "skip_startup_check", False):
         from pipeline.startup_check import validate_startup
-        if not validate_startup():
+        if not validate_startup(force=getattr(args, "recheck", False)):
             sys.exit(1)
 
     # --- Corpus prep (prepare-1/2/3 — NOT part of 'all') ---

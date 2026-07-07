@@ -223,7 +223,7 @@ def test_main_check_calls_validate(monkeypatch):
     """'check' subcommand calls validate_startup and exits accordingly."""
     called = False
 
-    def mock_validate():
+    def mock_validate(force=False):
         nonlocal called
         called = True
         return True
@@ -241,7 +241,7 @@ def test_main_check_calls_validate(monkeypatch):
 
 def test_main_check_failure(monkeypatch):
     """When validate_startup returns False, main exits with code 1."""
-    monkeypatch.setattr("pipeline.startup_check.validate_startup", lambda: False)
+    monkeypatch.setattr("pipeline.startup_check.validate_startup", lambda force=False: False)
     monkeypatch.setattr("sys.argv", ["pipeline.cli", "check"])
 
     from pipeline.cli import main

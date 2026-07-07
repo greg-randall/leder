@@ -171,7 +171,8 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> [--debug]",
+        print("Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> "
+              "[--debug] [--cache-dir <dir>]",
               file=sys.stderr)
         sys.exit(1)
 
@@ -179,7 +180,14 @@ def main():
     target_id = sys.argv[2]
     debug = "--debug" in sys.argv
 
-    cache_dir = Path("web_cache") / target_id
+    # --cache-dir <dir> overrides the default relative path
+    cache_root = "web_cache"
+    if "--cache-dir" in sys.argv:
+        idx = sys.argv.index("--cache-dir")
+        if idx + 1 < len(sys.argv):
+            cache_root = sys.argv[idx + 1]
+
+    cache_dir = Path(cache_root) / target_id
     cache_dir.mkdir(parents=True, exist_ok=True)
     out_path = cache_dir / "page.md"
     debug_dir = cache_dir if debug else None

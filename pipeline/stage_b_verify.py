@@ -96,13 +96,15 @@ elsewhere on the filesystem.
    evidence lives. Cite this file as `source_path`.
    Use the Read tool to open the file.
 
-5. WEB -- when the claim involves information not in the local corpus.
+5. WEB — when the claim involves information not in the local corpus.
    Use WebSearch to find relevant pages, then fetch the best match.
    Use the fetch_page tool to save the raw content:
-     python3 pipeline/tools/fetch_page.py <url> <claim_id>
+     python3 pipeline/tools/fetch_page.py <url> <claim_id> --cache-dir web_cache
    This saves the FULL raw page verbatim to web_cache/<claim_id>/page.md
    and prints it so you can read it. Do NOT summarize or truncate — a
    future agent needs the original to verify against.
+   IMPORTANT: Before fetching, check web_cache/_FOLDER_SUMMARY.md — a
+   previous agent may have already cached the page you need.
 
 ## EVALUATION
 
@@ -302,8 +304,10 @@ async def _verify_claim_async(
         f"Claim: {claim.claim_text}\n\n"
         f"Claim type: {claim.claim_type}\n\n"
         f"Claim ID: {claim.claim_id}\n\n"
-        f"If you fetch any web pages, save them to "
-        f"web_cache/{claim.claim_id}/page.md for the audit trail.\n\n"
+        f"If you fetch any web pages, run: "
+        f"python3 pipeline/tools/fetch_page.py <url> {claim.claim_id} --cache-dir web_cache\n"
+        f"This saves to web_cache/{claim.claim_id}/page.md for the audit trail.\n"
+        f"Before fetching, check web_cache/_FOLDER_SUMMARY.md — the page may already be cached.\n\n"
         f"Output fields: verdict, source_proximity, source_path, "
         f"source_url, rationale, human_review, confidence."
     )
@@ -475,7 +479,7 @@ def _is_summary_path(path: str | None) -> bool:
 
 
 def _summarize_web_cache(web_cache_dir: str) -> None:
-    """Create minimal _summary.md for each web_cache page so tiered search
+    """Create minimal page_summary.md for each web_cache page so tiered search
     finds them on re-runs. Free — takes the first paragraph of each page
     as its summary, no LLM calls."""
     wc = _Path(web_cache_dir)
@@ -486,7 +490,7 @@ def _summarize_web_cache(web_cache_dir: str) -> None:
         return
     count = 0
     for page in pages:
-        summary = page.parent / "_summary.md"
+        summary = page.parent / "page_summary.md"
         if summary.exists() and summary.stat().st_size > 10:
             continue
         text = page.read_text(encoding="utf-8", errors="replace").strip()
@@ -498,8 +502,40 @@ def _summarize_web_cache(web_cache_dir: str) -> None:
             encoding="utf-8")
         count += 1
     if count:
-        print(f"  Web cache: wrote {count} _summary.md files for tiered search",
+        print(f"  Web cache: wrote {count} page_summary.md files for tiered search",
               file=sys.stderr)
+    _write_web_cache_folder_summary(web_cache_dir)
+
+
+def _write_web_cache_folder_summary(web_cache_dir: str) -> None:
+    """Generate web_cache/_FOLDER_SUMMARY.md from all page_summary.md files.
+
+    This puts web_cache on the tiered search map so agents can discover
+    previously cached pages when verifying new claims.
+    """
+    wc = _Path(web_cache_dir)
+    if not wc.is_dir():
+        return
+    summaries = sorted(wc.glob("*/page_summary.md"))
+    if not summaries:
+        return
+    lines = [
+        "# Web Cache — Previously Fetched Pages\n",
+        f"**{len(summaries)} cached page(s)** from prior verification runs.\n",
+        "Each entry below is a page fetched by a fact-checking agent. "
+        "Check here first before re-fetching a URL.\n",
+    ]
+    for s in summaries:
+        claim_dir = s.parent.name
+        text = s.read_text(encoding="utf-8", errors="replace").strip()
+        # Extract just the first paragraph as a preview
+        preview = text.split("\n\n")[0] if text else "(empty)"
+        lines.append(f"\n### {claim_dir}\n")
+        lines.append(f"{preview}\n")
+        lines.append(f"[open cached page]({claim_dir}/page.md)\n")
+    (wc / "_FOLDER_SUMMARY.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"  Web cache: wrote _FOLDER_SUMMARY.md ({len(summaries)} entries)",
+          file=sys.stderr)
 
 
 def _backfill_web_cache(claims: list[Claim], web_cache_dir: str) -> None:
@@ -714,6 +750,41 @@ async def _verify_all(
 
 # ---- public entry point ----
 
+def _check_corpus_ready(corpus_root: str, web_cache_dir: str) -> list[str]:
+    """Verify the corpus and web_cache have summaries before Stage B runs.
+
+    Agents rely on the tiered search hierarchy (_FOLDER_SUMMARY.md →
+    _summary.md → original). Without summaries, they waste tokens blindly
+    grepping or miss documents entirely.
+
+    Returns a list of human-readable issue strings. Empty list = ready.
+    """
+    issues: list[str] = []
+    cr = _Path(corpus_root)
+
+    # Check 1: Main corpus has at least one folder summary or overview
+    has_overview = (cr / "CORPUS_OVERVIEW.md").exists()
+    has_folder_summaries = any(cr.rglob("_FOLDER_SUMMARY.md"))
+    if not has_overview and not has_folder_summaries:
+        issues.append(
+            "Corpus has no _FOLDER_SUMMARY.md files and no CORPUS_OVERVIEW.md. "
+            "Run:  python3 -m pipeline.cli prepare-2 && python3 -m pipeline.cli prepare-3"
+        )
+
+    # Check 2: web_cache has pages but no folder summary → agents can't find them
+    wc = _Path(web_cache_dir)
+    if wc.is_dir():
+        has_cached_pages = any(wc.glob("*/page.md"))
+        has_wc_folder = (wc / "_FOLDER_SUMMARY.md").exists()
+        if has_cached_pages and not has_wc_folder:
+            issues.append(
+                "Web cache has cached pages but no _FOLDER_SUMMARY.md. "
+                "Re-run stage-b (which generates it automatically) or run prepare-3."
+            )
+
+    return issues
+
+
 def run_stage_b(
     claims_path: str = "",
     output_path: str = "",
@@ -728,6 +799,7 @@ def run_stage_b(
     playbook_dir: str = "pipelines/",
     pricing: dict | None = None,
     debug_ids: list[int] | None = None,
+    force_run: bool = False,
 ) -> ClaimsDocument | FindingsDocument:
     """Load claims.json, verify each claim, write enriched claims.json.
 
@@ -742,7 +814,24 @@ def run_stage_b(
                      output to debug/ directory alongside output_path.
         targets_path: Path to targets.json from new Stage A (playbook-driven).
         playbook_dir: Directory containing playbook YAML files.
+        force_run: Skip the corpus readiness check.
     """
+    # Compute web_cache_dir once, before the two code paths diverge.
+    if not web_cache_dir:
+        web_cache_dir = os.path.join(os.path.dirname(output_path) or ".", "web_cache")
+
+    # Pre-flight: corpus must have summaries unless --force-run
+    if not force_run:
+        issues = _check_corpus_ready(corpus_root, web_cache_dir)
+        if issues:
+            print("\nERROR: Corpus not ready for Stage B verification.\n",
+                  file=sys.stderr)
+            for issue in issues:
+                print(f"  • {issue}", file=sys.stderr)
+            print("\nRe-run with --force-run to skip this check.\n",
+                  file=sys.stderr)
+            sys.exit(1)
+
     if targets_path:
         import json as _json
         from pipeline.finding import Finding, FindingsDocument
@@ -890,7 +979,6 @@ def run_stage_b(
         print(f"Debug mode: {total} claims, logs → {debug_dir}/", file=sys.stderr)
 
     # Ensure web_cache exists for agents to save fetched pages
-    web_cache_dir = os.path.join(os.path.dirname(output_path) or ".", "web_cache")
     os.makedirs(web_cache_dir, exist_ok=True)
 
     model_name = os.environ.get("ANTHROPIC_MODEL", "unknown")

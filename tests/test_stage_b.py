@@ -6,6 +6,9 @@ from pipeline.stage_b_verify import (
     agent_failure_result,
     parse_verdict,
     _populate_claim_from_dict,
+    _summarize_web_cache,
+    _write_web_cache_folder_summary,
+    _check_corpus_ready,
     VerdictOutput,
 )
 from pipeline.models import Claim
@@ -230,3 +233,285 @@ def test_get_playbook_caches(tmp_path):
     pb = _get_playbook("tc", str(pd))
     assert pb.name == "TC" and pb.allowed_tools == ["Read", "WebSearch"]
     assert _get_playbook("tc", str(pd)) is pb  # cached
+
+
+# ── web_cache summarization ──────────────────────────────────────
+
+def test_summarize_web_cache_writes_page_summary_md(tmp_path):
+    """_summarize_web_cache writes page_summary.md, not _summary.md."""
+    wc = tmp_path / "web_cache"
+    claim_dir = wc / "claim-001"
+    claim_dir.mkdir(parents=True)
+    (claim_dir / "page.md").write_text(
+        "First paragraph of fetched page.\n\nSecond paragraph with more detail.\n\nThird.",
+        encoding="utf-8",
+    )
+
+    _summarize_web_cache(str(wc))
+
+    # Should write page_summary.md (rollup-friendly name)
+    ps = claim_dir / "page_summary.md"
+    assert ps.exists(), f"Expected {ps} to exist"
+    content = ps.read_text()
+    assert "First paragraph" in content
+    assert "Web-cached page" in content
+
+    # Should NOT write the old _summary.md name
+    old = claim_dir / "_summary.md"
+    assert not old.exists(), f"{old} should NOT exist (old naming convention)"
+
+
+def test_write_web_cache_folder_summary(tmp_path):
+    """_write_web_cache_folder_summary generates _FOLDER_SUMMARY.md from page_summary.md files."""
+    wc = tmp_path / "web_cache"
+    for cid in ("claim-a", "claim-b"):
+        d = wc / cid
+        d.mkdir(parents=True)
+        (d / "page_summary.md").write_text(
+            f"**Summary:** Web-cached page. Preview for {cid}.\n\n"
+            f"**Facts:** *(see page.md for full content)*\n",
+            encoding="utf-8",
+        )
+
+    _write_web_cache_folder_summary(str(wc))
+
+    fs = wc / "_FOLDER_SUMMARY.md"
+    assert fs.exists(), f"Expected {fs} to exist"
+    content = fs.read_text()
+    assert "Web Cache" in content
+    assert "2 cached page" in content
+    assert "claim-a" in content
+    assert "claim-b" in content
+    assert "[open cached page](claim-a/page.md)" in content
+
+
+# ── Corpus readiness check ───────────────────────────────────────
+
+def test_check_corpus_ready_passes_when_prepared(tmp_path):
+    """Corpus with _FOLDER_SUMMARY.md and web_cache with _FOLDER_SUMMARY.md → no issues."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "_FOLDER_SUMMARY.md").write_text("folder summary")
+    # Also create a web_cache with folder summary
+    wc = tmp_path / "web_cache"
+    wc.mkdir()
+    (wc / "_FOLDER_SUMMARY.md").write_text("wc summary")
+
+    issues = _check_corpus_ready(str(cr), str(wc))
+    assert issues == [], f"Expected no issues, got: {issues}"
+
+
+def test_check_corpus_ready_passes_with_overview(tmp_path):
+    """CORPUS_OVERVIEW.md alone satisfies the check (no _FOLDER_SUMMARY needed)."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "CORPUS_OVERVIEW.md").write_text("overview")
+
+    issues = _check_corpus_ready(str(cr), "")
+    assert issues == []
+
+
+def test_check_corpus_ready_blocks_when_no_summaries(tmp_path):
+    """Empty corpus without summaries → returns an issue."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+
+    issues = _check_corpus_ready(str(cr), "")
+    assert len(issues) == 1
+    assert "_folder_summary.md" in issues[0].lower()
+    assert "prepare-2" in issues[0]
+    assert "prepare-3" in issues[0]
+
+
+def test_check_corpus_ready_blocks_when_web_cache_has_pages_but_no_folder_summary(tmp_path):
+    """web_cache with cached pages but no _FOLDER_SUMMARY.md → returns an issue."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "_FOLDER_SUMMARY.md").write_text("folder summary")  # corpus is fine
+
+    wc = tmp_path / "web_cache"
+    wc.mkdir()
+    (wc / "claim-x").mkdir()
+    (wc / "claim-x" / "page.md").write_text("cached content")
+
+    issues = _check_corpus_ready(str(cr), str(wc))
+    assert len(issues) == 1
+    assert "web cache" in issues[0].lower()
+    assert "_FOLDER_SUMMARY.md" in issues[0]
+
+
+def test_check_corpus_ready_web_cache_empty_ok(tmp_path):
+    """Empty web_cache with no pages is fine — no issue."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "_FOLDER_SUMMARY.md").write_text("folder summary")
+    wc = tmp_path / "web_cache"
+    wc.mkdir()  # exists but empty — no page.md files
+
+    issues = _check_corpus_ready(str(cr), str(wc))
+    assert issues == []
+
+
+# ── _summarize_web_cache edge cases ──────────────────────────────
+
+def test_summarize_web_cache_noop_on_missing_dir(tmp_path):
+    """Non-existent dir → no-op, no crash."""
+    _summarize_web_cache(str(tmp_path / "nonexistent"))  # should not raise
+
+
+def test_summarize_web_cache_noop_when_no_page_md(tmp_path):
+    """web_cache exists but has no */page.md files → no-op."""
+    wc = tmp_path / "web_cache"
+    wc.mkdir()
+    (wc / "empty-dir").mkdir()
+    _summarize_web_cache(str(wc))
+    assert not list(wc.rglob("page_summary.md"))
+    assert not list(wc.rglob("_FOLDER_SUMMARY.md"))
+
+
+def test_summarize_web_cache_handles_empty_page_md(tmp_path):
+    """page.md with empty content → writes (empty) placeholder."""
+    wc = tmp_path / "web_cache"
+    d = wc / "claim-x"
+    d.mkdir(parents=True)
+    (d / "page.md").write_text("", encoding="utf-8")
+
+    _summarize_web_cache(str(wc))
+
+    ps = d / "page_summary.md"
+    assert ps.exists()
+    content = ps.read_text()
+    assert "(empty)" in content
+
+
+def test_summarize_web_cache_skips_existing_summary(tmp_path):
+    """Already-existing page_summary.md > 10 bytes → skipped, not overwritten."""
+    wc = tmp_path / "web_cache"
+    d = wc / "claim-x"
+    d.mkdir(parents=True)
+    (d / "page.md").write_text("New first paragraph.\n\nMore text.", encoding="utf-8")
+    (d / "page_summary.md").write_text("EXISTING SUMMARY THAT SHOULD SURVIVE", encoding="utf-8")
+
+    _summarize_web_cache(str(wc))
+
+    ps = d / "page_summary.md"
+    assert "EXISTING SUMMARY THAT SHOULD SURVIVE" in ps.read_text()
+    assert "New first paragraph" not in ps.read_text()
+
+
+def test_summarize_web_cache_truncates_long_first_paragraph(tmp_path):
+    """First paragraph > 300 chars → truncated."""
+    wc = tmp_path / "web_cache"
+    d = wc / "claim-x"
+    d.mkdir(parents=True)
+    long_para = "A" * 500
+    (d / "page.md").write_text(long_para + "\n\nSecond paragraph.", encoding="utf-8")
+
+    _summarize_web_cache(str(wc))
+
+    ps = d / "page_summary.md"
+    content = ps.read_text()
+    assert "A" * 300 in content
+    assert "A" * 301 not in content
+
+
+def test_summarize_web_cache_many_claim_dirs(tmp_path):
+    """All claim dirs with page.md get page_summary.md."""
+    wc = tmp_path / "web_cache"
+    for i in range(20):
+        d = wc / f"claim-{i:03d}"
+        d.mkdir(parents=True)
+        (d / "page.md").write_text(f"Content for claim {i}.\n\nMore.", encoding="utf-8")
+
+    _summarize_web_cache(str(wc))
+
+    count = len(list(wc.glob("*/page_summary.md")))
+    assert count == 20
+
+
+def test_summarize_web_cache_single_paragraph_page(tmp_path):
+    """page.md with no double-newline → entire text is the first paragraph."""
+    wc = tmp_path / "web_cache"
+    d = wc / "claim-x"
+    d.mkdir(parents=True)
+    (d / "page.md").write_text("Single line. Still single line. No paragraph break.", encoding="utf-8")
+
+    _summarize_web_cache(str(wc))
+
+    ps = d / "page_summary.md"
+    content = ps.read_text()
+    assert "Single line. Still single line." in content
+
+
+# ── _write_web_cache_folder_summary edge cases ────────────────────
+
+def test_write_web_cache_folder_summary_noop_on_missing_dir(tmp_path):
+    """Non-existent dir → no-op, no crash."""
+    _write_web_cache_folder_summary(str(tmp_path / "nonexistent"))
+
+
+def test_write_web_cache_folder_summary_noop_when_no_summaries(tmp_path):
+    """web_cache exists but no page_summary.md files → no-op."""
+    wc = tmp_path / "web_cache"
+    wc.mkdir()
+    (wc / "empty-dir").mkdir()
+    _write_web_cache_folder_summary(str(wc))
+    assert not (wc / "_FOLDER_SUMMARY.md").exists()
+
+
+# ── _check_corpus_ready edge cases ───────────────────────────────
+
+def test_check_corpus_ready_both_broken(tmp_path):
+    """Corpus missing summaries AND web_cache has orphaned pages → 2 issues."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()  # no summaries
+    wc = tmp_path / "web_cache"
+    wc.mkdir()
+    (wc / "claim-x").mkdir()
+    (wc / "claim-x" / "page.md").write_text("cached")
+
+    issues = _check_corpus_ready(str(cr), str(wc))
+    assert len(issues) == 2
+    assert any("corpus" in i.lower() for i in issues)
+    assert any("web cache" in i.lower() for i in issues)
+
+
+def test_check_corpus_ready_web_cache_dir_does_not_exist(tmp_path):
+    """web_cache dir doesn't exist at all → no web_cache issue."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "_FOLDER_SUMMARY.md").write_text("ready")
+
+    issues = _check_corpus_ready(str(cr), str(tmp_path / "nonexistent"))
+    assert issues == []
+
+
+def test_check_corpus_ready_empty_web_cache_dir_string(tmp_path):
+    """Empty string for web_cache_dir → doesn't find pages, no issue."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "_FOLDER_SUMMARY.md").write_text("ready")
+
+    issues = _check_corpus_ready(str(cr), "")
+    assert issues == []
+
+
+def test_check_corpus_ready_finds_deep_folder_summary(tmp_path):
+    """_FOLDER_SUMMARY.md in a subdirectory is found by rglob."""
+    cr = tmp_path / "corpus"
+    cr.mkdir()
+    (cr / "subdir").mkdir()
+    (cr / "subdir" / "_FOLDER_SUMMARY.md").write_text("deep summary")
+
+    issues = _check_corpus_ready(str(cr), "")
+    assert issues == [], f"rglob should find nested _FOLDER_SUMMARY.md, got: {issues}"
+
+
+# ── Agent prompt contains web_cache instructions ──────────────────
+
+def test_agent_prompt_mentions_web_cache():
+    """System prompt tells agents to check web_cache before fetching."""
+    assert "web_cache/_FOLDER_SUMMARY.md" in AGENT_SYSTEM_PROMPT
+    assert "--cache-dir web_cache" in AGENT_SYSTEM_PROMPT
+    cache_hint = AGENT_SYSTEM_PROMPT.lower()
+    assert "already cached" in cache_hint or "already been cached" in cache_hint

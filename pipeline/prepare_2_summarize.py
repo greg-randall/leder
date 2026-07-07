@@ -65,6 +65,7 @@ def collect_targets(corpus_root: Path):
     skip_names = {
         "ALL_SUMMARIES.md", "CORPUS_OVERVIEW.md", "CORPUS_CROSSCUTTING.md",
         "CORPUS_ROLLUP.md", "UNCONVERTED.md", "NEEDS_REVIEW.md",
+        "page.md",  # web_cache raw fetched pages — summarized by stage-b instead
     }
     for p in sorted(corpus_root.rglob("*.md")):
         if p.name == "INDEX.md" or p.name.endswith("_summary.md"):

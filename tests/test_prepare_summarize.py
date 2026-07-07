@@ -50,3 +50,50 @@ def test_run_prepare_2_skips_short_files(tmp_path, monkeypatch):
     # stub/empty summary written, LLM not called
     assert (corpus / "tiny_summary.md").exists()
     assert called == []
+
+
+def test_collect_targets_skips_page_md(tmp_path):
+    """web_cache page.md files should not be sent to the LLM summarizer."""
+    corpus = tmp_path / "corpus"
+    (corpus / "normal").mkdir(parents=True)
+    (corpus / "normal" / "doc.md").write_text("A" * 200)
+    (corpus / "web_cache").mkdir()
+    (corpus / "web_cache" / "claim-x").mkdir()
+    (corpus / "web_cache" / "claim-x" / "page.md").write_text("B" * 200)
+
+    targets = p2.collect_targets(corpus)
+    target_paths = [str(t.relative_to(corpus)) for t in targets]
+
+    assert "normal/doc.md" in target_paths
+    assert "web_cache/claim-x/page.md" not in target_paths
+
+
+def test_collect_targets_skips_page_md_at_any_depth(tmp_path):
+    """page.md is skipped regardless of nesting depth."""
+    corpus = tmp_path / "corpus"
+    # Deeply nested web_cache
+    deep = corpus / "a" / "b" / "web_cache" / "deep" / "claim-z"
+    deep.mkdir(parents=True)
+    (deep / "page.md").write_text("C" * 200)
+
+    # Also a real doc that should be included
+    (corpus / "real.md").write_text("D" * 200)
+
+    targets = p2.collect_targets(corpus)
+    target_names = [t.name for t in targets]
+
+    assert "real.md" in target_names
+    assert "page.md" not in target_names
+
+
+def test_collect_targets_includes_non_page_md_in_web_cache(tmp_path):
+    """Files named other than page.md inside web_cache are still summarized."""
+    corpus = tmp_path / "corpus"
+    (corpus / "web_cache").mkdir(parents=True)
+    # This is unlikely but should be handled — only "page.md" is skipped
+    (corpus / "web_cache" / "notes.md").write_text("E" * 200)
+
+    targets = p2.collect_targets(corpus)
+    target_names = [t.name for t in targets]
+
+    assert "notes.md" in target_names  # not skipped — not named page.md

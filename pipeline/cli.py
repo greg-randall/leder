@@ -113,6 +113,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="config.yaml", help="Path to config file"
     )
     b_parser.add_argument(
+        "--force-run", action="store_true",
+        help="Skip corpus readiness check (prepare-2/3 summaries not required)",
+    )
+    b_parser.add_argument(
         "--debug", type=int, default=0, metavar="N",
         help="Randomly sample N claims, save agent transcripts to debug/",
     )
@@ -425,6 +429,7 @@ def main() -> None:
             ),
             playbook_dir=config.prepare.playbooks.dir,
             pricing=config.pricing,
+            force_run=getattr(args, "force_run", False),
         )
         if hasattr(doc, 'findings'):
             verified_count = len(doc.findings)

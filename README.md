@@ -21,7 +21,7 @@ And because every check is a YAML playbook, not hardcoded Python, adding a new e
 ### Install
 
 ```bash
-cd g-journalism-run
+cd leder
 pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your API key:
@@ -43,7 +43,7 @@ article:
   path: "article.md"
 
 corpus:
-  root: "source-docs-and-summaries/"
+  root: "corpus/"
 
 playbooks:
   dir: "pipelines/"
@@ -175,11 +175,11 @@ If you already have the current pipeline working with fact-checking: nothing bre
 
 ## 3. How it works
 
-### Stage 1: Extraction (replaces old Stage A)
+### Stage 1: Extraction
 
 The runner loads each active playbook, chunks the article at paragraph boundaries, and dispatches each chunk with the playbook's extraction prompt. A quality gate (per playbook, optional) re-reads the full article to catch cross-chunk misses. Output: `targets.json`, with every target tagged by its originating playbook.
 
-### Stage 2: Verification (replaces old Stage B)
+### Stage 2: Verification
 
 For each target, the runner looks up its playbook, injects `{{article_summary}}`, `{{target_text}}`, and `{{context}}` into the verification prompt, and spawns a Claude Agent SDK agent with the playbook's allowed tools. The agent returns a unified Finding (severity, agent_summary, source_path, source_excerpt, recommended_action, confidence, metadata). Incremental writes survive crashes. Output: `findings.json`.
 
@@ -254,7 +254,7 @@ article.md
 ### Files
 
 ```
-g-journalism-run/
+leder/
 ├── .env.example                    # API key template
 ├── article.md                      # Input article
 ├── article-sourced.md              # Stage C output
@@ -262,9 +262,8 @@ g-journalism-run/
 ├── article-sourced.docx            # Stage E output
 ├── targets.json                    # Stage 1 output
 ├── findings.json                   # Stage 2 output
-├── web_cache/                      # Fetched page snapshots (per target)
+├── corpus/                         # Local document corpus + web_cache
 ├── debug/                          # Agent transcripts (--debug mode)
-├── source-docs-and-summaries/      # Local document corpus
 ├── pipelines/                      # Playbook YAML files
 │   └── fact_check.yaml             #   Fact Check playbook (v1)
 ├── requirements.txt

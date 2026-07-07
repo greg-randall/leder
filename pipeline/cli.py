@@ -83,13 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", help="Pipeline stage to run")
 
-    all_parser = subparsers.add_parser("all", help="Run the full pipeline")
+    # Parent parser with common flags shared across all subcommands
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--skip-startup-check", action="store_true",
+                        help="Skip prerequisite tool validation")
+
+    all_parser = subparsers.add_parser("all", parents=[common],
+                                        help="Run the full pipeline")
     all_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
     )
-    all_parser.add_argument("--skip-startup-check", action="store_true")
-
-    a_parser = subparsers.add_parser("stage-a", help="Extract claims from article")
+    a_parser = subparsers.add_parser("stage-a", parents=[common], help="Extract claims from article")
     a_parser.add_argument("--article", help="Path to article markdown")
     a_parser.add_argument("--output", default="claims.json")
     a_parser.add_argument(
@@ -103,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     a_parser.add_argument("--playbooks", help="Comma-separated list of playbooks to run")
 
     b_parser = subparsers.add_parser(
-        "stage-b", help="Verify claims against corpus"
+        "stage-b", parents=[common], help="Verify claims against corpus"
     )
     b_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
     b_parser.add_argument("--targets", default="targets.json", help="Input targets file")
@@ -126,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     c_parser = subparsers.add_parser(
-        "stage-c", help="Rebuild article with footnotes"
+        "stage-c", parents=[common], help="Rebuild article with footnotes"
     )
     c_parser.add_argument("--article", help="Path to article markdown")
     c_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
@@ -137,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     d_parser = subparsers.add_parser(
-        "stage-d", help="Convert sourced article to HTML"
+        "stage-d", parents=[common], help="Convert sourced article to HTML"
     )
     d_parser.add_argument("--input", default="article-sourced.md")
     d_parser.add_argument("--output", default="article-sourced.html")
@@ -146,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     e_parser = subparsers.add_parser(
-        "stage-e", help="Generate .docx with comments from sourced article"
+        "stage-e", parents=[common], help="Generate .docx with comments from sourced article"
     )
     e_parser.add_argument("--article", default="article-sourced.md")
     e_parser.add_argument("--claims", default="claims-full-article-verified.json")
@@ -156,13 +160,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     check_parser = subparsers.add_parser(
-        "check", help="Run startup validation only"
+        "check", parents=[common], help="Run startup validation only"
     )
     check_parser.add_argument(
         "--config", default="config.yaml", help=argparse.SUPPRESS
     )
 
-    p1 = subparsers.add_parser("prepare-1", help="Convert raw source files to markdown")
+    p1 = subparsers.add_parser("prepare-1", parents=[common], help="Convert raw source files to markdown")
     p1.add_argument("--config", default="config.yaml")
     p1.add_argument("--source", help="Override prepare.source_root")
     p1.add_argument("--whisper-model", help="Override prepare.audio.model (e.g. small, medium)")
@@ -170,18 +174,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Override prepare.audio.device")
     p1.add_argument("--force", action="store_true")
 
-    p2 = subparsers.add_parser("prepare-2", help="Summarize converted documents")
+    p2 = subparsers.add_parser("prepare-2", parents=[common], help="Summarize converted documents")
     p2.add_argument("--config", default="config.yaml")
     p2.add_argument("--model", help="Override prepare.summarize.model")
     p2.add_argument("--force", action="store_true")
 
-    p3 = subparsers.add_parser("prepare-3", help="Recursive folder + crosscutting rollup")
+    p3 = subparsers.add_parser("prepare-3", parents=[common], help="Recursive folder + crosscutting rollup")
     p3.add_argument("--config", default="config.yaml")
     p3.add_argument("--only", choices=["tree", "crosscutting", "concat"],
                     help="Run only one rollup phase (default: all)")
     p3.add_argument("--force", action="store_true")
 
-    pp = subparsers.add_parser("prepare", help="Run prepare-1, prepare-2, prepare-3 in order")
+    pp = subparsers.add_parser("prepare", parents=[common], help="Run prepare-1, prepare-2, prepare-3 in order")
     pp.add_argument("--config", default="config.yaml")
     pp.add_argument("--whisper-model", help="Override prepare.audio.model (e.g. small, medium)")
     pp.add_argument("--whisper-device", choices=["auto", "cuda", "cpu"],
@@ -282,6 +286,12 @@ def main() -> None:
     # --- Configure provider (DeepSeek or other) ---
     _setup_provider_env(config)
 
+    # --- Startup check for all commands (unless skipped) ---
+    if not getattr(args, "skip_startup_check", False):
+        from pipeline.startup_check import validate_startup
+        if not validate_startup():
+            sys.exit(1)
+
     # --- Corpus prep (prepare-1/2/3 — NOT part of 'all') ---
     if args.command in ("prepare-1", "prepare-2", "prepare-3", "prepare"):
         from pipeline import startup_check as _sc
@@ -351,13 +361,6 @@ def main() -> None:
                   "see UNCONVERTED.md.", file=sys.stderr)
             sys.exit(1)
         return
-
-    # --- 'all' may run the startup check first ---
-    if args.command == "all" and not getattr(args, "skip_startup_check", False):
-        from pipeline.startup_check import validate_startup
-
-        if not validate_startup():
-            sys.exit(1)
 
     # --- Stage A: Claim extraction ---
     if args.command in ("all", "stage-a"):

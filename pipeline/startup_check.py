@@ -203,7 +203,7 @@ def validate_startup() -> bool:
 
     for r in results:
         status = "✓" if r.passed else "✗"
-        marker = " [FATAL]" if r.fatal else ""
+        marker = " [FATAL]" if (r.fatal and not r.passed) else ""
         print(f"  {r.name:30s} {status} {r.detail}{marker}")
         if not r.passed:
             all_failures.append(r)

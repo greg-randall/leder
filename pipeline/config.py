@@ -7,6 +7,21 @@ from dataclasses import dataclass, field
 import yaml
 
 
+# Already-plain-text formats: prepare-1 copies these through verbatim into their
+# .md sidecar instead of running them through MarkItDown (which would, e.g., turn
+# a CSV into a giant markdown pipe table). HTML/XML are intentionally excluded —
+# their converters genuinely improve them (tag-stripping / fencing).
+DEFAULT_TEXT_NATIVE_EXTS = [
+    ".txt", ".text", ".csv", ".tsv", ".md", ".markdown",
+    ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".log", ".rst", ".tex",
+    # source code
+    ".py", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".sql", ".sh", ".bash",
+    ".c", ".h", ".cpp", ".hpp", ".java", ".go", ".rs", ".rb", ".php", ".r",
+    ".css", ".scss",
+]
+
+
 @dataclass
 class ArticleConfig:
     path: str
@@ -84,6 +99,8 @@ class PrepareConfig:
     source_root: str = "corpus/"
     convert_workers: int = 8
     ocr_images: bool = True
+    text_native_extensions: list[str] = field(
+        default_factory=lambda: list(DEFAULT_TEXT_NATIVE_EXTS))
     vision_fallback: VisionFallbackConfig = field(default_factory=VisionFallbackConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     summarize: PrepareSummarizeConfig = field(default_factory=PrepareSummarizeConfig)
@@ -97,6 +114,8 @@ class PrepareConfig:
             source_root=raw.get("source_root", "corpus/"),
             convert_workers=raw.get("convert_workers", 8),
             ocr_images=raw.get("ocr_images", True),
+            text_native_extensions=raw.get(
+                "text_native_extensions", list(DEFAULT_TEXT_NATIVE_EXTS)),
             vision_fallback=VisionFallbackConfig(**(raw.get("vision_fallback") or {})),
             audio=AudioConfig(**(raw.get("audio") or {})),
             summarize=PrepareSummarizeConfig(**(raw.get("summarize") or {})),

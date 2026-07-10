@@ -15,7 +15,6 @@ Files recovered via OCR/vision/whisper/gap-filler are recorded in NEEDS_REVIEW.m
 """
 from __future__ import annotations
 
-import csv
 import random
 import shutil
 import subprocess
@@ -28,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pipeline.prepare_ocr import IMAGE_EXTS, ocr_image, ocr_pdf, _reset_dedup
 from pipeline.prepare_audio import AUDIO_EXTS, convert_audio, get_whisper_model
 from pipeline.prepare_vision import is_garbled
+from pipeline.config import DEFAULT_TEXT_NATIVE_EXTS
 
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
@@ -275,26 +275,21 @@ def convert_msg(inpath: Path, md_path: Path):
         return False, 0, "extract-msg"
 
 
-def convert_tsv(inpath: Path, md_path: Path):
-    """TSV -> markdown table (all rows, no cap)."""
+def passthrough_text(inpath: Path, md_path: Path):
+    """Copy an already-text file straight into its .md sidecar — no conversion.
+
+    Text-native formats (.csv, .txt, .json, source code, …) are already
+    readable; running them through MarkItDown only reformats/bloats them (a CSV
+    becomes a giant pipe table). We copy the raw bytes verbatim, so the sidecar
+    is a byte-for-byte twin of the source (`diff src src.md` is empty) — no
+    encoding or newline (\\r\\n → \\n) translation touches it. Which extensions
+    land here is driven by prepare.text_native_extensions in config.yaml.
+    """
     try:
-        with open(inpath, newline="", encoding="utf-8", errors="replace") as f:
-            reader = csv.reader(f, delimiter="\t")
-            rows = list(reader)
-        if not rows:
-            _write_md(md_path, "*(empty)*\n")
-            return True, 0, "tsv-table"
-        lines = []
-        for i, row in enumerate(rows):
-            cells = [str(c) for c in row]
-            lines.append("| " + " | ".join(cells) + " |")
-            if i == 0:
-                lines.append("| " + " | ".join(["---"] * len(cells)) + " |")
-        content = "\n".join(lines) + "\n"
-        _write_md(md_path, content)
-        return True, len(content), "tsv-table"
-    except Exception:
-        return False, 0, "tsv-table"
+        shutil.copyfile(inpath, md_path)
+        return True, md_path.stat().st_size, "text-passthrough", None
+    except Exception as ex:
+        return False, 0, f"text-passthrough ({type(ex).__name__}: {ex})", None
 
 
 def convert_xml(inpath: Path, md_path: Path):
@@ -371,7 +366,6 @@ GAP_FILLERS: dict[str, callable] = {
     ".ods": convert_legacy_office,
     ".odp": convert_legacy_office,
     ".rtf": convert_rtf,
-    ".tsv": convert_tsv,
     ".xml": convert_xml,
 }
 
@@ -397,8 +391,11 @@ def _finish(relpath: Path, result):
 
 
 def process_file(filepath: Path, src_root: Path, out_root: Path,
-                 vision_cfg: dict, whisper_model, force: bool, md_client=None):
+                 vision_cfg: dict, whisper_model, force: bool, md_client=None,
+                 text_native_exts: set[str] | None = None):
     """Convert one file. Returns (relpath, status, detail, note_or_None)."""
+    if text_native_exts is None:
+        text_native_exts = {e.lower() for e in DEFAULT_TEXT_NATIVE_EXTS}
     filepath = Path(filepath)
     name = filepath.name
     ext = filepath.suffix.lower()
@@ -446,6 +443,11 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
         return _finish(relpath, convert_msg(filepath, md_path))
     if ext == ".eml":
         return _finish(relpath, convert_eml(filepath, md_path))
+
+    # Already-text formats (.csv, .txt, .json, source code, …) -> copy verbatim.
+    # These are readable as-is; the converter would only reformat/bloat them.
+    if ext in text_native_exts:
+        return _finish(relpath, passthrough_text(filepath, md_path))
 
     # Everything else -> MarkItDown, then gap-fillers.
     if md_client is not None:
@@ -517,13 +519,19 @@ def _print_banner(failures: list):
 # ── Entry point ───────────────────────────────────────────────
 
 def run_prepare_1(source_root: str, corpus_root: str, workers: int,
-                  vision_cfg: dict, audio_cfg: dict, force: bool) -> dict:
+                  vision_cfg: dict, audio_cfg: dict, force: bool,
+                  text_native_exts: set[str] | None = None) -> dict:
     """Convert every file under source_root into markdown under corpus_root.
 
     vision_cfg: {enabled, model, min_words, max_pages_per_doc, ocr_images}.
     audio_cfg:  {enabled, model, device}.
+    text_native_exts: extensions copied through verbatim (see config.yaml
+        prepare.text_native_extensions). Defaults to DEFAULT_TEXT_NATIVE_EXTS.
     """
     from tqdm import tqdm
+
+    if text_native_exts is None:
+        text_native_exts = {e.lower() for e in DEFAULT_TEXT_NATIVE_EXTS}
 
     src_root = Path(source_root)
     out_root = Path(corpus_root)
@@ -560,7 +568,8 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
             futmap = {}
             for f in files:
                 fut = pool.submit(process_file, f, src_root, out_root,
-                                  vision_cfg, whisper_model, force, md_client)
+                                  vision_cfg, whisper_model, force, md_client,
+                                  text_native_exts)
                 futmap[fut] = f
             for future in as_completed(futmap):
                 f = futmap[future]
@@ -603,7 +612,8 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                 futmap2 = {}
                 for f in new_files:
                     fut = pool2.submit(process_file, f, src_root, out_root,
-                                       vision_cfg, whisper_model, force, md_client)
+                                       vision_cfg, whisper_model, force, md_client,
+                                       text_native_exts)
                     futmap2[fut] = f
                 for future in as_completed(futmap2):
                     f2 = futmap2[future]

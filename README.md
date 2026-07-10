@@ -88,12 +88,13 @@ prepare:
 
 How each file type gets converted (prepare-1):
 
-- Digital PDFs, DOCX, XLSX, PPTX, HTML, EPUB, ZIP, CSV, JSON, TXT: [MarkItDown](https://github.com/microsoft/markitdown) (`pip install markitdown[all]`), which preserves tables and structure. Spreadsheet formats (`.xlsx/.csv/.tsv/.ods`) get embedded table newlines collapsed so pipe tables render correctly.
+- Already-plain-text formats (`.csv/.tsv/.txt/.json/.yaml/.log`, source code, etc. — the full list is `prepare.text_native_extensions` in `config.yaml`): copied through **verbatim** into their `.md` sidecar, not run through MarkItDown. They're already readable, so converting them only reformats/bloats them — a CSV would become a giant markdown pipe table. The sidecar is a byte-for-byte twin of the source. (`.html`/`.xml` are deliberately excluded — their converters genuinely improve them.)
+- Digital PDFs, DOCX, XLSX, PPTX, HTML, EPUB, ZIP: [MarkItDown](https://github.com/microsoft/markitdown) (`pip install markitdown[all]`), which preserves tables and structure. Spreadsheet formats (`.xlsx/.ods`) get embedded table newlines collapsed so pipe tables render correctly.
 - Scanned or image-only PDFs: MarkItDown has no OCR, so prepare-1 falls back to local tesseract page by page. Pages whose OCR is too thin or garbled (spellcheck-based detection — if <50% of tokens are real words) get escalated to gpt-4o-mini vision (capped at `max_pages_per_doc`).
 - Image files (`.png/.jpg/.tif/.tiff/.gif/.bmp/.webp`): local tesseract OCR. Thin or garbled results escalate to vision. The vision prompt is anti-fabrication: transcribe verbatim, mark `[illegible]`, never guess. Tiny images (email signatures, social icons — configurable via `min_image_dim`, default 130px) and perceptual duplicates (phash distance ≤ 4) are skipped and replaced with a stub.
 - Email (`.eml`, `.msg`): routed directly to dedicated extractors — not through MarkItDown. Attachments and nested/forwarded emails are extracted to `{stem}_attachments/` with sequential numbering. A second pass auto-converts those extracted files in the same prepare-1 run — no need to run it twice. Nested `.eml` files are saved so they're picked up on the second pass too.
 - Audio (`.wav/.mp3/.m4a/.mp4/.flac/.ogg/.aac/.wma`): local faster-whisper (`pip install faster-whisper`). GPU first with an automatic subprocess health check. Falls back to CPU with a warning if cuDNN is missing.
-- Gap-fillers for the formats MarkItDown lacks: `.doc/.ppt/.odt/.ods/.odp` (LibreOffice), `.rtf` (pandoc → LibreOffice fallback), `.tsv`, `.xml`.
+- Gap-fillers for the formats MarkItDown lacks: `.doc/.ppt/.odt/.ods/.odp` (LibreOffice), `.rtf` (pandoc → LibreOffice fallback), `.xml`.
 
 Set `OPENAI_API_KEY` for the vision escalation. Files that can't be converted are listed in `UNCONVERTED.md` (loud banner + nonzero exit). Files recovered via OCR, vision, whisper, or a gap-filler are listed in `NEEDS_REVIEW.md` with how each was recovered.
 
@@ -275,7 +276,7 @@ leder/
 
 `pipeline/stage_c_rebuild.py` accepts either `findings.json` (new) or `claims.json` (old) and produces the same footnoted markdown. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
 
-`pipeline/prepare_1_convert.py` is the corpus-prep converter. Routing: images go to tesseract then vision if thin or garbled (spellcheck-based detection), with tiny/duplicate images skipped; audio goes to local faster-whisper; `.eml`/`.msg` go to dedicated extractors with attachment extraction and an auto second pass; PDF goes to MarkItDown first with OCR fallback if empty; everything else goes to MarkItDown, then gap-fillers, then UNCONVERTED.md.
+`pipeline/prepare_1_convert.py` is the corpus-prep converter. Routing: images go to tesseract then vision if thin or garbled (spellcheck-based detection), with tiny/duplicate images skipped; audio goes to local faster-whisper; `.eml`/`.msg` go to dedicated extractors with attachment extraction and an auto second pass; PDF goes to MarkItDown first with OCR fallback if empty; already-text formats (`prepare.text_native_extensions`) are copied through verbatim; everything else goes to MarkItDown, then gap-fillers, then UNCONVERTED.md.
 
 ### Provider setup
 

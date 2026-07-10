@@ -24,12 +24,44 @@ def test_convert_eml(tmp_path):
     assert method == "eml-extract"
 
 
-def test_convert_tsv(tmp_path):
-    src = tmp_path / "d.tsv"
-    src.write_text("h1\th2\nv1\tv2\nv3\tv4")
-    ok, size, method = p1.convert_tsv(src, tmp_path / "d.md")
-    md = (tmp_path / "d.md").read_text()
-    assert ok and "| h1 | h2 |" in md and "| v3 | v4 |" in md and method == "tsv-table"
+def test_passthrough_text_is_byte_for_byte(tmp_path):
+    """Text-native files are copied verbatim — the sidecar is a byte-for-byte
+    twin of the source, including Windows CRLF (no text-mode newline translation)."""
+    src = tmp_path / "d.csv"
+    src.write_bytes(b"h1,h2\r\nv1,v2\r\nv3,v4\r\n")
+    ok, size, method, note = p1.passthrough_text(src, tmp_path / "d.csv.md")
+    assert ok and method == "text-passthrough" and note is None
+    assert (tmp_path / "d.csv.md").read_bytes() == src.read_bytes()  # CRLF preserved
+
+
+def test_text_native_routes_to_passthrough_not_converter(tmp_path):
+    """A .csv is copied through verbatim, not converted to a pipe table.
+
+    With md_client=None, a .csv that fell through to MarkItDown/gap-fillers would
+    FAIL (there's no .csv gap-filler) — so 'ok' proves passthrough handled it.
+    The contrast case (same file, empty text-native set) exercises the without-
+    condition path and must differ: it falls through and fails.
+    """
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "wells.csv").write_bytes(b"api,county\r\n01,Bandera\r\n")
+
+    # WITH the condition: csv is text-native -> passthrough.
+    rel, status, method, note = p1.process_file(
+        src_root / "wells.csv", src_root, corpus, VISION_CFG, None, True,
+        md_client=None, text_native_exts={".csv"})
+    out = (corpus / "wells.csv.md").read_bytes()
+    assert status == "ok" and method == "text-passthrough"
+    assert out == (src_root / "wells.csv").read_bytes() and b"| --- |" not in out
+
+    # WITHOUT the condition: csv not text-native -> falls through to the (absent)
+    # converter and fails. Results must differ.
+    rel2, status2, detail2, note2 = p1.process_file(
+        src_root / "wells.csv", src_root, corpus, VISION_CFG, None, True,
+        md_client=None, text_native_exts=set())
+    assert status2 == "fail" and "no converter" in detail2
+    assert status2 != status
 
 
 def test_convert_xml(tmp_path):

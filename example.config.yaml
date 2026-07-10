@@ -33,6 +33,51 @@ prepare:
   source_root: "corpus/"
   convert_workers: 8
   ocr_images: true
+  # Already-plain-text formats are copied through verbatim instead of being run
+  # through the converter (so a CSV stays a CSV rather than becoming a giant
+  # markdown pipe table). HTML/XML are intentionally NOT listed — their
+  # converters genuinely improve them. Edit this list to change what's treated
+  # as "already text".
+  text_native_extensions:
+    - .txt
+    - .text
+    - .csv
+    - .tsv
+    - .md
+    - .markdown
+    - .json
+    - .jsonl
+    - .ndjson
+    - .yaml
+    - .yml
+    - .toml
+    - .ini
+    - .cfg
+    - .log
+    - .rst
+    - .tex
+    # source code
+    - .py
+    - .js
+    - .mjs
+    - .ts
+    - .jsx
+    - .tsx
+    - .sql
+    - .sh
+    - .bash
+    - .c
+    - .h
+    - .cpp
+    - .hpp
+    - .java
+    - .go
+    - .rs
+    - .rb
+    - .php
+    - .r
+    - .css
+    - .scss
   vision_fallback:
     enabled: true
     model: "gpt-4o-mini"

@@ -334,6 +334,7 @@ def main() -> None:
                 source_root=source_root, corpus_root=corpus_root,
                 workers=prep.convert_workers,
                 vision_cfg=vision_cfg, audio_cfg=audio_cfg, force=force,
+                text_native_exts={e.lower() for e in prep.text_native_extensions},
             )
             convert_failures = report["failure_count"]
             if args.command == "prepare-1":

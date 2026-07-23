@@ -94,3 +94,30 @@ def test_rebuild_reads_findings_json(tmp_path):
     result = out.read_text()
     assert "PASS" in result or "✓" in result
     assert "Acme" in result
+
+
+def test_find_quote_position_disambiguates_via_context():
+    """Same phrase (letters-only) appears twice; context should pick the right one."""
+    article = (
+        "# Report\n\n"
+        "In Karnes County, the facility irrigates 165 acres using sprinklers.\n\n"
+        "Meanwhile in Live Oak County, a different facility irrigates 165 acres "
+        "using sprinklers as well.\n\n"
+        "The Live Oak facility was cited for overspray in 2023."
+    )
+    quote = "irrigates 165 acres using sprinklers"
+
+    # Without context: first occurrence (Karnes) wins -- unchanged behavior.
+    pos_default = find_quote_position(quote, article)
+    assert pos_default is not None
+    assert "Karnes" in article[:pos_default[0]]
+
+    # With context pointing at the Live Oak paragraph: second occurrence wins.
+    pos_context = find_quote_position(
+        quote, article,
+        context=("Meanwhile in Live Oak County, a different facility irrigates 165 "
+                  "acres using sprinklers as well."),
+    )
+    assert pos_context is not None
+    assert "Live Oak" in article[:pos_context[0]]
+    assert pos_context != pos_default

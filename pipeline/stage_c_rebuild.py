@@ -27,11 +27,20 @@ def _letters_only(text: str) -> str:
     return re.sub(r' +', ' ', result).strip()
 
 
-def find_quote_position(source_quote: str, article_text: str) -> tuple[int, int] | None:
+def find_quote_position(
+    source_quote: str, article_text: str, context: str | None = None
+) -> tuple[int, int] | None:
     """Find the (start, end) position of source_quote in article_text.
 
     Uses sliding-window Levenshtein: strips to letters-only, lowercases,
     then slides the quote across the article and picks the best match.
+
+    When the quote text matches more than one position in the article
+    (letters-only comparison), ``context`` -- the surrounding paragraph
+    the claim was extracted from (Claim.context / Finding.context) -- is
+    used to pick the occurrence whose surrounding text best matches it.
+    Without context, or when there's only one match, the first occurrence
+    is used (unchanged from prior behavior).
     """
     needle = _letters_only(source_quote).split()
     if not needle:
@@ -45,11 +54,25 @@ def find_quote_position(source_quote: str, article_text: str) -> tuple[int, int]
     if needle_len > haystack_len:
         return None
 
-    # Try exact subsequence first (fast path)
     needle_str = ' '.join(needle)
-    idx = haystack.find(needle_str)
-    if idx != -1:
-        # Found exact match — find position in original article
+
+    # Try exact subsequence first (fast path) -- collect every occurrence so
+    # a duplicate/near-duplicate phrase elsewhere in the article can be
+    # disambiguated by context instead of silently taking the first match.
+    exact_positions = []
+    search_from = 0
+    while True:
+        idx = haystack.find(needle_str, search_from)
+        if idx == -1:
+            break
+        exact_positions.append(idx)
+        search_from = idx + 1
+
+    if exact_positions:
+        if len(exact_positions) == 1 or not context:
+            idx = exact_positions[0]
+        else:
+            idx = _best_match_by_context(exact_positions, len(needle_str), haystack, context)
         return _letters_pos_to_original(idx, len(needle_str), article_text)
 
     # Sliding window Levenshtein — compare word sequences
@@ -78,6 +101,33 @@ def find_quote_position(source_quote: str, article_text: str) -> tuple[int, int]
     if char_start == -1:
         return None
     return _letters_pos_to_original(char_start, len(window_str), article_text)
+
+
+def _best_match_by_context(
+    positions: list[int], match_len: int, haystack: str, context: str
+) -> int:
+    """Pick the exact-match position whose surrounding window best matches context.
+
+    Window size scales to the length of ``context`` itself (not a fixed pad),
+    so a short context stays localized to its candidate position instead of
+    swallowing most of a short article and making every candidate look alike.
+    """
+    import difflib
+    context_letters = _letters_only(context)
+    window_size = max(len(context_letters), match_len)
+    half_pad = max(0, (window_size - match_len) // 2)
+
+    best_pos = positions[0]
+    best_ratio = -1.0
+    for pos in positions:
+        window_start = max(0, pos - half_pad)
+        window_end = min(len(haystack), pos + match_len + half_pad)
+        window = haystack[window_start:window_end]
+        ratio = difflib.SequenceMatcher(None, context_letters, window).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_pos = pos
+    return best_pos
 
 
 def _letters_pos_to_original(l_start: int, l_len: int, original: str) -> tuple[int, int]:
@@ -511,7 +561,7 @@ def run_stage_c(
 
     from tqdm import tqdm
     for claim in tqdm(claims, desc="  Matching", unit="claim"):
-        pos = find_quote_position(claim.source_quote, article_text)
+        pos = find_quote_position(claim.source_quote, article_text, context=getattr(claim, 'context', None))
         if pos:
             placed.append((claim.claim_id, pos))
         else:
@@ -525,7 +575,7 @@ def run_stage_c(
         reconciled_claims = reconcile_unmatched_quotes(unmatched, article_text, model)
         still_unmatched = []
         for claim in tqdm(reconciled_claims, desc="  Recheck", unit="claim"):
-            pos = find_quote_position(claim.source_quote, article_text)
+            pos = find_quote_position(claim.source_quote, article_text, context=getattr(claim, 'context', None))
             if pos:
                 placed.append((claim.claim_id, pos))
             else:

@@ -124,19 +124,21 @@ def test_find_quote_position_disambiguates_via_context():
 
 
 def test_find_quote_position_levenshtein_does_not_confidently_pick_wrong_sentence():
-    """Two similar sentences in the article; a blended/garbled quote that
-    combines words from BOTH must not silently land on the wrong one with
-    high confidence. This test characterizes real behavior -- see the
-    printed ratio/position if it needs adjusting."""
+    """Two near-identical sentences differing in 4 swappable words; a blended
+    quote drawing 2 words from each side produces a genuine near-tie between
+    the two candidate windows (top two Levenshtein ratios within ~1% of each
+    other -- see printed output). This test characterizes real behavior: even
+    at that near-tie margin, the fallback must land on a REAL contiguous
+    substring of the article, not a hallucinated cross-sentence blend."""
     article = (
         "# Report\n\n"
-        "In 2019, the Karnes facility was cited for a major spill affecting "
-        "groundwater near the eastern tank battery.\n\n"
-        "In 2020, the same facility was cited for a minor leak with no "
-        "offsite impact reported."
+        "In 2021, the northern plant was cited for a spill that affected "
+        "local wildlife.\n\n"
+        "In 2022, the southern refinery was cited for a leak that affected "
+        "nearby wildlife."
     )
-    # Blended quote: "major" + "groundwater" from sentence 1, "leak" + "2020" from sentence 2.
-    blended_quote = "cited for a major leak affecting groundwater in 2020"
+    # Blended quote: "southern" + "refinery" from sentence 2, "spill" + "local" from sentence 1.
+    blended_quote = "southern refinery was cited for a spill that affected local wildlife"
 
     pos = find_quote_position(blended_quote, article)
     if pos is not None:

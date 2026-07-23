@@ -128,22 +128,29 @@ def test_find_quote_position_levenshtein_does_not_confidently_pick_wrong_sentenc
     quote drawing 2 words from each side produces a genuine near-tie between
     the two candidate windows (top two Levenshtein ratios within ~1% of each
     other -- see printed output). This test characterizes real behavior: even
-    at that near-tie margin, the fallback must land on a REAL contiguous
-    substring of the article, not a hallucinated cross-sentence blend."""
-    article = (
-        "# Report\n\n"
-        "In 2021, the northern plant was cited for a spill that affected "
-        "local wildlife.\n\n"
-        "In 2022, the southern refinery was cited for a leak that affected "
-        "nearby wildlife."
-    )
-    # Blended quote: "southern" + "refinery" from sentence 2, "spill" + "local" from sentence 1.
+    at that near-tie margin, the fallback must land ENTIRELY within one real
+    sentence, not straddle/blend both."""
+    sentence1 = ("In 2021, the northern plant was cited for a spill that affected "
+                 "local wildlife.")
+    sentence2 = ("In 2022, the southern refinery was cited for a leak that affected "
+                 "nearby wildlife.")
+    article = "# Report\n\n" + sentence1 + "\n\n" + sentence2
     blended_quote = "southern refinery was cited for a spill that affected local wildlife"
 
     pos = find_quote_position(blended_quote, article)
-    if pos is not None:
-        matched_text = article[pos[0]:pos[1]]
-        print(f"\nMatched: {matched_text!r}")
-        # Whichever real sentence it lands on, it must be a REAL contiguous
-        # substring of the article, not a hallucinated blend.
-        assert matched_text in article
+    assert pos is not None, "expected the fallback to find SOME match for this near-tie quote"
+
+    s1_start = article.index(sentence1)
+    s1_end = s1_start + len(sentence1)
+    s2_start = article.index(sentence2)
+    s2_end = s2_start + len(sentence2)
+
+    matched_text = article[pos[0]:pos[1]]
+    print(f"\nMatched: {matched_text!r} at {pos}")
+
+    within_sentence1 = s1_start <= pos[0] and pos[1] <= s1_end
+    within_sentence2 = s2_start <= pos[0] and pos[1] <= s2_end
+    assert within_sentence1 or within_sentence2, (
+        f"match at {pos} ({matched_text!r}) straddles both sentences -- "
+        f"sentence1 span={(s1_start, s1_end)}, sentence2 span={(s2_start, s2_end)}"
+    )

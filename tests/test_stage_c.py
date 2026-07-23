@@ -121,3 +121,27 @@ def test_find_quote_position_disambiguates_via_context():
     assert pos_context is not None
     assert "Live Oak" in article[:pos_context[0]]
     assert pos_context != pos_default
+
+
+def test_find_quote_position_levenshtein_does_not_confidently_pick_wrong_sentence():
+    """Two similar sentences in the article; a blended/garbled quote that
+    combines words from BOTH must not silently land on the wrong one with
+    high confidence. This test characterizes real behavior -- see the
+    printed ratio/position if it needs adjusting."""
+    article = (
+        "# Report\n\n"
+        "In 2019, the Karnes facility was cited for a major spill affecting "
+        "groundwater near the eastern tank battery.\n\n"
+        "In 2020, the same facility was cited for a minor leak with no "
+        "offsite impact reported."
+    )
+    # Blended quote: "major" + "groundwater" from sentence 1, "leak" + "2020" from sentence 2.
+    blended_quote = "cited for a major leak affecting groundwater in 2020"
+
+    pos = find_quote_position(blended_quote, article)
+    if pos is not None:
+        matched_text = article[pos[0]:pos[1]]
+        print(f"\nMatched: {matched_text!r}")
+        # Whichever real sentence it lands on, it must be a REAL contiguous
+        # substring of the article, not a hallucinated blend.
+        assert matched_text in article

@@ -12,3 +12,6 @@ trafilatura
 pyspellchecker
 extract-msg
 imagehash
+pycaption
+pymupdf
+pytesseract

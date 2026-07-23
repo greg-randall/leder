@@ -11,18 +11,27 @@ bad scans).
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import threading as _threading
 
+import pymupdf
+import pytesseract
+from pytesseract import pytesseract as _pytesseract_impl
+
 from pipeline.prepare_vision import (
     needs_vision, vision_extract, PROVENANCE_BANNER,
 )
 
+# pytesseract has no per-call env override, so we replace the module-level
+# `environ` it passes to subprocess with our own copy — this scopes
+# OMP_THREAD_LIMIT to tesseract's own subprocesses only (avoids OpenMP thread
+# contention when many tesseract calls run concurrently under our thread
+# pool) without touching the real process environment for other tools.
 TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
+_pytesseract_impl.environ = TESSERACT_ENV
 
 # Per-run dedup state — cleared by run_prepare_1
 _seen_hashes: list = []
@@ -70,22 +79,13 @@ _TESSERACT_NATIVE = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
 
 
 def _tesseract(img_path: Path) -> str:
-    """OCR a single image via tesseract. Returns extracted text ('' on failure)."""
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td) / "ocr"
-        try:
-            subprocess.run(
-                ["tesseract", str(img_path), str(base), "-l", "eng"],
-                capture_output=True, timeout=120, env=TESSERACT_ENV,
-            )
-        except Exception as ex:
-            print(f"  prepare-1 tesseract failed: {img_path.name}: "
-                  f"{type(ex).__name__}: {ex}", file=sys.stderr)
-            return ""
-        txt = base.with_suffix(".txt")
-        if txt.exists():
-            return txt.read_text(encoding="utf-8", errors="replace").strip()
-    return ""
+    """OCR a single image via tesseract (through pytesseract). Returns '' on failure."""
+    try:
+        return pytesseract.image_to_string(str(img_path), lang="eng", timeout=120).strip()
+    except Exception as ex:
+        print(f"  prepare-1 tesseract failed: {img_path.name}: "
+              f"{type(ex).__name__}: {ex}", file=sys.stderr)
+        return ""
 
 
 def _normalize_for_tesseract(img_path: Path, tmpdir: Path) -> Path:
@@ -99,17 +99,25 @@ def _normalize_for_tesseract(img_path: Path, tmpdir: Path) -> Path:
 
 
 def _pdf_to_page_pngs(pdf_path: Path, outdir: Path, dpi: int = 300) -> list[Path]:
-    """Rasterize PDF pages to PNGs via pdftoppm. Returns sorted page image paths."""
+    """Rasterize PDF pages to PNGs via PyMuPDF. Returns page image paths, in page order."""
     try:
-        subprocess.run(
-            ["pdftoppm", "-png", "-r", str(dpi), str(pdf_path), str(outdir / "page")],
-            capture_output=True, timeout=600,
-        )
+        doc = pymupdf.open(str(pdf_path))
     except Exception as ex:
-        print(f"  prepare-1 pdftoppm failed: {pdf_path.name}: "
+        print(f"  prepare-1 pymupdf open failed: {pdf_path.name}: "
               f"{type(ex).__name__}: {ex}", file=sys.stderr)
         return []
-    return sorted(outdir.glob("page-*.png"))
+    pages: list[Path] = []
+    try:
+        for i, page in enumerate(doc, 1):
+            out = outdir / f"page-{i:04d}.png"
+            page.get_pixmap(dpi=dpi).save(str(out))
+            pages.append(out)
+    except Exception as ex:
+        print(f"  prepare-1 pymupdf render failed: {pdf_path.name}: "
+              f"{type(ex).__name__}: {ex}", file=sys.stderr)
+    finally:
+        doc.close()
+    return pages
 
 
 def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):

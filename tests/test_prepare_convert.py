@@ -1,6 +1,8 @@
 """Tests for prepare-1 converter: routing (images/audio/pdf), MarkItDown, gap-fillers."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pipeline.prepare_1_convert as p1
 
 VISION_CFG = {"enabled": False, "model": "gpt-4o-mini", "min_words": 20,
@@ -388,3 +390,110 @@ def test_eml_extracts_nested_email(tmp_path):
     nested_files = list(attach_dir.glob("*.eml"))
     assert len(nested_files) == 1
     assert "Forwarded" in nested_files[0].name
+
+
+# ── Subtitles (.srt / .vtt) via pycaption ─────────────────────────
+
+def test_convert_subtitle_vtt(tmp_path):
+    src = tmp_path / "d.vtt"
+    src.write_text(
+        "WEBVTT\n\n"
+        "00:00:00.000 --> 00:00:02.000\n"
+        "Hello there.\n\n"
+        "00:00:02.000 --> 00:00:04.000\n"
+        "General Kenobi.\n"
+    )
+    ok, size, method, note = p1.convert_subtitle(src, tmp_path / "d.md")
+    md = (tmp_path / "d.md").read_text()
+    assert ok and method == "pycaption-transcript" and note is None
+    assert md.strip() == "Hello there. General Kenobi."
+    # No cue numbers or timestamps leaked into the transcript
+    assert "-->" not in md and "00:00" not in md
+
+
+def test_convert_subtitle_srt(tmp_path):
+    src = tmp_path / "d.srt"
+    src.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\nHello there.\n\n"
+        "2\n00:00:02,000 --> 00:00:04,000\nGeneral Kenobi.\n"
+    )
+    ok, size, method, note = p1.convert_subtitle(src, tmp_path / "d.md")
+    md = (tmp_path / "d.md").read_text()
+    assert ok and method == "pycaption-transcript" and note is None
+    assert md.strip() == "Hello there. General Kenobi."
+
+
+def test_convert_subtitle_dedupes_rolling_captions(tmp_path):
+    """Auto-generated 'rolling' captions repeat the prior line per cue -- collapsed."""
+    src = tmp_path / "rolling.vtt"
+    src.write_text(
+        "WEBVTT\n\n"
+        "00:00:00.000 --> 00:00:02.000\n"
+        "Hello there\n\n"
+        "00:00:02.000 --> 00:00:04.000\n"
+        "Hello there\n"
+        "General Kenobi\n"
+    )
+    ok, size, method, note = p1.convert_subtitle(src, tmp_path / "rolling.md")
+    md = (tmp_path / "rolling.md").read_text()
+    assert ok
+    assert md.strip() == "Hello there General Kenobi"  # not repeated twice
+
+
+def test_convert_subtitle_malformed_fails(tmp_path):
+    src = tmp_path / "bad.vtt"
+    src.write_text("this is not a valid webvtt file at all")
+    ok, size, method, note = p1.convert_subtitle(src, tmp_path / "bad.md")
+    assert not ok and method == "pycaption-error" and note is None
+
+
+def test_convert_subtitle_real_youtube_auto_captions(tmp_path):
+    """Real messy auto-generated captions (yt-dlp, NASA press briefing excerpt):
+    per-word <HH:MM:SS.mmm><c>...</c> timing tags, align:start position:0% cue
+    settings, rolling captions that repeat the prior line, and blank filler
+    cues (single-space payload). Exercises tag-stripping + dedup together.
+    """
+    fixture = Path(__file__).parent / "fixtures" / "sample_auto_captions.vtt"
+    ok, size, method, note = p1.convert_subtitle(fixture, tmp_path / "out.md")
+    md = (tmp_path / "out.md").read_text()
+
+    assert ok and method == "pycaption-transcript"
+
+    # No VTT syntax artifacts leaked into the transcript
+    for artifact in ("-->", "align:start", "<c>", "</c>", "WEBVTT", "Kind:"):
+        assert artifact not in md, f"{artifact!r} leaked into transcript"
+
+    # Rolling captions stitched into continuous, non-repeated text: this exact
+    # substring can only appear if "You are looking live at the Aremis 2" and
+    # "space launch system rocket and Orion" each appear once, not per-cue.
+    assert ("You are looking live at the Aremis 2 space launch system rocket "
+            "and Orion spacecraft in the vehicle assembly building. Today we "
+            "are joined by agency") in md
+    assert "Everybody silence." in md
+    assert "NASA's Kennedy Space Center" in md
+    assert "I'm George Alderman" in md
+
+    # Known duplication failure mode: a rolling line repeated back-to-back
+    assert "Aremis 2 You are looking live at the Aremis 2" not in md
+    assert "Orion spacecraft in the vehicle assembly spacecraft" not in md
+
+
+def test_subtitle_routes_directly_bypassing_markitdown(tmp_path, monkeypatch):
+    """.srt/.vtt go straight to convert_subtitle, not through MarkItDown."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "captions.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHi\n")
+
+    called = []
+    monkeypatch.setattr(p1, "convert_subtitle",
+                        lambda inp, outp: (called.append(1) or (True, 2, "pycaption-transcript", None)))
+
+    class ExplodingMarkItDown:
+        def convert(self, *a, **kw):
+            raise AssertionError("MarkItDown should not be called for .vtt")
+
+    rel, status, method, note = p1.process_file(
+        src_root / "captions.vtt", src_root, corpus, VISION_CFG, None, True,
+        md_client=ExplodingMarkItDown())
+    assert status == "ok" and method == "pycaption-transcript" and called == [1]

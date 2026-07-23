@@ -8,8 +8,10 @@ Routing per file type:
     (prepare_audio). MarkItDown transcribes over the network via Google Web Speech.
   - PDF -> MarkItDown first (digital text layer + tables); if the result is thin
     (scanned/image-only), fall back to page-by-page OCR + vision (prepare_ocr).
+  - .srt/.vtt -> pycaption, flattened to a plain transcript (no timestamps).
+  - Already-text formats (prepare.text_native_extensions) -> copied verbatim.
   - Everything else -> MarkItDown, then 7 gap-fillers (.eml .doc .ppt .rtf
-    .odt/.ods/.odp .tsv .xml), then UNCONVERTED.md.
+    .odt/.ods/.odp .xml), then UNCONVERTED.md.
 
 Files recovered via OCR/vision/whisper/gap-filler are recorded in NEEDS_REVIEW.md.
 """
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import pycaption
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -303,6 +306,72 @@ def convert_xml(inpath: Path, md_path: Path):
         return False, 0, "xml-fenced"
 
 
+def _normalize_vtt_header(text: str) -> str:
+    """pycaption requires the blank line immediately after WEBVTT, but many
+    generators (e.g. yt-dlp's downloaded YouTube captions) insert extra
+    metadata lines ('Kind: captions', 'Language: en') before it. Collapse
+    everything between WEBVTT and the first truly-blank line down to just
+    WEBVTT, so real-world files aren't rejected on this technicality.
+    """
+    lines = text.splitlines()
+    if lines and lines[0].startswith("WEBVTT"):
+        try:
+            blank_idx = lines.index("", 1)
+            lines = [lines[0]] + lines[blank_idx:]
+        except ValueError:
+            pass
+    return "\n".join(lines)
+
+
+def convert_subtitle(inpath: Path, md_path: Path):
+    """SRT/WebVTT -> flowing transcript text via pycaption.
+
+    Cue numbers and timestamps are dropped — the pipeline only needs to
+    confirm a quote is IN the source, not when it was said (the original
+    file is untouched in source_root if a timestamp is ever needed).
+    Consecutive duplicate lines (common in auto-generated "rolling"
+    captions, where each cue repeats the previous line) are collapsed so
+    the same sentence doesn't appear back-to-back.
+
+    Uses pycaption rather than webvtt-py: webvtt-py's cue-block splitter
+    treats a lone-space filler line (used by YouTube's auto-captions as a
+    blank-content marker) the same as a truly-blank line, which silently
+    drops the cue it appears in — confirmed to lose real spoken content
+    on actual YouTube auto-captions. pycaption's WebVTTReader only closes
+    a cue on an exact empty-string line, so it isn't fooled the same way.
+    """
+    is_srt = inpath.suffix.lower() == ".srt"
+    try:
+        text = inpath.read_text(encoding="utf-8", errors="replace")
+        if not is_srt:
+            text = _normalize_vtt_header(text)
+        reader = pycaption.SRTReader() if is_srt else pycaption.WebVTTReader()
+        caption_set = reader.read(text)
+    except Exception as ex:
+        print(f"  prepare-1 pycaption failed: {inpath.name}: {type(ex).__name__}: {ex}",
+              file=sys.stderr)
+        return False, 0, "pycaption-error", None
+
+    langs = caption_set.get_languages()
+    captions = caption_set.get_captions(langs[0]) if langs else []
+
+    lines: list[str] = []
+    last_line = None
+    for caption in captions:
+        for line in caption.get_text().splitlines():
+            line = line.strip()
+            if line and line != last_line:
+                lines.append(line)
+                last_line = line
+
+    content = " ".join(lines).strip()
+    if not content:
+        return False, 0, "pycaption-empty", None
+    content += "\n"
+    _write_md(md_path, content)
+    return True, len(content), "pycaption-transcript", None
+
+
 def _convert_via_libreoffice(inpath: Path, md_path: Path):
     """Generic LibreOffice headless text conversion.
 
@@ -448,6 +517,11 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
     # These are readable as-is; the converter would only reformat/bloat them.
     if ext in text_native_exts:
         return _finish(relpath, passthrough_text(filepath, md_path))
+
+    # .srt / .vtt -> our own pycaption based extractor (not through
+    # MarkItDown, so we control the transcript cleanup ourselves).
+    if ext in (".srt", ".vtt"):
+        return _finish(relpath, convert_subtitle(filepath, md_path))
 
     # Everything else -> MarkItDown, then gap-fillers.
     if md_client is not None:

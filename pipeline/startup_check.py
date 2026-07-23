@@ -110,10 +110,6 @@ def check_tesseract() -> CheckResult:
     return _check_tool("tesseract", "Install: sudo apt install tesseract-ocr")
 
 
-def check_pdftoppm() -> CheckResult:
-    return _check_tool("pdftoppm", "Install: sudo apt install poppler-utils")
-
-
 def check_pdftotext() -> CheckResult:
     return _check_tool("pdftotext", "Install: sudo apt install poppler-utils")
 
@@ -128,6 +124,59 @@ def check_libreoffice() -> CheckResult:
 
 def check_antiword() -> CheckResult:
     return _check_tool("antiword", "Install: sudo apt install antiword")
+
+
+def check_markitdown() -> CheckResult:
+    """Check MarkItDown (primary converter for PDFs/office docs/etc). Non-fatal — prepare-1 falls back to gap-fillers."""
+    try:
+        import markitdown  # noqa: F401
+    except ImportError:
+        return CheckResult(name="markitdown", passed=False, fatal=False,
+                           detail="NOT FOUND (non-image/audio files rely on gap-fillers only)",
+                           install_hint="Install: pip install markitdown[all]")
+    version = getattr(markitdown, "__version__", "installed")
+    return CheckResult(name="markitdown", passed=True, fatal=False, detail=version)
+
+
+def check_pycaption() -> CheckResult:
+    """Check pycaption (.srt/.vtt transcript conversion).
+
+    Not marked fatal here since validate_startup runs before every command,
+    not just prepare-1 — but note prepare-1 itself will hard-crash on import
+    if this is missing (no fallback path exists, unlike MarkItDown).
+    """
+    try:
+        import pycaption  # noqa: F401
+    except ImportError:
+        return CheckResult(name="pycaption", passed=False, fatal=False,
+                           detail="NOT FOUND (prepare-1 will crash on import if corpus is ever touched)",
+                           install_hint="Install: pip install pycaption")
+    version = getattr(pycaption, "__version__", "installed")
+    return CheckResult(name="pycaption", passed=True, fatal=False, detail=version)
+
+
+def check_pymupdf() -> CheckResult:
+    """Check pymupdf (scanned-PDF page rasterization for OCR). No fallback path exists."""
+    try:
+        import pymupdf  # noqa: F401
+    except ImportError:
+        return CheckResult(name="pymupdf", passed=False, fatal=False,
+                           detail="NOT FOUND (scanned/image-only PDFs cannot be OCR'd)",
+                           install_hint="Install: pip install pymupdf")
+    version = getattr(pymupdf, "__version__", "installed")
+    return CheckResult(name="pymupdf", passed=True, fatal=False, detail=version)
+
+
+def check_pytesseract() -> CheckResult:
+    """Check the pytesseract Python wrapper (separate from the tesseract binary itself)."""
+    try:
+        import pytesseract  # noqa: F401
+    except ImportError:
+        return CheckResult(name="pytesseract", passed=False, fatal=False,
+                           detail="NOT FOUND (images/scanned PDFs cannot be OCR'd)",
+                           install_hint="Install: pip install pytesseract")
+    version = getattr(pytesseract, "__version__", "installed")
+    return CheckResult(name="pytesseract", passed=True, fatal=False, detail=version)
 
 
 def check_faster_whisper() -> CheckResult:
@@ -183,8 +232,8 @@ def warn_missing_audio_deps(audio_enabled: bool) -> str:
 
 _ALL_CHECKS = [
     check_ripgrep, check_jina, check_obscura, check_trafilatura, check_scrape_skill,
-    check_tesseract, check_pdftoppm, check_pdftotext, check_pandoc,
-    check_libreoffice, check_antiword, check_faster_whisper,
+    check_markitdown, check_tesseract, check_pymupdf, check_pytesseract, check_pdftotext,
+    check_pandoc, check_libreoffice, check_antiword, check_faster_whisper, check_pycaption,
 ]
 
 

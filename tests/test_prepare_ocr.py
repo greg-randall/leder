@@ -3,8 +3,68 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pymupdf
+
 import pipeline.prepare_ocr as ocr
 from pipeline.prepare_ocr import _is_tiny_image, _is_duplicate_image, _reset_dedup
+
+
+# ── _tesseract: pytesseract wiring ──────────────────────────────
+
+def test_tesseract_calls_pytesseract(tmp_path, monkeypatch):
+    """_tesseract wires straight into pytesseract.image_to_string with lang/timeout."""
+    captured = {}
+
+    def fake_image_to_string(image, lang=None, timeout=0):
+        captured["image"] = image
+        captured["lang"] = lang
+        captured["timeout"] = timeout
+        return "  recognized text  "
+
+    monkeypatch.setattr(ocr.pytesseract, "image_to_string", fake_image_to_string)
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    text = ocr._tesseract(img)
+
+    assert text == "recognized text"  # stripped
+    assert captured == {"image": str(img), "lang": "eng", "timeout": 120}
+
+
+def test_tesseract_failure_returns_empty_string(tmp_path, monkeypatch):
+    def boom(image, lang=None, timeout=0):
+        raise RuntimeError("tesseract not found")
+
+    monkeypatch.setattr(ocr.pytesseract, "image_to_string", boom)
+    img = tmp_path / "x.png"
+    img.write_bytes(b"x")
+    assert ocr._tesseract(img) == ""
+
+
+# ── _pdf_to_page_pngs: real PyMuPDF rasterization (self-contained, no binary) ──
+
+def test_pdf_to_page_pngs_real_rasterization(tmp_path):
+    doc = pymupdf.open()
+    for _ in range(3):
+        doc.new_page()
+    pdf_path = tmp_path / "three_pages.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    pages = ocr._pdf_to_page_pngs(pdf_path, outdir, dpi=72)
+
+    assert [p.name for p in pages] == ["page-0001.png", "page-0002.png", "page-0003.png"]
+    assert all(p.exists() and p.stat().st_size > 0 for p in pages)
+
+
+def test_pdf_to_page_pngs_bad_file_returns_empty(tmp_path):
+    bad = tmp_path / "not_a_pdf.pdf"
+    bad.write_bytes(b"this is not a pdf")
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    assert ocr._pdf_to_page_pngs(bad, outdir) == []
 
 
 def test_ocr_image_thin_escalates_to_vision(tmp_path, monkeypatch):

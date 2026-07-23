@@ -61,11 +61,41 @@ def test_warn_missing_vision_key(monkeypatch):
 
 def test_conversion_tool_checks_present():
     names = {c.name for c in sc.run_startup_checks()}
-    for tool in ["tesseract", "pdftoppm", "pdftotext", "pandoc", "libreoffice", "antiword"]:
+    for tool in ["tesseract", "pdftotext", "pandoc", "libreoffice", "antiword"]:
         assert tool in names, f"missing check for {tool}"
 
 
 def test_conversion_tool_checks_non_fatal():
     for c in sc.run_startup_checks():
-        if c.name in ("tesseract", "pdftoppm", "pdftotext", "pandoc", "libreoffice", "antiword"):
+        if c.name in ("tesseract", "pdftotext", "pandoc", "libreoffice", "antiword"):
             assert c.fatal is False, f"{c.name} should be non-fatal"
+
+
+def test_check_markitdown():
+    result = sc.check_markitdown()
+    assert result.name == "markitdown"
+    assert result.fatal is False
+
+
+def test_check_pycaption():
+    result = sc.check_pycaption()
+    assert result.name == "pycaption"
+    assert result.fatal is False
+
+
+def test_check_pymupdf():
+    result = sc.check_pymupdf()
+    assert result.name == "pymupdf"
+    assert result.fatal is False
+
+
+def test_check_pytesseract():
+    result = sc.check_pytesseract()
+    assert result.name == "pytesseract"
+    assert result.fatal is False
+
+
+def test_new_library_checks_present():
+    names = {c.name for c in sc.run_startup_checks()}
+    for tool in ["markitdown", "pycaption", "pymupdf", "pytesseract"]:
+        assert tool in names, f"missing check for {tool}"

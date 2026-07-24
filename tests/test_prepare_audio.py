@@ -127,7 +127,10 @@ def test_convert_audio_real_transcription(synthesized_speech_wav, tmp_path):
     default model, per config.yaml's prepare.audio.model) against a real
     synthesized speech clip -- not mocked. First run on a machine without
     the 'medium' model cached will download it (~1.5GB)."""
-    model, device = pa.get_whisper_model("medium", "auto")
+    try:
+        model, device = pa.get_whisper_model("medium", "auto")
+    except Exception as ex:
+        pytest.skip(f"could not load faster-whisper 'medium' model (no network/cache?): {ex}")
     if model is None:
         pytest.skip("faster-whisper not installed")
 

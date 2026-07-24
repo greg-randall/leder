@@ -1,6 +1,11 @@
 """Tests for local Whisper audio transcription (prepare_audio)."""
 from __future__ import annotations
 
+import shutil
+import subprocess
+
+import pytest
+
 import pipeline.prepare_audio as pa
 
 
@@ -96,3 +101,42 @@ def test_get_whisper_model_missing_dep(monkeypatch):
     monkeypatch.setattr(pa, "_HAS_WHISPER", False)
     model, dev = pa.get_whisper_model()
     assert model is None and dev is None
+
+
+AUDIO_FIXTURE_TEXT = "The quick brown fox jumps over the lazy dog."
+
+
+@pytest.fixture(scope="module")
+def synthesized_speech_wav(tmp_path_factory):
+    """Short offline-synthesized speech clip via espeak-ng -- no network,
+    fully reproducible, no licensing concerns (unlike a downloaded sample)."""
+    if not shutil.which("espeak-ng"):
+        pytest.skip("espeak-ng not installed")
+    out_dir = tmp_path_factory.mktemp("audio_fixture")
+    wav_path = out_dir / "speech.wav"
+    subprocess.run(
+        ["espeak-ng", "-w", str(wav_path), AUDIO_FIXTURE_TEXT],
+        check=True, capture_output=True,
+    )
+    return wav_path
+
+
+@pytest.mark.integration
+def test_convert_audio_real_transcription(synthesized_speech_wav, tmp_path):
+    """End-to-end: real faster-whisper transcription (the pipeline's actual
+    default model, per config.yaml's prepare.audio.model) against a real
+    synthesized speech clip -- not mocked. First run on a machine without
+    the 'medium' model cached will download it (~1.5GB)."""
+    model, device = pa.get_whisper_model("medium", "auto")
+    if model is None:
+        pytest.skip("faster-whisper not installed")
+
+    ok, size, method, note = pa.convert_audio(
+        synthesized_speech_wav, tmp_path / "out.md", model
+    )
+    md = (tmp_path / "out.md").read_text()
+
+    assert ok and method == "whisper"
+    transcribed = md.lower()
+    assert "fox" in transcribed
+    assert "dog" in transcribed

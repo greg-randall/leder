@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from docx import Document
 from docx.shared import Pt
 
@@ -96,6 +97,9 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
                         text += f"\nURL: {su}"
                 else:
                     text = "[No verification data]"
+                    print(f"  stage-e: no claims.json entry for footnote [^{part}] "
+                          f"(looked up as {fn_id}) — comment will show placeholder text",
+                          file=sys.stderr)
 
                 # Anchor to previous run(s) — the text right before this marker
                 if p.runs:

@@ -97,5 +97,11 @@ def test_check_pytesseract():
 
 def test_new_library_checks_present():
     names = {c.name for c in sc.run_startup_checks()}
-    for tool in ["markitdown", "pycaption", "pymupdf", "pytesseract"]:
+    for tool in ["markitdown", "pycaption", "pymupdf", "pytesseract", "python-docx"]:
         assert tool in names, f"missing check for {tool}"
+
+
+def test_check_python_docx():
+    result = sc.check_python_docx()
+    assert result.name == "python-docx"
+    assert result.fatal is False

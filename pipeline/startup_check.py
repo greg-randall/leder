@@ -179,6 +179,18 @@ def check_pytesseract() -> CheckResult:
     return CheckResult(name="pytesseract", passed=True, fatal=False, detail=version)
 
 
+def check_python_docx() -> CheckResult:
+    """Check python-docx (Stage E .docx generation with Word comments)."""
+    try:
+        import docx  # noqa: F401
+    except ImportError:
+        return CheckResult(name="python-docx", passed=False, fatal=False,
+                           detail="NOT FOUND (stage-e will crash on import)",
+                           install_hint="Install: pip install python-docx")
+    version = getattr(docx, "__version__", "installed")
+    return CheckResult(name="python-docx", passed=True, fatal=False, detail=version)
+
+
 def check_faster_whisper() -> CheckResult:
     """Check faster-whisper (local audio transcription) and note GPU vs CPU."""
     try:
@@ -234,6 +246,7 @@ _ALL_CHECKS = [
     check_ripgrep, check_jina, check_obscura, check_trafilatura, check_scrape_skill,
     check_markitdown, check_tesseract, check_pymupdf, check_pytesseract, check_pdftotext,
     check_pandoc, check_libreoffice, check_antiword, check_faster_whisper, check_pycaption,
+    check_python_docx,
 ]
 
 

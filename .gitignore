@@ -1,7 +1,16 @@
 .env
 config.yaml
 docs/
+
+# Archives — backup zips etc. shouldn't be committed (may contain
+# pre-purge history, corpus data, or other things not meant for git).
 *.7z
+*.zip
+*.tar
+*.tar.*
+*.tgz
+*.rar
+
 laws/
 local-files/
 sample-code/

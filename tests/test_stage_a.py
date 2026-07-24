@@ -205,3 +205,41 @@ def test_chunk_article_short_trailing_paragraph_not_dropped():
     chunks = _chunk_article(text, target_words=15, max_words=30)
 
     assert any("Short pull quote." in c for c in chunks)
+
+
+def test_chunk_article_merges_tiny_trailing_fragment_when_it_fits():
+    """Positive case: step 5's merge specifically fires and produces one
+    combined chunk -- isolated from step 2's ordinary paragraph merge by
+    using a single oversized, punctuation-free paragraph (so it can only be
+    reduced by step 4's hard-split, never touched by step 2 or step 3).
+
+    Before any splitting, big (57 words) + tiny (3 words) = 60 words, which
+    is over max_words=30, so step 2 refuses to merge them at the paragraph
+    level and keeps them as separate chunks. Step 4's hard-split then
+    breaks the 57-word blob into a 30-word chunk and a 27-word remainder.
+    Only then, in step 5, does the 27-word remainder have enough headroom
+    (27 + 3 = 30 <= max_words) to absorb the tiny trailing fragment -- a
+    merge that step 2 could never have performed on the unsplit paragraph.
+    """
+    big = ("word " * 57).strip()  # no punctuation -> forces hard-split, not sentence-split
+    text = big + "\n\n" + "Short pull quote."  # 3 words
+
+    chunks = _chunk_article(text, target_words=10, max_words=30)
+
+    assert len(chunks) == 2
+    assert chunks[0] == "word " * 29 + "word"  # first hard-split chunk, untouched by merge
+    assert len(chunks[0].split()) == 30
+    assert chunks[-1].endswith("Short pull quote.")
+    assert chunks[-1] != "Short pull quote."  # proves it was merged, not left standalone
+    assert len(chunks[-1].split()) == 30  # 27-word remainder + 3-word fragment
+
+
+def test_chunk_article_tiny_first_chunk_has_nothing_to_merge_into():
+    """A tiny fragment as the very first (and only) chunk has no previous
+    chunk to merge into -- must survive standalone, not crash on
+    final_chunks[-1] (the empty-guard branch of step 5)."""
+    text = "Short pull quote."  # 3 words, alone
+
+    chunks = _chunk_article(text, target_words=15, max_words=30)
+
+    assert chunks == ["Short pull quote."]

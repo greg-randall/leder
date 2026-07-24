@@ -5,6 +5,7 @@ from pipeline.stage_c_rebuild import (
     insert_footnote_markers,
     build_footnote_block,
 )
+import pipeline.stage_c_rebuild as sc
 from pipeline.models import Claim
 
 SAMPLE_ARTICLE = """# Test Article
@@ -154,3 +155,104 @@ def test_find_quote_position_levenshtein_does_not_confidently_pick_wrong_sentenc
         f"match at {pos} ({matched_text!r}) straddles both sentences -- "
         f"sentence1 span={(s1_start, s1_end)}, sentence2 span={(s2_start, s2_end)}"
     )
+
+
+class _FakeTextBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeResponse:
+    def __init__(self, text):
+        self.content = [_FakeTextBlock(text)]
+
+
+def _make_reconcile_claim(quote="broken quote text"):
+    return Claim(
+        claim_id="c001", claim_text="Some claim.", source_quote=quote,
+        claim_type="attribution", verdict="supported", source_proximity="original",
+        source_path="test.md", rationale="r", human_review=False, reconciled=False,
+    )
+
+
+def test_reconcile_unmatched_quotes_corrects(monkeypatch):
+    claim = _make_reconcile_claim()
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                return _FakeResponse(
+                    '{"corrected_quote": "the real sentence in the article", "status": "corrected"}'
+                )
+
+    monkeypatch.setattr("anthropic.Anthropic", FakeClient)
+    result = sc.reconcile_unmatched_quotes([claim], "article text", model="claude-sonnet-5")
+    assert result[0].source_quote == "the real sentence in the article"
+    assert result[0].reconciled is True
+
+
+def test_reconcile_unmatched_quotes_no_match(monkeypatch):
+    claim = _make_reconcile_claim()
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                return _FakeResponse('{"corrected_quote": null, "status": "no_match"}')
+
+    monkeypatch.setattr("anthropic.Anthropic", FakeClient)
+    result = sc.reconcile_unmatched_quotes([claim], "article text")
+    assert result[0].source_quote == "broken quote text"
+    assert result[0].reconciled is False
+
+
+def test_reconcile_unmatched_quotes_malformed_json(monkeypatch):
+    claim = _make_reconcile_claim()
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                return _FakeResponse("not valid json at all")
+
+    monkeypatch.setattr("anthropic.Anthropic", FakeClient)
+    result = sc.reconcile_unmatched_quotes([claim], "article text")
+    assert result[0].source_quote == "broken quote text"
+    assert len(result) == 1
+
+
+def test_reconcile_unmatched_quotes_api_exception(monkeypatch):
+    claim = _make_reconcile_claim()
+
+    class FakeClient:
+        def __init__(self, api_key=None):
+            pass
+
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise RuntimeError("API down")
+
+    monkeypatch.setattr("anthropic.Anthropic", FakeClient)
+    result = sc.reconcile_unmatched_quotes([claim], "article text")
+    assert result[0].source_quote == "broken quote text"
+    assert len(result) == 1
+
+
+def test_reconcile_unmatched_quotes_empty_list_short_circuits(monkeypatch):
+    def _explode(**kwargs):
+        raise AssertionError("should not construct a client for an empty list")
+
+    monkeypatch.setattr("anthropic.Anthropic", _explode)
+    result = sc.reconcile_unmatched_quotes([], "article text")
+    assert result == []

@@ -17,6 +17,53 @@ def test_needs_vision():
     assert pv.needs_vision("alpha beta gamma delta epsilon zeta", min_words=5) is False
 
 
+REAL_TEXT_20W = (
+    "The Texas Commission on Environmental Quality issued a permit renewal "
+    "for the facility after reviewing groundwater monitoring reports "
+    "submitted earlier this year by the operator."
+)
+GARBLED_TEXT_20W = (
+    "Xqzjv ptlrm wexnu blqka zprfx dlkjw nmbvc qsxrt yhntp fjklw "
+    "vbnmq wertx zpqlm xcvbn asdfg qwzxc mnbvq ptyui lkjhg fdsaz"
+)
+
+
+def test_is_garbled_real_text_not_flagged():
+    assert pv.is_garbled(REAL_TEXT_20W) is False
+
+
+def test_is_garbled_ocr_noise_flagged():
+    assert pv.is_garbled(GARBLED_TEXT_20W) is True
+
+
+def test_is_garbled_below_min_words_never_checked():
+    """Text under min_words never reaches the spellcheck branch -- always
+    False, even for text that would obviously fail spellcheck if it did."""
+    assert pv.is_garbled(GARBLED_TEXT_20W, min_words=1000) is False
+
+
+def test_needs_vision_composes_word_count_and_garbled_checks():
+    # Long enough to pass the word-count gate, but garbled -> needs vision.
+    assert pv.needs_vision(GARBLED_TEXT_20W, min_words=5) is True
+    # Long enough AND real -> does not need vision.
+    assert pv.needs_vision(REAL_TEXT_20W, min_words=5) is False
+
+
+def test_is_garbled_fails_open_when_spellchecker_missing(monkeypatch):
+    """Documents current behavior: if spellchecker can't be imported, text
+    is treated as NOT garbled rather than blocking conversion."""
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "spellchecker":
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert pv.is_garbled(GARBLED_TEXT_20W) is False
+
+
 def test_encode_png_passthrough(tmp_path):
     # 1x1 PNG
     png = tmp_path / "x.png"

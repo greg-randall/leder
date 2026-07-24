@@ -1,4 +1,12 @@
-"""Tests for Stage E: .docx generation with Word comments."""
+"""Tests for Stage E: .docx generation with Word comments.
+
+Note: the "\\n---\\n\\n## Sources\\n" block and everything after it in the
+markdown fixtures below is discarded by ``convert()`` (it splits the body off
+at that exact delimiter) -- the hand-written "[^1]: **[...]**..." footnote
+text is never read by the code under test. It's included only for fixture
+readability; editing it has no effect on comment output. What actually
+drives each comment's content is the corresponding entry in ``claims.json``.
+"""
 from __future__ import annotations
 
 import json
@@ -64,8 +72,11 @@ def test_multiple_findings_produce_multiple_comments(tmp_path):
     comments = list(Document(out).comments)
     assert len(comments) == 2
     texts = [c.text for c in comments]
-    assert any("Rationale one." in t for t in texts)
-    assert any("Rationale two." in t for t in texts)
+    # Pair each rationale with its own claim's severity symbol and claim text,
+    # so a mix-up between c0001's and c0002's data (e.g. footnote [^1] picking
+    # up c0002's fields) would fail this test.
+    assert any("Rationale one." in t and t.startswith("✓") and "First claim." in t for t in texts)
+    assert any("Rationale two." in t and t.startswith("✗") and "Second claim." in t for t in texts)
 
 
 def test_severity_symbol_mapping(tmp_path):
@@ -91,9 +102,12 @@ def test_severity_symbol_mapping(tmp_path):
     comments = list(Document(out).comments)
     assert len(comments) == 3
     texts = [c.text for c in comments]
-    assert any(t.startswith("✓") for t in texts)
-    assert any(t.startswith("✗") for t in texts)
-    assert any(t.startswith("?") for t in texts)
+    # Pair each symbol with the specific claim it must belong to, so a mutation
+    # that swaps the severity->symbol branches (e.g. PASS->✗, CRITICAL->✓) or
+    # that misattributes a comment to the wrong footnote would fail this test.
+    assert any(t.startswith("✓") and "Claim A" in t for t in texts)
+    assert any(t.startswith("✗") and "Claim B" in t for t in texts)
+    assert any(t.startswith("?") and "Claim C" in t for t in texts)
 
 
 def test_headings_render_as_word_headings(tmp_path):

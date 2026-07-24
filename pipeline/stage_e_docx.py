@@ -29,7 +29,7 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
 
     # Split off sources section
     body = md_text.split("\n---\n\n## Sources\n")[0]
-    body = re.sub(r'^# ⚠️ UNPLACED CLAIMS.*?\n\n', '', body, flags=re.DOTALL)
+    body = re.sub(r'^# ⚠️ UNPLACED CLAIMS.*?\n---\n\n', '', body, flags=re.DOTALL)
 
     doc = Document()
 

@@ -162,3 +162,41 @@ def test_unmatched_footnote_id_gets_placeholder_and_warns(tmp_path, capsys):
     assert len(comments) == 1
     assert comments[0].text == "[No verification data]"
     assert "c0001" in capsys.readouterr().err
+
+
+def test_unplaced_claims_block_is_fully_stripped(tmp_path):
+    """Regression test: stage_c_rebuild's unplaced-claims block (heading +
+    intro + claim bullets) must not leak into the docx as visible body
+    paragraphs. Uses real build_unplaced_warning() output assembled the
+    same way run_stage_c actually joins it, so this can't drift out of
+    sync with the real producer the way the original bug did (the strip
+    regex only matched through the first blank line, leaving the intro
+    paragraph and claim bullets in the visible body)."""
+    from pipeline.stage_c_rebuild import build_unplaced_warning
+    from types import SimpleNamespace
+    from pipeline.models import Verdict
+
+    unplaced_claim = SimpleNamespace(
+        claim_id="c099", claim_text="An unplaceable claim.", verdict=Verdict.SUPPORTED,
+        source_path="orphan.md", source_url=None, rationale="Could not locate in article.",
+        source_quote="a quote that does not appear anywhere",
+    )
+    unplaced_block = build_unplaced_warning([unplaced_claim])
+
+    md = tmp_path / "sourced.md"
+    md.write_text(
+        unplaced_block + "\n---\n\n"
+        "# Test Article\n\nOrdinary article text.\n\n"
+        "\n---\n\n## Sources\n"
+    )
+    claims = tmp_path / "claims.json"
+    _write_claims_json(claims, [])
+
+    out = run_stage_e(str(md), str(claims), str(tmp_path / "out.docx"))
+    doc = Document(out)
+    body_text = "\n".join(p.text for p in doc.paragraphs)
+
+    assert "UNPLACED CLAIMS" not in body_text
+    assert "MANUAL REVIEW REQUIRED" not in body_text
+    assert "An unplaceable claim." not in body_text
+    assert "Ordinary article text." in body_text

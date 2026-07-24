@@ -201,7 +201,7 @@ def convert(article_sourced_md: str, output_html: str) -> None:
     body = parts[0] if parts else md
     footnotes_raw = parts[1] if len(parts) > 1 else ""
 
-    unplaced_match = re.match(r'(# ⚠️ UNPLACED CLAIMS.*?\n)(?=\n)', body, re.DOTALL)
+    unplaced_match = re.match(r'(# ⚠️ UNPLACED CLAIMS.*?)\n---\n\n', body, re.DOTALL)
     unplaced_html = ""
     if unplaced_match:
         unplaced_html = _render_unplaced(unplaced_match.group(1))

@@ -6,6 +6,7 @@ from pipeline.stage_c_rebuild import (
     find_quote_position,
     insert_footnote_markers,
     build_footnote_block,
+    build_unplaced_warning,
 )
 import pipeline.stage_c_rebuild as sc
 from pipeline.models import Claim
@@ -293,3 +294,22 @@ def test_merge_placed_groups_different_positions_stay_separate():
     deduped, merged = sc._merge_placed_groups(placed, claim_lookup)
     assert deduped == [("c001", (10, 20)), ("c002", (30, 40))]
     assert len(merged) == 2
+
+
+# ── Unplaced-claims heading: producer/consumer contract ──────────
+
+def test_build_unplaced_warning_heading_matches_downstream_expectations():
+    """stage_d_html.py and stage_e_docx.py strip this block by searching
+    for the literal heading '# ⚠️ UNPLACED CLAIMS' (with the warning
+    emoji). If this producer ever emits a heading that doesn't match --
+    exactly what happened before this test existed -- the strip regex in
+    both consumers silently fails to match, and unplaced-claims content
+    (including internal review notes like 'MANUAL REVIEW REQUIRED') leaks
+    straight into the published HTML/DOCX output unstripped."""
+    claim = Claim(
+        claim_id="c001", claim_text="A claim.", source_quote="q",
+        claim_type="attribution", verdict="supported", source_proximity="original",
+        rationale="r", human_review=False, reconciled=False,
+    )
+    block = build_unplaced_warning([claim])
+    assert block.startswith("# ⚠️ UNPLACED CLAIMS\n")

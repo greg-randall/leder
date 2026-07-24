@@ -397,7 +397,7 @@ def _load_findings(findings_path: str) -> list[dict]:
 def build_unplaced_warning(unplaced: list[Claim]) -> str:
     """Build the UNPLACED CLAIMS warning block."""
     lines = [
-        "# UNPLACED CLAIMS\n",
+        "# ⚠️ UNPLACED CLAIMS\n",
         "These claims were verified but could not be located in the article text. "
         "The source_quote may have been paraphrased or the claim may not exist "
         "in the article. **MANUAL REVIEW REQUIRED.**\n",

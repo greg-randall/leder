@@ -89,12 +89,18 @@ def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None
                         f"Claim: {claim.get('claim_text', '')}\n"
                         f"Rationale: {claim.get('agent_summary') or claim.get('rationale', '')}"
                     )
+                    excerpt = claim.get("source_excerpt")
+                    if excerpt:
+                        text += f'\nSource text: "{excerpt}"'
                     sp = claim.get("source_path")
                     su = claim.get("source_url")
                     if sp and sp != "null":
                         text += f"\nSource: {sp}"
                     if su and su != "null":
                         text += f"\nURL: {su}"
+                    rec = claim.get("recommended_action")
+                    if rec:
+                        text += f"\n---\nRecommendation: {rec}"
                 else:
                     text = "[No verification data]"
                     print(f"  stage-e: no claims.json entry for footnote [^{part}] "

@@ -506,6 +506,13 @@ def main() -> None:
         output_path = getattr(args, "output", "article-sourced.docx")
         output_path = config.resolve_path(output_path) if config else output_path
 
+        if not os.path.exists(claims_path):
+            alt = os.path.join(os.path.dirname(claims_path) or ".", "claims.json")
+            if os.path.exists(alt):
+                print(f"Note: {claims_path} not found, using {alt} instead.",
+                      file=sys.stderr)
+                claims_path = alt
+
         for fpath, stage in [(article_path, "stage-c"), (claims_path, "stage-b")]:
             if not os.path.exists(fpath):
                 print(f"ERROR: {fpath} not found. Run {stage} first to generate it.",

@@ -20,6 +20,18 @@ from pathlib import Path as _Path
 
 from pipeline.models import Claim, ClaimsDocument
 
+# The claude CLI prints this once per spawned subprocess whenever an API-key
+# auth source (e.g. DeepSeek via ANTHROPIC_AUTH_TOKEN) takes precedence over
+# a claude.ai login -- expected and harmless here since every agent uses
+# API-key auth by design, but noisy at 40+ spawns per run.
+_CLI_NOISE_SUBSTRINGS = ("claude.ai connectors are disabled",)
+
+
+def _filter_agent_stderr(line: str) -> None:
+    if any(s in line for s in _CLI_NOISE_SUBSTRINGS):
+        return
+    print(line, file=sys.stderr)
+
 
 class VerdictOutput(BaseModel):
     """Structured output schema for claim verification agents."""
@@ -356,6 +368,7 @@ async def _verify_claim_async(
         max_turns=max_turns,
         output_format={"type": "json_schema", "schema": schema},
         settings=settings_path,
+        stderr=_filter_agent_stderr,
     )
 
     full_text = ""

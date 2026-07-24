@@ -249,10 +249,16 @@ def build_footnote_block(claims: list[Claim]) -> str:
         if claim.source_excerpt:
             excerpt = f"\n    Matched: \"{claim.source_excerpt}\""
 
+        recommendation = ""
+        rec = getattr(claim, 'recommended_action', None)
+        if rec:
+            recommendation = f"\n    Recommendation: {rec}"
+
         line = (
             f"[^{n}]: **[{vb}]** {pb} "
             f"{claim.claim_text} — {claim.rationale or 'No rationale provided.'}"
             f"{excerpt}"
+            f"{recommendation}"
             f"{flags}\n"
             f"    Source: {source_ref}\n"
         )

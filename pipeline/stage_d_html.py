@@ -54,13 +54,18 @@ _STYLE = """<style>
   .src-card.critical { border-left-color: var(--critical); }
   .src-card .sc-claim { font-weight: 600; display: inline; font-size: 0.9em; }
   .src-card .sc-rationale, .src-card .sc-matched, .src-card .sc-source,
-  .src-card .sc-flags { display: none; }
+  .src-card .sc-flags, .src-card .sc-recommendation, .src-card .sc-hr { display: none; }
   .src-card.expanded .sc-rationale, .src-card.expanded .sc-matched,
-  .src-card.expanded .sc-source, .src-card.expanded .sc-flags { display: block; }
+  .src-card.expanded .sc-source, .src-card.expanded .sc-flags,
+  .src-card.expanded .sc-recommendation, .src-card.expanded .sc-hr { display: block; }
   .src-card .sc-rationale { color: #6c757d; margin: 0.3em 0; font-size: 0.85em; }
   .src-card .sc-matched { margin: 0.3em 0; padding: 0.3em 0.5em;
     background: #fff; border-left: 2px solid #dee2e6;
     font-style: italic; font-size: 0.85em; }
+  .src-card .sc-matched::before { content: "Source text: "; font-weight: 600; font-style: normal; }
+  .src-card .sc-hr { border: none; border-top: 1px solid #dee2e6; margin: 0.5em 0; }
+  .src-card .sc-recommendation { margin: 0.3em 0; font-size: 0.85em; }
+  .src-card .sc-recommendation::before { content: "Recommendation: "; font-weight: 600; }
   .src-card .sc-source { font-size: 0.8em; font-family: monospace; word-break: break-all; }
   .src-card .sc-source a { color: #6c757d; }
   .src-card .sc-flags { font-size: 0.78em; margin-top: 0.2em; }
@@ -83,6 +88,7 @@ _STYLE = """<style>
     }
     body { background: #1a1a1a; color: #ddd; }
     .src-card .sc-matched { background: #2d2d2d; }
+    .src-card .sc-hr { border-top-color: #444; }
     .src-card .sc-source a { color: #aaa; }
     .src-card .sc-rationale { color: #aaa; }
     .sc-toggle:hover { background: #ddd !important; color: #222 !important; }
@@ -118,6 +124,8 @@ function smoothScrollTo(el, target, duration) {
     var badge = src.querySelector('.badge');
     var claim = src.querySelector('.claim');
     var rationale = src.querySelector('.rationale');
+    var matched = src.querySelector('.matched');
+    var recommendation = src.querySelector('.recommendation');
     var srcLink = src.querySelector('.src-link');
     var flags = src.querySelector('.flags');
 
@@ -131,8 +139,12 @@ function smoothScrollTo(el, target, duration) {
     var html = '<span class="sc-num ' + vclass + '">#' + fnId + '</span>';
     if (claim) html += '<span class="sc-claim">' + claim.innerHTML + '</span>';
     if (rationale) html += '<span class="sc-rationale">' + rationale.innerHTML + '</span>';
+    if (matched && matched.textContent.trim()) html += '<span class="sc-matched">' + matched.innerHTML + '</span>';
     if (srcLink) html += '<span class="sc-source">' + srcLink.innerHTML + '</span>';
     if (flags && flags.textContent.trim()) html += '<span class="sc-flags">' + flags.innerHTML + '</span>';
+    if (recommendation && recommendation.textContent.trim()) {
+      html += '<hr class="sc-hr"><span class="sc-recommendation">' + recommendation.innerHTML + '</span>';
+    }
 
     card.innerHTML = html;
     cardsContainer.appendChild(card);
@@ -303,6 +315,20 @@ def _md_to_html(text: str, fn_verdicts: dict[str, str]) -> str:
     return '\n'.join(result)
 
 
+# Same markers Stage B uses to detect a cited source that's one of our own
+# generated rollup/summary files rather than a primary source document.
+_SUMMARY_SOURCE_MARKERS = (
+    "_summary", "_FOLDER_SUMMARY", "CORPUS_OVERVIEW", "CORPUS_ROLLUP",
+    "ALL_SUMMARIES", "INDEX.md",
+)
+
+
+def _is_generated_summary_source(path: str) -> bool:
+    if not path:
+        return False
+    return any(m in path for m in _SUMMARY_SOURCE_MARKERS)
+
+
 def _render_sources(raw: str) -> str:
     """Build HTML source cards (hidden) for the JS sidebar to read from."""
     if not raw.strip():
@@ -316,12 +342,17 @@ def _render_sources(raw: str) -> str:
             fn_id, verdict_raw, proximity, claim, rationale, flags = m.groups()
             cur = {"id": fn_id.lstrip("^"), "verdict": verdict_raw.strip(),
                    "claim": claim.strip(), "rationale": rationale.strip(),
-                   "matched": "", "source": "", "flags": flags.strip() if flags else ""}
+                   "matched": "", "recommendation": "", "source": "",
+                   "flags": flags.strip() if flags else ""}
             cards.append(cur)
         elif line.strip().startswith("Matched:") and cur:
             cur["matched"] = line.strip()[8:].strip().strip('"')
+        elif line.strip().startswith("Recommendation:") and cur:
+            cur["recommendation"] = line.strip()[len("Recommendation:"):].strip()
         elif line.strip().startswith("Source:") and cur:
             cur["source"] = line.strip()[7:].strip()
+            if _is_generated_summary_source(cur["source"]):
+                cur["flags"] += " ⚠️ Summary source (not a primary document)"
     html_parts = []
     for c in cards:
         raw = c["verdict"]
@@ -342,6 +373,8 @@ def _render_sources(raw: str) -> str:
             f'<span class="badge {vclass}">{_escape(raw)}</span>'
             f'<span class="claim">{_escape(c["claim"])}</span>'
             f'<span class="rationale">{_escape(c["rationale"])}</span>'
+            f'<span class="matched">{_escape(c["matched"])}</span>'
+            f'<span class="recommendation">{_escape(c["recommendation"])}</span>'
             f'<span class="src-link">{_escape(c["source"])}</span>'
             f'<span class="flags">{_escape(c["flags"])}</span>'
             f'</div>'

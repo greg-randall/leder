@@ -1,4 +1,6 @@
 """Tests for Stage C: Article rebuild with source footnotes."""
+from types import SimpleNamespace
+
 from pipeline.stage_c_rebuild import (
     normalize_text,
     find_quote_position,
@@ -256,3 +258,38 @@ def test_reconcile_unmatched_quotes_empty_list_short_circuits(monkeypatch):
     monkeypatch.setattr("anthropic.Anthropic", _explode)
     result = sc.reconcile_unmatched_quotes([], "article text")
     assert result == []
+
+
+def test_merge_placed_groups_single_position_unchanged():
+    claim_lookup = {"c001": SimpleNamespace(claim_id="c001", check_type="fact_check", severity="PASS")}
+    placed = [("c001", (10, 20))]
+    deduped, merged = sc._merge_placed_groups(placed, claim_lookup)
+    assert deduped == [("c001", (10, 20))]
+    assert len(merged) == 1
+    assert merged[0] is claim_lookup["c001"]
+
+
+def test_merge_placed_groups_combines_badges_at_same_position():
+    claim_lookup = {
+        "c001": SimpleNamespace(claim_id="c001", check_type="fact_check", severity="PASS"),
+        "c002": SimpleNamespace(claim_id="c002", check_type="quote_precision", severity="CRITICAL"),
+    }
+    placed = [("c001", (10, 20)), ("c002", (10, 20))]
+    deduped, merged = sc._merge_placed_groups(placed, claim_lookup)
+
+    assert deduped == [("c001", (10, 20))]
+    assert len(merged) == 1
+    primary = merged[0]
+    assert primary is claim_lookup["c001"]
+    assert primary._merged_badges == ["✓ fact_check", "✗ quote_precision"]
+
+
+def test_merge_placed_groups_different_positions_stay_separate():
+    claim_lookup = {
+        "c001": SimpleNamespace(claim_id="c001", check_type="fact_check", severity="PASS"),
+        "c002": SimpleNamespace(claim_id="c002", check_type="fact_check", severity="WARNING"),
+    }
+    placed = [("c001", (10, 20)), ("c002", (30, 40))]
+    deduped, merged = sc._merge_placed_groups(placed, claim_lookup)
+    assert deduped == [("c001", (10, 20)), ("c002", (30, 40))]
+    assert len(merged) == 2

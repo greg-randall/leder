@@ -423,6 +423,30 @@ def test_convert_subtitle_srt(tmp_path):
     assert md.strip() == "Hello there. General Kenobi."
 
 
+def test_convert_subtitle_srt_youtube_blank_placeholder_pattern(tmp_path):
+    """Real-world YouTube-exported .srt puts a bare CRLF (no space, no text)
+    as a placeholder line WITHIN a cue block, before the real text arrives
+    two lines later -- confirmed on a real corpus, where this pattern
+    caused 20/22 .srt files to lose 100% of their content: pycaption's
+    SRTReader mistakes the placeholder for the separator BETWEEN cues,
+    discards the cue, then aborts the whole file when it next expects a
+    cue-number digit and finds leftover text instead. Routing .srt through
+    the WebVTTReader (which only closes a cue once it has real text
+    collected) fixes this -- this test reproduces the exact byte pattern
+    with generic content, not real transcript data."""
+    src = tmp_path / "d.srt"
+    src.write_bytes(
+        b"1\r\n00:00:00,799 --> 00:00:58,110\r\n\r\nHello there.\r\n\r\n"
+        b"2\r\n00:00:58,110 --> 00:00:58,120\r\n\r\n \r\n\r\n"
+        b"3\r\n00:00:58,120 --> 00:00:59,470\r\n\r\nGeneral Kenobi.\r\n\r\n"
+    )
+    ok, size, method, note = p1.convert_subtitle(src, tmp_path / "d.md")
+    md = (tmp_path / "d.md").read_text()
+    assert ok and method == "pycaption-transcript" and note is None
+    assert "Hello there." in md
+    assert "General Kenobi." in md
+
+
 def test_convert_subtitle_dedupes_rolling_captions(tmp_path):
     """Auto-generated 'rolling' captions repeat the prior line per cue -- collapsed."""
     src = tmp_path / "rolling.vtt"

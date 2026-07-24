@@ -18,6 +18,7 @@ Files recovered via OCR/vision/whisper/gap-filler are recorded in NEEDS_REVIEW.m
 from __future__ import annotations
 
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -323,8 +324,87 @@ def _normalize_vtt_header(text: str) -> str:
     return "\n".join(lines)
 
 
+_SRT_TIMESTAMP_RE = re.compile(r'(\d{2}:\d{2}:\d{2}),(\d{3})')
+
+
+def _srt_to_vtt_text(text: str) -> str:
+    """Rewrite raw SRT text into WebVTT syntax, so it can go through
+    pycaption's WebVTTReader instead of its SRTReader.
+
+    pycaption's SRTReader mishandles YouTube's "rolling caption" blank
+    placeholder line when it appears WITHIN a cue block, before the real
+    text arrives: it mistakes the placeholder for the separator BETWEEN
+    cues, discards the cue, then aborts the whole file on the leftover
+    text — confirmed on a real corpus of YouTube-exported .srt files,
+    where this pattern is dominant (20/22 files failed this way, each
+    losing 100% of their content). pycaption's WebVTTReader only closes a
+    cue once it has actually collected text nodes, so an empty line with
+    nothing collected yet is correctly ignored rather than treated as a
+    cue boundary — the same robustness that led us to pycaption over
+    webvtt-py for .vtt in the first place. Converting SRT's comma-decimal
+    timestamps to VTT's period-decimal and prepending a WEBVTT header is
+    enough for that already-trusted path to parse the same file
+    correctly. Numeric SRT cue-index lines are left as-is; WebVTT treats
+    an optional line before the timing line as a harmless cue identifier.
+    """
+    lines = text.splitlines()
+    vtt_lines = ["WEBVTT", ""]
+    for line in lines:
+        if "-->" in line:
+            line = _SRT_TIMESTAMP_RE.sub(r'\1.\2', line)
+        vtt_lines.append(line)
+    return "\n".join(vtt_lines)
+
+
+def _drop_empty_cues(text: str) -> str:
+    """Remove cue blocks whose content is entirely blank/whitespace.
+
+    pycaption's WebVTTReader only resets its "inside a cue" state when a
+    blank line arrives AFTER it has collected at least one real text node
+    for that cue. A cue whose only content is whitespace (a common
+    YouTube "still rolling, no text yet" placeholder) never collects a
+    real node — even a lone-space line strips to nothing inside
+    pycaption's own cue-text parser — so that blank-line reset never
+    fires. The parser stays stuck "inside" that cue, and the NEXT cue's
+    plain identifier line gets wrongly ingested as if it were real cue
+    text, silently dropping that next cue's actual content. Confirmed on
+    a real corpus: not pre-filtering these left real spoken content
+    missing with no error.
+
+    Cue boundaries here are found via the unambiguous "-->" timing line
+    (not blank lines, which appear both as real separators and as
+    in-cue placeholders — that ambiguity is the whole problem above).
+    Dropping a wholly-empty cue is also the semantically correct outcome:
+    it has nothing to contribute to the transcript anyway.
+    """
+    lines = text.splitlines()
+    timing_idxs = [i for i, line in enumerate(lines) if "-->" in line]
+    if not timing_idxs:
+        return text
+
+    def cue_start(idx: int) -> int:
+        # A non-blank, non-timing line immediately before a timing line
+        # is that cue's (optional, WebVTT-legal) identifier line.
+        if idx > 0 and lines[idx - 1].strip() != "" and "-->" not in lines[idx - 1]:
+            return idx - 1
+        return idx
+
+    starts = [cue_start(i) for i in timing_idxs]
+    ends = starts[1:] + [len(lines)]
+
+    drop_idxs: set[int] = set()
+    for timing_idx, start, end in zip(timing_idxs, starts, ends):
+        content = lines[timing_idx + 1:end]
+        if not any(line.strip() for line in content):
+            drop_idxs.update(range(start, end))
+
+    if not drop_idxs:
+        return text
+    return "\n".join(line for i, line in enumerate(lines) if i not in drop_idxs)
+
+
 def convert_subtitle(inpath: Path, md_path: Path):
-    """SRT/WebVTT -> flowing transcript text via pycaption.
+    """SRT/WebVTT -> flowing transcript text via pycaption's WebVTTReader.
 
     Cue numbers and timestamps are dropped — the pipeline only needs to
     confirm a quote is IN the source, not when it was said (the original
@@ -333,20 +413,20 @@ def convert_subtitle(inpath: Path, md_path: Path):
     captions, where each cue repeats the previous line) are collapsed so
     the same sentence doesn't appear back-to-back.
 
-    Uses pycaption rather than webvtt-py: webvtt-py's cue-block splitter
-    treats a lone-space filler line (used by YouTube's auto-captions as a
-    blank-content marker) the same as a truly-blank line, which silently
-    drops the cue it appears in — confirmed to lose real spoken content
-    on actual YouTube auto-captions. pycaption's WebVTTReader only closes
-    a cue on an exact empty-string line, so it isn't fooled the same way.
+    Both .srt and .vtt route through the WebVTTReader (see
+    _srt_to_vtt_text for why .srt is converted rather than parsed by
+    pycaption's own SRTReader), with wholly-empty cues pre-filtered out
+    (see _drop_empty_cues for why that has to happen before parsing,
+    not after).
     """
-    is_srt = inpath.suffix.lower() == ".srt"
     try:
         text = inpath.read_text(encoding="utf-8", errors="replace")
-        if not is_srt:
+        if inpath.suffix.lower() == ".srt":
+            text = _srt_to_vtt_text(text)
+        else:
             text = _normalize_vtt_header(text)
-        reader = pycaption.SRTReader() if is_srt else pycaption.WebVTTReader()
-        caption_set = reader.read(text)
+        text = _drop_empty_cues(text)
+        caption_set = pycaption.WebVTTReader().read(text)
     except Exception as ex:
         print(f"  prepare-1 pycaption failed: {inpath.name}: {type(ex).__name__}: {ex}",
               file=sys.stderr)

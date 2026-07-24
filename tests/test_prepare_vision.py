@@ -17,7 +17,7 @@ def test_needs_vision():
     assert pv.needs_vision("alpha beta gamma delta epsilon zeta", min_words=5) is False
 
 
-REAL_TEXT_20W = (
+REAL_TEXT = (
     "The Texas Commission on Environmental Quality issued a permit renewal "
     "for the facility after reviewing groundwater monitoring reports "
     "submitted earlier this year by the operator."
@@ -29,7 +29,7 @@ GARBLED_TEXT_20W = (
 
 
 def test_is_garbled_real_text_not_flagged():
-    assert pv.is_garbled(REAL_TEXT_20W) is False
+    assert pv.is_garbled(REAL_TEXT) is False
 
 
 def test_is_garbled_ocr_noise_flagged():
@@ -42,11 +42,18 @@ def test_is_garbled_below_min_words_never_checked():
     assert pv.is_garbled(GARBLED_TEXT_20W, min_words=1000) is False
 
 
+def test_is_garbled_respects_default_min_words_boundary():
+    """19 words: below the real default floor (20) -> never checked, even though garbled."""
+    below = " ".join(GARBLED_TEXT_20W.split()[:19])
+    assert pv.is_garbled(below) is False          # min_words=20 default, 19 < 20
+    assert pv.is_garbled(GARBLED_TEXT_20W) is True # 20 words, reaches spellcheck, fails it
+
+
 def test_needs_vision_composes_word_count_and_garbled_checks():
     # Long enough to pass the word-count gate, but garbled -> needs vision.
     assert pv.needs_vision(GARBLED_TEXT_20W, min_words=5) is True
     # Long enough AND real -> does not need vision.
-    assert pv.needs_vision(REAL_TEXT_20W, min_words=5) is False
+    assert pv.needs_vision(REAL_TEXT, min_words=5) is False
 
 
 def test_is_garbled_fails_open_when_spellchecker_missing(monkeypatch):

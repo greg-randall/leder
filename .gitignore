@@ -25,9 +25,11 @@ web_cache/
 /*.md
 /*.html
 /*.docx
+/*.txt
 
 # But keep these source files
 !/.gitignore
 !/README.md
+!/requirements.txt
 ~$*
 .prereq-cache.json

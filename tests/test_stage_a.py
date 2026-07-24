@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from pipeline.stage_a_extract import (
+    _chunk_article,
     build_extraction_prompt,
     build_quality_gate_prompt,
     extract_claims,
@@ -170,3 +171,37 @@ def test_run_stage_a_playbook_path_writes_targets_json(tmp_path, monkeypatch):
     assert len(data["targets"]) == 1
     assert data["targets"][0]["playbook"] == "test_check"  # slug, not display name
     assert data["targets"][0]["target_text"] == "t1"
+
+
+def test_chunk_article_merges_small_chunks():
+    text = "\n\n".join([f"Paragraph {i} " + "word " * 50 for i in range(3)])
+    chunks = _chunk_article(text, target_words=100, max_words=1000)
+    assert len(chunks) == 1
+
+
+def test_chunk_article_oversized_splits_on_sentences():
+    long_sentence_block = " ".join(
+        [f"Sentence number {i} has some words in it." for i in range(1, 200)]
+    )
+    chunks = _chunk_article(long_sentence_block, target_words=50, max_words=100)
+    assert len(chunks) > 1
+    assert all(len(c.split()) <= 100 for c in chunks)
+
+
+def test_chunk_article_still_oversized_hard_splits():
+    giant_single_sentence = "word " * 500
+    chunks = _chunk_article(giant_single_sentence, target_words=50, max_words=100)
+    assert len(chunks) >= 5
+    assert all(len(c.split()) <= 100 for c in chunks)
+
+
+def test_chunk_article_short_trailing_paragraph_not_dropped():
+    """A short (<10-word) standalone trailing paragraph must survive --
+    proving the old `>= 10` drop-filter silently lost content like this."""
+    # sized close to max_words so it won't get pre-merged with the next paragraph
+    para = ("word " * 28).strip()
+    text = para + "\n\n" + "Short pull quote."  # 3 words
+
+    chunks = _chunk_article(text, target_words=15, max_words=30)
+
+    assert any("Short pull quote." in c for c in chunks)

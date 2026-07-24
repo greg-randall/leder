@@ -382,6 +382,8 @@ def _chunk_article(text: str, target_words: int = 300, max_words: int = 1000) ->
        without exceeding max_words.
     3. Any chunk still over max_words is split on sentences.
     4. Any chunk STILL over max_words is hard-split.
+    5. Any resulting tiny (<10-word) fragment is merged into the previous
+       chunk (capped at max_words) rather than dropped.
     """
     # Step 1: split on paragraph boundaries
     chunks = [c.strip() for c in text.split('\n\n') if c.strip()]
@@ -444,7 +446,22 @@ def _chunk_article(text: str, target_words: int = 300, max_words: int = 1000) ->
         else:
             oversized.append(c)
 
-    return [c for c in oversized if len(c.split()) >= 10]  # Drop tiny fragments
+    # Step 5: merge tiny trailing fragments into the previous chunk instead
+    # of dropping them outright -- a short standalone paragraph (e.g. a
+    # pull quote) could otherwise be lost entirely and never sent to claim
+    # extraction. Only merges when it fits under max_words, so it can't
+    # undo step 3/4's oversized-chunk splitting by re-agglomerating a long
+    # run of short sentence fragments back into one big blob.
+    final_chunks: list[str] = []
+    for c in oversized:
+        cw = len(c.split())
+        if (cw < 10 and final_chunks
+                and len(final_chunks[-1].split()) + cw <= max_words):
+            final_chunks[-1] = final_chunks[-1] + "\n\n" + c
+        else:
+            final_chunks.append(c)
+
+    return final_chunks
 
 
 def _save_partial_claims(output_path: str, results_by_idx: dict, total_chunks: int, article_path: str) -> None:

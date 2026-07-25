@@ -146,6 +146,46 @@ def test_fanned_out_clones_survive_dedup(tmp_path):
     assert "[^2]" in result
 
 
+def test_genuine_duplicates_still_collapse(tmp_path):
+    """Two findings with identical claim_text/check_type/source_quote (a
+    genuine duplicate, not a fan-out clone) must still collapse to one."""
+    import json
+    from pipeline.stage_c_rebuild import run_stage_c
+
+    article = tmp_path / "article.md"
+    article.write_text("The report says 20000 barrels a day.")
+
+    findings_path = tmp_path / "findings.json"
+    findings_path.write_text(json.dumps({
+        "article_file": str(article),
+        "article_summary": "S",
+        "findings": [
+            {
+                "finding_id": "fact_check-dup1", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "20000 barrels a day were injected.",
+                "anchor_text": "20000 barrels a day",  # same anchor as the second finding
+                "agent_summary": "short",
+            },
+            {
+                "finding_id": "fact_check-dup2", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "20000 barrels a day were injected.",  # same claim_text
+                "anchor_text": "20000 barrels a day",  # same anchor -- genuine duplicate, not a clone
+                "agent_summary": "a longer rationale that differs in length from the other one",
+            },
+        ],
+    }))
+
+    output_path = str(tmp_path / "article-sourced.md")
+    run_stage_c(
+        article_path=str(article), findings_path=str(findings_path),
+        output_path=output_path,
+    )
+
+    result = open(output_path).read()
+    assert "[^1]" in result
+    assert "[^2]" not in result
+
+
 def test_find_quote_position_disambiguates_via_context():
     """Same phrase (letters-only) appears twice; context should pick the right one."""
     article = (

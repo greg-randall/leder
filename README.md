@@ -303,4 +303,4 @@ Agents save web-fetched pages to `web_cache/{target_id}/`. After Stage B finishe
 
 ### Resume and deduplication
 
-Stage B skips targets that already have a finding in incremental output. Stage A loads playbooks once and caches them. Stage C deduplicates by `(target_text, check_type)`. Findings from different playbooks on the same anchor merge into one footnote with all badges visible.
+Stage B skips targets that already have a finding in incremental output. Stage A loads playbooks once and caches them. Stage C deduplicates by `(target_text, check_type, anchor_text)`, so findings that share a target_text/check_type but were extracted from different anchors (e.g. fan-out clones of a near-duplicate target) survive as separate footnotes instead of collapsing. Findings from different playbooks on the same anchor merge into one footnote with all badges visible.

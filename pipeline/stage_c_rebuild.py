@@ -524,8 +524,10 @@ def run_stage_c(
         raise ValueError("Either claims_path or findings_path must be provided")
 
     # ── Deduplicate ───────────────────────────────────────────────
-    # For findings with different check_types, use (claim_text, check_type)
-    # as the dedup key so distinct check_types on the same target survive.
+    # Use (claim_text, check_type, source_quote) as the dedup key so distinct
+    # check_types on the same target survive, and so fan-out clones (same
+    # claim_text/check_type but a different source_quote/anchor) survive too
+    # instead of being collapsed back into one by this pass.
     from collections import defaultdict
     groups: dict = defaultdict(list)
     for c in claims:

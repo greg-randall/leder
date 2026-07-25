@@ -531,7 +531,7 @@ def run_stage_c(
     for c in claims:
         if c.verdict is not None:
             if hasattr(c, 'check_type') and c.check_type:
-                key = (c.claim_text, c.check_type)
+                key = (c.claim_text, c.check_type, c.source_quote)
             else:
                 key = c.claim_text
             groups[key].append(c)

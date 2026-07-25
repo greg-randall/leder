@@ -100,6 +100,52 @@ def test_rebuild_reads_findings_json(tmp_path):
     assert "Acme" in result
 
 
+def test_fanned_out_clones_survive_dedup(tmp_path):
+    """Two findings sharing claim_text+check_type but with distinct
+    source_quote (anchor_text) -- the fan-out shape from stage-b's dedup --
+    must NOT collapse into one during stage-c's dedup."""
+    import json
+    from pipeline.stage_c_rebuild import run_stage_c
+
+    article = tmp_path / "article.md"
+    article.write_text(
+        "The timeline says 20000 barrels a day. "
+        "The key facts also say 20000 barrels a day again."
+    )
+
+    findings_path = tmp_path / "findings.json"
+    findings_path.write_text(json.dumps({
+        "article_file": str(article),
+        "article_summary": "S",
+        "findings": [
+            {
+                "finding_id": "fact_check-rep", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "20000 barrels a day were injected.",
+                "anchor_text": "timeline says 20000 barrels a day",
+                "agent_summary": "ok",
+            },
+            {
+                "finding_id": "fact_check-rep-a1", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "20000 barrels a day were injected.",  # same claim_text
+                "anchor_text": "key facts also say 20000 barrels a day again",  # different anchor
+                "agent_summary": "ok",
+            },
+        ],
+    }))
+
+    output_path = str(tmp_path / "article-sourced.md")
+    run_stage_c(
+        article_path=str(article), findings_path=str(findings_path),
+        output_path=output_path,
+    )
+
+    result = open(output_path).read()
+    # Both footnote markers must be placed -- proof neither finding was
+    # dropped by dedup (they'd otherwise collapse to a single [^1]).
+    assert "[^1]" in result
+    assert "[^2]" in result
+
+
 def test_find_quote_position_disambiguates_via_context():
     """Same phrase (letters-only) appears twice; context should pick the right one."""
     article = (

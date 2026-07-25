@@ -515,3 +515,72 @@ def test_agent_prompt_mentions_web_cache():
     assert "--cache-dir web_cache" in AGENT_SYSTEM_PROMPT
     cache_hint = AGENT_SYSTEM_PROMPT.lower()
     assert "already cached" in cache_hint or "already been cached" in cache_hint
+
+
+# ── Near-duplicate target dedup + finding fan-out ─────────────────
+
+def test_run_stage_b_dedups_near_duplicate_targets_and_fans_out(tmp_path, monkeypatch):
+    """Two near-duplicate targets get ONE agent call but TWO findings."""
+    import json as _json
+    from pipeline import stage_b_verify as sb
+
+    targets_path = tmp_path / "targets.json"
+    targets_path.write_text(_json.dumps({
+        "article_file": "article.md",
+        "article_summary": "S",
+        "targets": [
+            {"playbook": "fact_check", "target_text": "20000 barrels a day were injected.",
+             "anchor_text": "20000 barrels a day (timeline)", "context": "ctx-a"},
+            {"playbook": "fact_check", "target_text": "20000 barrels a day were injected!",  # near-dup
+             "anchor_text": "20000 barrels a day (key facts)", "context": "ctx-b"},
+        ],
+    }))
+
+    pd = tmp_path / "playbooks"
+    pd.mkdir()
+    (pd / "fact_check.yaml").write_text(
+        "name: Fact Check\n"
+        "extraction:\n  prompt: E\n"
+        "verification:\n  prompt: V\n"
+        "  allowed_tools: [Read]\n"
+    )
+
+    output_path = str(tmp_path / "findings.json")
+    calls = []
+
+    async def fake_verify_target_async(
+        target, prompt, allowed_tools, corpus_root,
+        timeout, max_turns, debug_dir, article_summary,
+    ):
+        from pipeline.finding import Finding, Severity
+        calls.append(target["anchor_text"])
+        return Finding(
+            finding_id="fact_check-rep",
+            check_type="fact_check",
+            severity=Severity.PASS,
+            target_text=target["target_text"],
+            anchor_text=target["anchor_text"],
+            context=target.get("context", ""),
+            agent_summary="ok",
+        )
+
+    monkeypatch.setattr(sb, "_verify_target_async", fake_verify_target_async)
+    monkeypatch.setattr(sb, "_check_corpus_ready", lambda *a, **k: [])
+
+    sb.run_stage_b(
+        output_path=output_path, corpus_root=str(tmp_path),
+        targets_path=str(targets_path), playbook_dir=str(pd),
+        concurrency=4, force_run=True,
+    )
+
+    # Only ONE agent call for the two near-duplicate targets.
+    assert len(calls) == 1
+
+    data = _json.loads(open(output_path).read())
+    findings = data["findings"]
+    assert len(findings) == 2
+    anchors = {f["anchor_text"] for f in findings}
+    assert anchors == {"20000 barrels a day (timeline)", "20000 barrels a day (key facts)"}
+    finding_ids = {f["finding_id"] for f in findings}
+    assert "fact_check-rep" in finding_ids
+    assert any(fid.endswith("-a1") for fid in finding_ids)

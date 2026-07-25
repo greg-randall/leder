@@ -483,6 +483,12 @@ async def _verify_target_async(
     )
 
 
+def _normalize_target_text(text: str) -> str:
+    """Normalize target_text for near-duplicate grouping before stage-b dispatch."""
+    normalized = re.sub(r"\s+", " ", text.lower()).strip()
+    return normalized.rstrip(".?!")
+
+
 def _is_summary_path(path: str | None) -> bool:
     """Check if a source path appears to be a summary/overview rather than an original document."""
     if not path:
@@ -870,6 +876,19 @@ def run_stage_b(
             targets_list = [t for i, t in enumerate(targets_list) if i in debug_ids]
             print(f"Stage B: {len(targets_list)} targets (debug-ids filter)",
                   file=sys.stderr)
+
+        from collections import OrderedDict as _OrderedDict
+        _groups: "_OrderedDict[tuple, list]" = _OrderedDict()
+        for t in targets_list:
+            key = (t.get("playbook", ""), _normalize_target_text(t.get("target_text", "")))
+            _groups.setdefault(key, []).append(t)
+        representatives = [members[0] for members in _groups.values()]
+        _dup_count = len(targets_list) - len(representatives)
+        if _dup_count:
+            print(f"Stage B: dedup {len(targets_list)} targets -> {len(representatives)} "
+                  f"unique ({_dup_count} near-duplicate(s) fanned out from verified "
+                  f"representatives)", file=sys.stderr)
+
         summary = data.get("article_summary", "")
         article_file = data.get("article_file", "")
 
@@ -883,11 +902,12 @@ def run_stage_b(
                 print(f"Debug mode: logging {debug_count} random targets -> "
                       f"{base_debug_dir}/", file=sys.stderr)
 
-        print(f"Stage B: {len(targets_list)} targets. Model: {os.environ.get('ANTHROPIC_MODEL', '?')}", file=sys.stderr)
+        print(f"Stage B: {len(representatives)} targets to verify. "
+              f"Model: {os.environ.get('ANTHROPIC_MODEL', '?')}", file=sys.stderr)
 
         from tqdm import tqdm
         import threading as _thr
-        pbar = tqdm(total=len(targets_list), desc="  Stage B agents", unit="target")
+        pbar = tqdm(total=len(representatives), desc="  Stage B agents", unit="target")
         findings_lock = _thr.Lock()
         findings_by_id: dict[str, Finding] = {}
 
@@ -903,6 +923,7 @@ def run_stage_b(
                     f.write(doc.to_json())
 
         async def _do():
+            from dataclasses import replace as _replace
             sem = asyncio.Semaphore(concurrency)
 
             async def _one(i, t):
@@ -923,15 +944,24 @@ def run_stage_b(
                     if finding is not None:
                         with findings_lock:
                             findings_by_id[finding.finding_id] = finding
+                            key = (t.get("playbook", ""), _normalize_target_text(t.get("target_text", "")))
+                            for n, member in enumerate(_groups[key][1:], start=1):
+                                clone = _replace(
+                                    finding,
+                                    finding_id=f"{finding.finding_id}-a{n}",
+                                    anchor_text=member.get("anchor_text", finding.anchor_text),
+                                    context=member.get("context", finding.context),
+                                )
+                                findings_by_id[clone.finding_id] = clone
                         _save_findings()
                     pbar.update(1)
                     return finding
 
-            return await asyncio.gather(*[_one(i, t) for i, t in enumerate(targets_list)])
+            return await asyncio.gather(*[_one(i, t) for i, t in enumerate(representatives)])
 
         results = asyncio.run(_do())
         pbar.close()
-        findings_list = [r for r in results if r is not None]
+        findings_list = list(findings_by_id.values())
         doc = FindingsDocument(article_file=article_file, article_summary=summary, findings=findings_list)
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(doc.to_json())

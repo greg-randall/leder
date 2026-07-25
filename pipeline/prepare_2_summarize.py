@@ -43,10 +43,10 @@ Reply with two sections:
 it's about. Include the document type (meeting transcript, email, report,
 official filing, news article, etc.).
 
-**Facts:** Bullet list of specific numbers, dates, names, amounts, decisions,
-or issues that appear in the text. Quote or near-quote. If the document
-states a number, include it. If it names a person, company, or place,
-include it. Err on the side of including rather than omitting.
+**Facts:** Bullet list of specific numbers, dates, names, amounts, locations,
+deadlines, decisions, or issues that appear in the text. Quote or near-quote.
+If the document states a number, include it. If it names a person, company,
+or place, include it. Err on the side of including rather than omitting.
 
 - When a fact comes from a specific speaker (public comment, expert
   testimony, staff report), name the speaker in the bullet: "Jerry Carill

@@ -585,6 +585,9 @@ def run_stage_a(
                     system_prompt=extraction_system_prompt)
                 pb_targets.extend(missed)
 
+            for t in pb_targets:
+                t.context = _find_paragraph(article_text, t.anchor_text)
+
             all_targets.extend(pb_targets)
 
         # Write targets.json

@@ -307,6 +307,58 @@ def test_chunk_context_brief_prepended_to_later_chunks(tmp_path, monkeypatch):
     assert data["article_summary"] == "Summary from chunk 1"
 
 
+def test_run_stage_a_playbook_path_populates_context(tmp_path, monkeypatch):
+    # Note: the target paragraph is placed first (not preceded by other
+    # paragraphs). _find_paragraph's backward boundary search only kicks in
+    # once the match is >1000 chars into the article -- for a match nearer
+    # the start it falls back to article start, which is correct here since
+    # there's nothing before it anyway. Placing a trailing paragraph after
+    # the target instead exercises the (unconditional) forward boundary.
+    article_text = (
+        "Jerry Carill testified that the facility injects 20000 barrels a day "
+        "into the disposal well, according to meeting minutes.\n\n"
+        "Closing paragraph, also not the target."
+    )
+    article = tmp_path / "article.md"
+    article.write_text(article_text)
+    output = str(tmp_path / "targets.json")
+
+    pd = tmp_path / "playbooks"
+    pd.mkdir()
+    (pd / "test_check.yaml").write_text(
+        "name: Test Check\n"
+        "extraction:\n  prompt: \"Extract from: {{article_text}}\"\n"
+        "verification:\n  prompt: Verify.\n"
+    )
+
+    class FakeTargetTool:
+        type = "tool_use"
+        input = {
+            "targets": [{
+                "target_text": "Jerry Carill testified 20000 barrels a day.",
+                "anchor_text": "injects 20000 barrels a day into the disposal well",
+            }],
+            "article_title": "T", "article_summary": "S",
+        }
+
+    fake = type("c", (), {"messages": type("m", (), {
+        "create": lambda self, **kw: type("r", (), {"content": [FakeTargetTool()]})()
+    })()})()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+
+    from pipeline.stage_a_extract import run_stage_a
+    run_stage_a(
+        article_path=str(article), output_path=output, corpus_root="", project_name="",
+        model="m", quality_gate=False, playbook_dir=str(pd), playbook_names=["test_check"],
+    )
+
+    import json
+    data = json.loads(open(output).read())
+    ctx = data["targets"][0]["context"]
+    assert "Jerry Carill testified" in ctx
+    assert "Closing paragraph" not in ctx
+
+
 def test_chunk_article_tiny_first_chunk_has_nothing_to_merge_into():
     """A tiny fragment as the very first (and only) chunk has no previous
     chunk to merge into -- must survive standalone, not crash on

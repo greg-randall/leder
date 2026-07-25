@@ -21,6 +21,10 @@ from pathlib import Path as _Path
 
 from pipeline.models import Claim, ClaimsDocument
 
+# Absolute path to fetch_page.py -- the verification agent's cwd is corpus_root,
+# so a bare relative "pipeline/tools/fetch_page.py" does not resolve from there.
+_FETCH_PAGE_SCRIPT = str(_Path(__file__).resolve().parent / "tools" / "fetch_page.py")
+
 # The claude CLI prints this once per spawned subprocess whenever an API-key
 # auth source (e.g. DeepSeek via ANTHROPIC_AUTH_TOKEN) takes precedence over
 # a claude.ai login -- expected and harmless here since every agent uses
@@ -50,13 +54,57 @@ class FindingOutput(BaseModel):
     """Structured output schema for playbook-driven verification agents."""
     severity: str = Field(description="PASS, WARNING, or CRITICAL")
     agent_summary: str = Field(description="1-2 sentences explaining the finding")
-    recommended_action: Optional[str] = Field(default=None)
-    source_path: Optional[str] = Field(default=None)
-    source_url: Optional[str] = Field(default=None)
-    source_excerpt: Optional[str] = Field(default=None)
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    human_review: Optional[bool] = Field(default=None)
-    metadata: dict = Field(default_factory=dict)
+    recommended_action: Optional[str] = Field(
+        default=None,
+        description=(
+            "A concrete edit instruction for the article's editor, e.g. "
+            "\"change 'per week' to 'per day'\" or \"add attribution: "
+            "'according to testimony from...'\". Null when severity is PASS "
+            "and no edit is needed."
+        ),
+    )
+    source_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to the source document, relative to the corpus root, exactly "
+            "as it exists on disk (the converted .md file, never the raw source "
+            "format). Null if no local source was found."
+        ),
+    )
+    source_url: Optional[str] = Field(
+        default=None, description="URL of the web source used, or null.",
+    )
+    source_excerpt: Optional[str] = Field(
+        default=None,
+        description=(
+            "Verbatim text copied from the source that supports or "
+            "contradicts the claim."
+        ),
+    )
+    confidence: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0,
+        description=(
+            "One of exactly 0.95, 0.8, 0.6, 0.4, or 0.2 per the confidence "
+            "rubric -- how likely this severity judgment would survive human "
+            "review, not whether the claim is true."
+        ),
+    )
+    human_review: Optional[bool] = Field(
+        default=None,
+        description=(
+            "True if this finding needs a human to double-check it before "
+            "the article ships."
+        ),
+    )
+    metadata: dict = Field(
+        default_factory=dict,
+        description=(
+            "Structured extras: attribution_status "
+            "(attributed_and_confirmed | stated_as_fact_testimony_only | "
+            "corroborated | contradicted | not_found) and/or "
+            "corpus_contradicted_by_external (bool)."
+        ),
+    )
 
 
 _CONFIDENCE_BANDS = (0.95, 0.8, 0.6, 0.4, 0.2)
@@ -317,6 +365,7 @@ async def _verify_claim_async(
     article_summary: str = "",
     allowed_tools: list[str] | None = None,
     output_schema: dict | None = None,
+    web_cache_dir: str = "web_cache",
 ) -> Claim:
     from claude_agent_sdk import (
         query, ClaudeAgentOptions,
@@ -335,6 +384,15 @@ async def _verify_claim_async(
     from datetime import datetime as _dt
     today = _dt.now().strftime("%B %d, %Y")
 
+    # Resolve the schema actually in use up front so the prompt's boilerplate
+    # (fetch_page command, "Output fields" list) always matches it.
+    schema = output_schema if output_schema is not None else VerdictOutput.model_json_schema()
+    schema_fields = ", ".join(schema.get("properties", {}).keys())
+    fetch_page_cmd = (
+        f"{sys.executable} {_FETCH_PAGE_SCRIPT} <url> {claim.claim_id} "
+        f"--cache-dir {web_cache_dir}"
+    )
+
     prompt = (
         f"Verify this claim:\n\n"
         f"{article_context}"
@@ -343,12 +401,10 @@ async def _verify_claim_async(
         f"Claim: {claim.claim_text}\n\n"
         f"Claim type: {claim.claim_type}\n\n"
         f"Claim ID: {claim.claim_id}\n\n"
-        f"If you fetch any web pages, run: "
-        f"python3 pipeline/tools/fetch_page.py <url> {claim.claim_id} --cache-dir web_cache\n"
-        f"This saves to web_cache/{claim.claim_id}/page.md for the audit trail.\n"
-        f"Before fetching, check web_cache/_FOLDER_SUMMARY.md — the page may already be cached.\n\n"
-        f"Output fields: verdict, source_proximity, source_path, "
-        f"source_url, rationale, human_review, confidence."
+        f"If you fetch any web pages, run: {fetch_page_cmd}\n"
+        f"This saves to {web_cache_dir}/{claim.claim_id}/page.md for the audit trail.\n"
+        f"Before fetching, check {web_cache_dir}/_FOLDER_SUMMARY.md — the page may already be cached.\n\n"
+        f"Output fields: {schema_fields}."
     )
 
     # Dynamic sandbox: deny access outside the corpus and /tmp.
@@ -383,7 +439,6 @@ async def _verify_claim_async(
     settings_path = _sf.name
 
     tools = allowed_tools if allowed_tools is not None else ["Read", "Bash", "WebSearch", "WebFetch"]
-    schema = output_schema if output_schema is not None else VerdictOutput.model_json_schema()
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         allowed_tools=tools,
@@ -451,6 +506,7 @@ async def _verify_claim_async(
 async def _verify_target_async(
     target, system_prompt, allowed_tools, corpus_root,
     timeout, max_turns, debug_dir, article_summary,
+    web_cache_dir="web_cache",
 ):
     """Verify one target dict via a playbook's prompt+tools, returning a Finding or None."""
     from pipeline.models import Claim
@@ -469,6 +525,7 @@ async def _verify_target_async(
         debug_dir, article_summary,
         allowed_tools=allowed_tools,
         output_schema=FindingOutput.model_json_schema(),
+        web_cache_dir=web_cache_dir,
     )
 
     if result.verdict is None:
@@ -983,6 +1040,7 @@ def run_stage_b(
                     finding = await _verify_target_async(
                         t, prompt, pb.allowed_tools, corpus_root,
                         timeout, max_turns, t_debug_dir, summary,
+                        web_cache_dir=web_cache_dir,
                     )
                     if finding is not None:
                         with findings_lock:

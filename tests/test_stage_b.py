@@ -563,6 +563,7 @@ def test_run_stage_b_dedups_near_duplicate_targets_and_fans_out(tmp_path, monkey
     async def fake_verify_target_async(
         target, prompt, allowed_tools, corpus_root,
         timeout, max_turns, debug_dir, article_summary,
+        web_cache_dir="web_cache",
     ):
         from pipeline.finding import Finding, Severity
         calls.append(target["anchor_text"])
@@ -684,6 +685,7 @@ def test_verify_target_async_flags_summary_source(monkeypatch):
     async def fake_verify_claim_async(
         claim, corpus_root, system_prompt, timeout, max_turns,
         debug_dir, article_summary, allowed_tools=None, output_schema=None,
+        web_cache_dir="web_cache",
     ):
         claim.verdict = "supported"
         claim.rationale = "The overview mentions this."
@@ -703,3 +705,77 @@ def test_verify_target_async_flags_summary_source(monkeypatch):
 
     assert finding.human_review is True
     assert "cites a summary" in finding.agent_summary
+
+
+# ── Schema-aware boilerplate + absolute fetch_page.py invocation ──────────
+
+def test_verify_claim_async_user_prompt_matches_output_schema(monkeypatch):
+    """The boilerplate 'Output fields' line must match the schema actually in use,
+    not a hardcoded field list from a different schema."""
+    from pipeline import stage_b_verify as sb
+
+    captured_prompts = []
+
+    class _FakeQuery:
+        def __init__(self, prompt, options):
+            captured_prompts.append(prompt)
+
+        def __aiter__(self):
+            async def _gen():
+                return
+                yield  # pragma: no cover -- makes this an async generator
+            return _gen()
+
+    monkeypatch.setattr(
+        "claude_agent_sdk.query",
+        lambda prompt, options: _FakeQuery(prompt, options).__aiter__(),
+    )
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, "/corpus", "sys", timeout=5, max_turns=1,
+        output_schema=sb.FindingOutput.model_json_schema(),
+    ))
+
+    assert captured_prompts, "query() was never called"
+    prompt = captured_prompts[0]
+    for field in ("severity", "agent_summary", "recommended_action"):
+        assert field in prompt
+    # Old-schema-only fields must NOT appear as a stray "Output fields" list entry
+    assert "Output fields: verdict, source_proximity" not in prompt
+
+
+def test_verify_claim_async_fetch_page_command_uses_absolute_path(monkeypatch):
+    """The fetch_page.py invocation in the prompt must be runnable from the
+    agent's cwd (= corpus_root), which a bare relative path is not."""
+    from pipeline import stage_b_verify as sb
+    import sys as _sys
+
+    captured_prompts = []
+
+    class _FakeQuery:
+        def __init__(self, prompt, options):
+            captured_prompts.append(prompt)
+
+        def __aiter__(self):
+            async def _gen():
+                return
+                yield  # pragma: no cover
+            return _gen()
+
+    monkeypatch.setattr(
+        "claude_agent_sdk.query",
+        lambda prompt, options: _FakeQuery(prompt, options).__aiter__(),
+    )
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, "/corpus", "sys", timeout=5, max_turns=1, web_cache_dir="/corpus/web_cache",
+    ))
+
+    prompt = captured_prompts[0]
+    assert _sys.executable in prompt
+    assert "pipeline/tools/fetch_page.py" in prompt or "fetch_page.py" in prompt
+    assert "/corpus/web_cache" in prompt
+    # Must be an absolute path to the script, not the bare relative form
+    assert "python3 pipeline/tools/fetch_page.py" not in prompt

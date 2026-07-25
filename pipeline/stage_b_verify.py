@@ -7,6 +7,7 @@ Results are written incrementally and are crash-resistant.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -465,8 +466,9 @@ async def _verify_target_async(
     rec_action = raw.get("recommended_action")
     meta = raw.get("metadata", {})
 
+    _text_hash = hashlib.sha1(target.get("target_text", "").encode("utf-8")).hexdigest()[:10]
     return Finding(
-        finding_id=f"{target['playbook']}-{len(target.get('target_text',''))}",
+        finding_id=f"{target['playbook']}-{_text_hash}",
         check_type=target["playbook"],
         severity=sev,
         target_text=target["target_text"],

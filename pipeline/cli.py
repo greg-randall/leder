@@ -114,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     b_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
     b_parser.add_argument("--targets", default="targets.json", help="Input targets file")
     b_parser.add_argument("--findings", default="findings.json", help="Output findings file")
-    b_parser.add_argument("--output", default="claims.json")
+    b_parser.add_argument("--output", default="findings.json")
     b_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
     )

@@ -1,4 +1,5 @@
 """Tests for Stage B: Claim verification via Claude Agent SDK."""
+import asyncio
 import pytest
 import os
 from pipeline.stage_b_verify import (
@@ -592,3 +593,34 @@ def test_run_stage_b_dedups_near_duplicate_targets_and_fans_out(tmp_path, monkey
     finding_ids = {f["finding_id"] for f in findings}
     assert "fact_check-rep" in finding_ids
     assert any(fid.endswith("-a1") for fid in finding_ids)
+
+
+def test_verify_target_async_finding_id_no_collision_on_equal_length(monkeypatch):
+    """Two different-text targets of EQUAL length must not produce the same finding_id."""
+    from pipeline import stage_b_verify as sb
+
+    async def fake_verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns,
+                                       debug_dir, article_summary, allowed_tools=None,
+                                       output_schema=None, web_cache_dir="web_cache"):
+        claim.verdict = "supported"
+        claim.rationale = "ok"
+        claim.source_path = None
+        claim.source_url = None
+        claim.source_excerpt = ""
+        claim.confidence = 0.8
+        claim.human_review = False
+        claim._raw_output = {}
+        return claim
+
+    monkeypatch.setattr(sb, "_verify_claim_async", fake_verify_claim_async)
+
+    target_a = {"playbook": "fact_check", "target_text": "AAAAAAAAAA", "anchor_text": "a"}
+    target_b = {"playbook": "fact_check", "target_text": "BBBBBBBBBB", "anchor_text": "b"}
+    assert len(target_a["target_text"]) == len(target_b["target_text"])
+
+    finding_a = asyncio.run(sb._verify_target_async(
+        target_a, "sys", ["Read"], "/corpus", 60, 10, None, ""))
+    finding_b = asyncio.run(sb._verify_target_async(
+        target_b, "sys", ["Read"], "/corpus", 60, 10, None, ""))
+
+    assert finding_a.finding_id != finding_b.finding_id

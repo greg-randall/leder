@@ -79,7 +79,7 @@ def test_parser_stage_b_defaults():
     assert args.claims is None  # hidden; use --targets instead
     assert args.targets == "targets.json"
     assert args.findings == "findings.json"
-    assert args.output == "claims.json"
+    assert args.output == "findings.json"
 
 
 def test_parser_stage_c():
@@ -142,6 +142,13 @@ def test_parser_stage_c_findings_flag():
     parser = build_parser()
     args = parser.parse_args(["stage-c", "--findings", "f.json"])
     assert args.findings == "f.json"
+
+
+def test_stage_b_output_defaults_to_findings_json():
+    """stage-b's --output default matches stage-c/d/e's findings.json convention."""
+    parser = build_parser()
+    args = parser.parse_args(["stage-b"])
+    assert args.output == "findings.json"
 
 
 # ---------------------------------------------------------------------------

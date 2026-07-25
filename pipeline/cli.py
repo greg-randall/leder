@@ -111,9 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     b_parser = subparsers.add_parser(
         "stage-b", parents=[common], help="Verify claims against corpus"
     )
-    b_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
     b_parser.add_argument("--targets", default="targets.json", help="Input targets file")
-    b_parser.add_argument("--findings", default="findings.json", help="Output findings file")
     b_parser.add_argument("--output", default="findings.json")
     b_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
@@ -136,7 +134,6 @@ def build_parser() -> argparse.ArgumentParser:
         "stage-c", parents=[common], help="Rebuild article with footnotes"
     )
     c_parser.add_argument("--article", help="Path to article markdown")
-    c_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
     c_parser.add_argument("--findings", default="findings.json", help="Input findings file")
     c_parser.add_argument("--output", default="article-sourced.md")
     c_parser.add_argument(
@@ -156,7 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
         "stage-e", parents=[common], help="Generate .docx with comments from sourced article"
     )
     e_parser.add_argument("--article", default="article-sourced.md")
-    e_parser.add_argument("--claims", default="findings.json")
+    e_parser.add_argument("--findings", default="findings.json", help="Input findings file")
+    e_parser.add_argument("--claims", default=None, help=argparse.SUPPRESS)
     e_parser.add_argument("--output", default="article-sourced.docx")
     e_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
@@ -380,7 +378,7 @@ def main() -> None:
             or config.resolve_path(config.article.path)
         )
         output_path = config.resolve_path(
-            getattr(args, "output", "claims.json")
+            getattr(args, "output", "targets.json")
         )
 
         from pipeline.stage_a_extract import run_stage_a
@@ -412,15 +410,8 @@ def main() -> None:
 
     # --- Stage B: Claim verification ---
     if args.command in ("all", "stage-b"):
-        # Backward compat: --claims maps to targets_path
-        args_targets = getattr(args, "targets", "targets.json")
-        args_claims = getattr(args, "claims", None)
-        targets_path = config.resolve_path(
-            args_claims if args_claims is not None else args_targets
-        )
-        output_path = config.resolve_path(
-            getattr(args, "output", getattr(args, "findings", "findings.json"))
-        )
+        targets_path = config.resolve_path(getattr(args, "targets", "targets.json"))
+        output_path = config.resolve_path(getattr(args, "output", "findings.json"))
 
         from pipeline.stage_b_verify import run_stage_b
 
@@ -442,11 +433,7 @@ def main() -> None:
             force_run=getattr(args, "force_run", False),
             corpus_description=config.corpus.description,
         )
-        if hasattr(doc, 'findings'):
-            verified_count = len(doc.findings)
-        else:
-            verified_count = sum(1 for c in doc.claims if c.verdict is not None)
-        print(f"Stage B complete: {verified_count} findings")
+        print(f"Stage B complete: {len(doc.findings)} findings")
 
     # --- Stage C: Article rebuild with footnotes ---
     if args.command in ("all", "stage-c"):
@@ -454,34 +441,22 @@ def main() -> None:
             getattr(args, "article", None)
             or config.resolve_path(config.article.path)
         )
-        # Backward compat: --claims feeds into findings input
-        args_findings = getattr(args, "findings", "findings.json")
-        args_claims_c = getattr(args, "claims", None)
-        claims_path = config.resolve_path(
-            args_claims_c if args_claims_c is not None else args_findings
-        )
+        findings_path = config.resolve_path(getattr(args, "findings", "findings.json"))
         output_path = config.resolve_path(
             getattr(args, "output", "article-sourced.md")
         )
 
         from pipeline.stage_c_rebuild import run_stage_c
 
-        if not os.path.exists(args_findings):
-            alt = os.path.join(os.path.dirname(args_findings) or ".", "claims.json")
-            if os.path.exists(alt):
-                print(f"Note: {args_findings} not found, using {alt} instead.",
-                      file=sys.stderr)
-                args_findings = alt
-            else:
-                print(f"ERROR: {args_findings} not found. Run stage-b first to generate it.",
-                      file=sys.stderr)
-                sys.exit(1)
+        if not os.path.exists(findings_path):
+            print(f"ERROR: {findings_path} not found. Run stage-b first to generate it.",
+                  file=sys.stderr)
+            sys.exit(1)
 
         output_path = _resolve_output_path(output_path)
         run_stage_c(
             article_path=article_path,
-            claims_path=args_claims_c,
-            findings_path=args_findings,
+            findings_path=findings_path,
             output_path=output_path,
             model=config.stage_a.model,
         )
@@ -506,26 +481,21 @@ def main() -> None:
     if args.command in ("all", "stage-e"):
         article_path = getattr(args, "article", "article-sourced.md")
         article_path = config.resolve_path(article_path) if config else article_path
-        claims_path = getattr(args, "claims", "findings.json")
-        claims_path = config.resolve_path(claims_path) if config else claims_path
+        args_findings = getattr(args, "findings", "findings.json")
+        args_claims = getattr(args, "claims", None)
+        findings_path = args_claims if args_claims is not None else args_findings
+        findings_path = config.resolve_path(findings_path) if config else findings_path
         output_path = getattr(args, "output", "article-sourced.docx")
         output_path = config.resolve_path(output_path) if config else output_path
 
-        if not os.path.exists(claims_path):
-            alt = os.path.join(os.path.dirname(claims_path) or ".", "claims.json")
-            if os.path.exists(alt):
-                print(f"Note: {claims_path} not found, using {alt} instead.",
-                      file=sys.stderr)
-                claims_path = alt
-
-        for fpath, stage in [(article_path, "stage-c"), (claims_path, "stage-b")]:
+        for fpath, stage in [(article_path, "stage-c"), (findings_path, "stage-b")]:
             if not os.path.exists(fpath):
                 print(f"ERROR: {fpath} not found. Run {stage} first to generate it.",
                       file=sys.stderr)
                 sys.exit(1)
 
         from pipeline.stage_e_docx import run_stage_e
-        run_stage_e(article_path, claims_path, output_path)
+        run_stage_e(article_path, findings_path, output_path)
         print(f"Stage E complete: {output_path}")
 
 

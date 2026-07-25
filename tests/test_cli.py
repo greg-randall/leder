@@ -63,41 +63,17 @@ def test_parser_all_defaults():
     assert args.skip_startup_check is False
 
 
-def test_parser_stage_b():
-    parser = build_parser()
-    args = parser.parse_args(
-        ["stage-b", "--claims", "my_claims.json", "--output", "verified.json"]
-    )
-    assert args.command == "stage-b"
-    assert args.claims == "my_claims.json"
-    assert args.output == "verified.json"
-
-
 def test_parser_stage_b_defaults():
     parser = build_parser()
     args = parser.parse_args(["stage-b"])
-    assert args.claims is None  # hidden; use --targets instead
     assert args.targets == "targets.json"
-    assert args.findings == "findings.json"
     assert args.output == "findings.json"
-
-
-def test_parser_stage_c():
-    parser = build_parser()
-    args = parser.parse_args(
-        ["stage-c", "--article", "article.md", "--claims", "cl.json", "--output", "out.md"]
-    )
-    assert args.command == "stage-c"
-    assert args.article == "article.md"
-    assert args.claims == "cl.json"
-    assert args.output == "out.md"
 
 
 def test_parser_stage_c_defaults():
     parser = build_parser()
     args = parser.parse_args(["stage-c"])
     assert args.article is None
-    assert args.claims is None  # hidden; use --findings instead
     assert args.findings == "findings.json"
     assert args.output == "article-sourced.md"
 
@@ -131,10 +107,10 @@ def test_parser_stage_a_playbooks_flag():
 
 
 def test_parser_stage_b_targets_flag():
-    """stage-b accepts --targets and --findings flags."""
+    """stage-b accepts --targets flag."""
     parser = build_parser()
-    args = parser.parse_args(["stage-b", "--targets", "t.json", "--findings", "f.json"])
-    assert args.targets == "t.json" and args.findings == "f.json"
+    args = parser.parse_args(["stage-b", "--targets", "t.json"])
+    assert args.targets == "t.json"
 
 
 def test_parser_stage_c_findings_flag():
@@ -142,6 +118,28 @@ def test_parser_stage_c_findings_flag():
     parser = build_parser()
     args = parser.parse_args(["stage-c", "--findings", "f.json"])
     assert args.findings == "f.json"
+
+
+def test_parser_stage_e_findings_flag():
+    """stage-e's primary flag is --findings; --claims is a hidden alias."""
+    parser = build_parser()
+    args = parser.parse_args(["stage-e", "--findings", "f.json"])
+    assert args.findings == "f.json"
+
+
+def test_parser_stage_e_defaults():
+    parser = build_parser()
+    args = parser.parse_args(["stage-e"])
+    assert args.findings == "findings.json"
+    assert args.claims is None
+    assert args.output == "article-sourced.docx"
+
+
+def test_parser_stage_e_claims_alias_still_works():
+    """--claims remains a hidden alias for backward-compatible scripts."""
+    parser = build_parser()
+    args = parser.parse_args(["stage-e", "--claims", "old.json"])
+    assert args.claims == "old.json"
 
 
 def test_stage_b_output_defaults_to_findings_json():

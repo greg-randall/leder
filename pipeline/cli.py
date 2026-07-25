@@ -347,6 +347,7 @@ def main() -> None:
                 corpus_root=corpus_root,
                 model=getattr(args, "model", None) or prep.summarize.model,
                 workers=prep.summarize.workers, force=force,
+                corpus_description=config.corpus.description,
             )
 
         if args.command in ("prepare-3", "prepare"):

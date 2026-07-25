@@ -21,21 +21,46 @@ MAX_CONTENT_TOKENS = CONTEXT_WINDOW - PROMPT_RESERVE - MAX_TOKENS
 _ENC = tiktoken.get_encoding(TIKTOKEN_ENCODING)
 _results_lock = threading.Lock()
 
-PROMPT = """Read this document from a Texas RRC land application permit file.
-The filename may contain case IDs (like LA-0304, LOA-0043), dates (YYYYMMDD),
-and topic hints.
+
+def build_prepare_2_prompt(corpus_description: str) -> str:
+    domain_block = ""
+    if corpus_description:
+        domain_block = (
+            f"This document is from the following collection:\n{corpus_description}\n\n"
+        )
+
+    return f"""Read this document. {domain_block}The filename may contain dates
+(YYYYMMDD) and topic hints.
+
+These summaries are the search index for a fact-checking agent that will
+later need to locate specific statements in the original document. Optimize
+for findability: include the exact names, numbers, dates, and distinctive
+phrases someone would grep for.
 
 Reply with two sections:
 
 **Summary:** 2-4 sentences describing what kind of document this is and what
-it's about. Include the document type (permit, application review, quarterly
-report, inspection, RAD, email, lease, extension, notice of violation, etc.).
+it's about. Include the document type (meeting transcript, email, report,
+official filing, news article, etc.).
 
-**Facts:** Bullet list of specific numbers, dates, names, amounts, test results,
-locations, lease names, well IDs, permit conditions, deadlines, decisions,
-or compliance issues that appear in the text. Quote or near-quote. If the
-document states a number, include it. If it names a person, company, county,
-or facility, include it. Err on the side of including rather than omitting.
+**Facts:** Bullet list of specific numbers, dates, names, amounts, decisions,
+or issues that appear in the text. Quote or near-quote. If the document
+states a number, include it. If it names a person, company, or place,
+include it. Err on the side of including rather than omitting.
+
+- When a fact comes from a specific speaker (public comment, expert
+  testimony, staff report), name the speaker in the bullet: "Jerry Carill
+  (public comment): alleges 20,000 barrels/day injected." For votes and
+  motions, record who moved, the vote count, and the outcome.
+- If a speaker corrects themselves, or two speakers contradict each other,
+  record both versions explicitly -- these moments matter most to
+  fact-checkers.
+- These may be auto-generated captions with inconsistent name spellings.
+  When a name appears in multiple spellings, list the variants: "Jerry
+  Carill (also rendered 'Carville')."
+- Where practical, anchor a key fact to a short verbatim quote fragment,
+  e.g. "as said: 'contamination in every single groundwater monitoring
+  well'" -- this lets a downstream agent grep for the exact phrase.
 
 If the file is empty, boilerplate-only, or unreadable, say so in the
 summary and leave facts blank."""
@@ -88,7 +113,8 @@ def collect_targets(corpus_root: Path):
     return targets
 
 
-def summarize_one(md_path: Path, corpus_root: Path, model: str, force: bool):
+def summarize_one(md_path: Path, corpus_root: Path, model: str, force: bool,
+                  corpus_description: str = ""):
     out_path = md_path.parent / (md_path.stem + "_summary.md")
     if not force and out_path.exists() and out_path.stat().st_size > 20:
         return str(md_path.relative_to(corpus_root)), "skip"
@@ -102,7 +128,8 @@ def summarize_one(md_path: Path, corpus_root: Path, model: str, force: bool):
 
     user_msg, truncated, orig_tokens = build_user_msg(md_path, raw)
     try:
-        text = call_text_llm(PROMPT, user_msg, model=model, max_tokens=MAX_TOKENS)
+        prompt = build_prepare_2_prompt(corpus_description)
+        text = call_text_llm(prompt, user_msg, model=model, max_tokens=MAX_TOKENS)
         if truncated:
             banner = (f"> ⚠️ **TRUNCATED:** Source document was {orig_tokens:,} tokens; "
                       f"only the first {MAX_CONTENT_TOKENS:,} tokens were sent to the "
@@ -115,7 +142,8 @@ def summarize_one(md_path: Path, corpus_root: Path, model: str, force: bool):
         return str(md_path.relative_to(corpus_root)), "fail"
 
 
-def run_prepare_2(corpus_root: str, model: str, workers: int, force: bool) -> dict:
+def run_prepare_2(corpus_root: str, model: str, workers: int, force: bool,
+                  corpus_description: str = "") -> dict:
     from tqdm import tqdm
 
     root = Path(corpus_root)
@@ -124,7 +152,10 @@ def run_prepare_2(corpus_root: str, model: str, workers: int, force: bool) -> di
 
     with tqdm(total=len(targets), desc="prepare-2 summarize", unit="file") as pbar:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(summarize_one, p, root, model, force): p for p in targets}
+            futures = {
+                pool.submit(summarize_one, p, root, model, force, corpus_description): p
+                for p in targets
+            }
             for future in as_completed(futures):
                 _, status = future.result()
                 with _results_lock:

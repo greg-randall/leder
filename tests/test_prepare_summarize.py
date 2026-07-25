@@ -86,6 +86,39 @@ def test_collect_targets_skips_page_md_at_any_depth(tmp_path):
     assert "page.md" not in target_names
 
 
+def test_build_prepare_2_prompt_de_domained_and_retrieval_oriented():
+    from pipeline.prepare_2_summarize import build_prepare_2_prompt
+
+    p = build_prepare_2_prompt("Transcripts of Waskom city council meetings.")
+    assert "Texas RRC" not in p
+    assert "LA-0304" not in p
+    assert "Transcripts of Waskom city council meetings." in p
+    assert "search index" in p.lower() or "retrieval" in p.lower()
+    assert "speaker" in p.lower()
+    assert "self-correct" in p.lower() or "contradict" in p.lower()
+    assert "variant" in p.lower() or "spelling" in p.lower()
+    assert "verbatim" in p.lower()
+
+
+def test_run_prepare_2_uses_corpus_description(tmp_path, monkeypatch):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    doc = corpus / "doc1.md"
+    doc.write_text("This is a real document with enough words to summarize. " * 5)
+
+    captured = {}
+
+    def fake_call_text_llm(system, user, model, max_tokens=4096):
+        captured["system"] = system
+        return "**Summary:** ok\n\n**Facts:** none\n"
+
+    monkeypatch.setattr(p2, "call_text_llm", fake_call_text_llm)
+    p2.run_prepare_2(corpus_root=str(corpus), model="m", workers=1, force=False,
+                     corpus_description="A test corpus about widgets.")
+
+    assert "A test corpus about widgets." in captured["system"]
+
+
 def test_collect_targets_includes_non_page_md_in_web_cache(tmp_path):
     """Files named other than page.md inside web_cache are still summarized."""
     corpus = tmp_path / "corpus"

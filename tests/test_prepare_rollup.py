@@ -63,7 +63,13 @@ def test_build_folder_prompt_de_domained_and_cites_sources():
     assert "permit" not in p.lower()
     assert "Transcripts of Waskom city council meetings." in p
     assert "source document" in p.lower()
-    assert "[" in p and "]" in p  # bracket-citation instruction present
+    # Citation is delimited by the literal text "Source:", not by enclosing
+    # brackets -- corpus filenames themselves already contain brackets (e.g.
+    # YouTube-ID suffixes), so wrapping the citation in brackets would nest
+    # and create ambiguity. The worked example still contains a real
+    # bracket-bearing filename, demonstrating the format is collision-safe.
+    assert "Source:" in p
+    assert "[" in p and "]" in p
 
 
 def test_build_crosscutting_prompt_has_entity_index_and_topic_map():
@@ -80,13 +86,21 @@ def test_build_crosscutting_prompt_has_entity_index_and_topic_map():
 
 def test_run_prepare_3_threads_corpus_description(tmp_path, monkeypatch):
     corpus = tmp_path / "corpus"
-    _mk(corpus / "A" / "d1_summary.md", "**Summary:** one.")
-    _mk(corpus / "A" / "d2_summary.md", "**Summary:** two.")
+    # A: one subdir -> exercises summarize_folder's own sequential ("else")
+    # recursion branch, which only fires when a folder has exactly one subdir.
+    _mk(corpus / "A" / "sub" / "e1_summary.md", "**Summary:** e1.")
+    _mk(corpus / "A" / "sub" / "e2_summary.md", "**Summary:** e2.")
+    # B: two subdirs -> exercises summarize_folder's own ThreadPoolExecutor
+    # ("_TPE") parallel-recursion branch.
+    _mk(corpus / "B" / "sub1" / "g1_summary.md", "**Summary:** g1.")
+    _mk(corpus / "B" / "sub1" / "g2_summary.md", "**Summary:** g2.")
+    _mk(corpus / "B" / "sub2" / "h1_summary.md", "**Summary:** h1.")
+    _mk(corpus / "B" / "sub2" / "h2_summary.md", "**Summary:** h2.")
 
-    captured = {}
+    captured = []
 
     def fake_llm(system, user, model, max_tokens=4096, stream=False):
-        captured["system"] = system
+        captured.append(system)
         return "x"
 
     monkeypatch.setattr(p3, "call_text_llm", fake_llm)
@@ -94,7 +108,14 @@ def test_run_prepare_3_threads_corpus_description(tmp_path, monkeypatch):
                      workers=1, crosscutting=False, force=True,
                      corpus_description="A test corpus about widgets.")
 
-    assert "A test corpus about widgets." in captured["system"]
+    # Calls happen at multiple nesting levels, including ones reached only via
+    # summarize_folder's own recursive call sites (A/sub via the sequential
+    # branch, B/sub1 and B/sub2 via the ThreadPoolExecutor branch). Every one
+    # of them must carry corpus_description through -- if either recursive
+    # call site dropped the parameter, at least one captured system prompt
+    # would be missing it.
+    assert len(captured) >= 5
+    assert all("A test corpus about widgets." in s for s in captured)
 
 
 def test_failed_folder_summary_not_persisted(tmp_path, monkeypatch):

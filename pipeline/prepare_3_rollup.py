@@ -30,10 +30,15 @@ single overview.
 
 This overview will be read by a downstream fact-checking agent deciding which
 original document to open next. It is a routing table, not just a summary —
-every Timeline and Key-contents-&-findings bullet must end with the source
-document name(s) it came from, in brackets, so the agent can jump straight to
-the right file. For example: "The council approved the water rate increase on
-a 4-1 vote. [20260717 - Meeting for 7-14-26 [XQ3PK-qjSdk].en.srt]"
+every Timeline and Key-contents-&-findings bullet must end with "Source: " followed
+by the source document name(s) it came from, so the agent can jump straight to
+the right file. Many source filenames in this corpus already contain brackets
+of their own (e.g. a trailing YouTube-ID suffix like "[XQ3PK-qjSdk]") — that's
+fine and expected; do not strip or alter them. The citation is marked by the
+literal text "Source:", not by enclosing punctuation, so everything after
+"Source:" to the end of the bullet is the filename, brackets and all. For
+example: "The council approved the water rate increase on a 4-1 vote. Source:
+20260717 - Meeting for 7-14-26 [XQ3PK-qjSdk].en.srt"
 
 Write these sections:
 
@@ -43,15 +48,15 @@ Write these sections:
 can reconstruct from the summaries — meetings held, votes taken, contracts
 awarded, incidents reported, applications filed, decisions made — whatever
 event types the summaries actually contain. Put the date (or best-known date)
-at the start of each bullet, and the source document name(s) in brackets at
-the end. Only include events actually supported by the summaries. If dates
-are sparse or the folder isn't chronological (e.g., reference materials, form
-letters), skip this section.
+at the start of each bullet, and "Source: <document name(s)>" at the end.
+Only include events actually supported by the summaries. If dates are sparse
+or the folder isn't chronological (e.g., reference materials, form letters),
+skip this section.
 
 **Key contents & findings:** Bullet list of the substantive matters across the
 documents and sub-collections — who/what/where, notable numbers, names,
 decisions, deficiencies, or issues. Cite specifics where the inputs give them,
-and end each bullet with the source document name(s) in brackets.
+and end each bullet with "Source: <document name(s)>".
 
 **Open questions / gaps:** Anything the inputs suggest is unresolved, missing,
 or unclear.

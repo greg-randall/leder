@@ -519,6 +519,14 @@ def test_agent_prompt_mentions_web_cache():
 
 # ── Near-duplicate target dedup + finding fan-out ─────────────────
 
+def test_normalize_target_text_strips_only_one_trailing_punct():
+    from pipeline.stage_b_verify import _normalize_target_text
+    assert _normalize_target_text("Really?!") == "really?"
+    assert _normalize_target_text("Wow!!!") == "wow!!"
+    assert _normalize_target_text("Plain sentence.") == "plain sentence"
+    assert _normalize_target_text("  Extra   spaces  ") == "extra spaces"
+
+
 def test_run_stage_b_dedups_near_duplicate_targets_and_fans_out(tmp_path, monkeypatch):
     """Two near-duplicate targets get ONE agent call but TWO findings."""
     import json as _json

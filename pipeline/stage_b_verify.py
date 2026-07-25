@@ -486,7 +486,9 @@ async def _verify_target_async(
 def _normalize_target_text(text: str) -> str:
     """Normalize target_text for near-duplicate grouping before stage-b dispatch."""
     normalized = re.sub(r"\s+", " ", text.lower()).strip()
-    return normalized.rstrip(".?!")
+    if normalized and normalized[-1] in ".?!":
+        normalized = normalized[:-1]
+    return normalized
 
 
 def _is_summary_path(path: str | None) -> bool:

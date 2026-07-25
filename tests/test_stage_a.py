@@ -246,6 +246,67 @@ def test_chunk_article_merges_tiny_trailing_fragment_when_it_fits():
     assert len(chunks[-1].split()) == 30  # 27-word remainder + 3-word fragment
 
 
+def test_chunk_context_brief_prepended_to_later_chunks(tmp_path, monkeypatch):
+    """Chunk 1's article_summary becomes the context brief for chunk 2+.
+
+    Paragraphs are sized at 600 words each (combined 1200 > max_words=1000,
+    so _chunk_article's step 2 refuses to merge them; each is individually
+    under max_words and over target_words=300, so step 2b's forward-merge
+    doesn't touch them either) -- this reliably yields exactly 2 chunks
+    under the default target_words=300, max_words=1000.
+    """
+    article = tmp_path / "article.md"
+    article.write_text(
+        ("First paragraph. " * 300).strip() + "\n\n" + ("Second paragraph. " * 300).strip()
+    )
+    output = str(tmp_path / "targets.json")
+
+    pd = tmp_path / "playbooks"
+    pd.mkdir()
+    (pd / "test_check.yaml").write_text(
+        "name: Test Check\n"
+        "extraction:\n  prompt: \"Extract from: {{article_text}}\"\n"
+        "verification:\n  prompt: Verify.\n"
+    )
+
+    calls = []
+
+    def fake_create(self, **kw):
+        calls.append(kw)
+        n = len(calls)
+        return type("r", (), {"content": [type("b", (), {
+            "type": "tool_use",
+            "input": {
+                "targets": [{"target_text": f"t{n}", "anchor_text": f"a{n}"}],
+                "article_title": "" if n == 1 else f"Title from chunk {n}",
+                "article_summary": f"Summary from chunk {n}",
+            },
+        })()]})()
+
+    fake = type("c", (), {"messages": type("m", (), {"create": fake_create})()})()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+
+    from pipeline.stage_a_extract import run_stage_a
+    run_stage_a(
+        article_path=str(article), output_path=output, corpus_root="", project_name="",
+        model="m", quality_gate=False, playbook_dir=str(pd), playbook_names=["test_check"],
+    )
+
+    assert len(calls) == 2
+    # Chunk 2's user message contains chunk 1's summary as a brief.
+    chunk2_user_msg = calls[1]["messages"][0]["content"]
+    assert "This chunk is from an article about: Summary from chunk 1" in chunk2_user_msg
+    # Chunk 1's user message has no brief prepended (nothing precedes it yet).
+    chunk1_user_msg = calls[0]["messages"][0]["content"]
+    assert "This chunk is from an article about" not in chunk1_user_msg
+
+    data = json.loads(open(output).read())
+    # First non-empty title wins: chunk 1 returned "", chunk 2 returned a title.
+    assert data["article_title"] == "Title from chunk 2"
+    # First non-empty summary wins: chunk 1's summary, not chunk 2's.
+    assert data["article_summary"] == "Summary from chunk 1"
+
+
 def test_chunk_article_tiny_first_chunk_has_nothing_to_merge_into():
     """A tiny fragment as the very first (and only) chunk has no previous
     chunk to merge into -- must survive standalone, not crash on

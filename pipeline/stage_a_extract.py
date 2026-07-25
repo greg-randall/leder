@@ -206,12 +206,17 @@ _MISSED_CLAIMS_TOOL = {
 
 
 def _extract_targets_from_text(text: str, model: str, playbook,
-                               tool_schema: dict,
+                               tool_schema: dict, system_prompt: str,
                                quality_gate: bool = False,
                                existing_target_texts=None,
-                               system_prompt: str = "",
                                chunk_context_brief: str = ""):
     """Run a playbook's extraction prompt against a block of text.
+
+    system_prompt is the shared extraction system prompt (see
+    pipeline.prompts.build_extraction_system_prompt) sent as the LLM
+    `system` param -- required, not the raw playbook.extraction_prompt
+    template. chunk_context_brief, when set, is prepended to the user
+    message as a short context note (used for chunks after the first).
     Returns (targets, article_title, article_summary).
     """
     import anthropic
@@ -243,7 +248,7 @@ def _extract_targets_from_text(text: str, model: str, playbook,
     response = client.messages.create(
         model=model,
         max_tokens=8192,
-        system=system_prompt or playbook.extraction_prompt,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
         tools=[tool_schema],
         tool_choice={"type": "auto"},

@@ -88,7 +88,7 @@ def test_empty_article_raises():
             run_stage_a(article_path, os.path.join(tmp, "out.json"), tmp, "test")
 
 
-def test_extract_targets_from_text_uses_playbook_prompt(monkeypatch):
+def test_extract_targets_from_text_uses_shared_system_prompt(monkeypatch):
     from pipeline.playbook import Playbook
     from pipeline.stage_a_extract import _extract_targets_from_text, _extraction_tool_for
 
@@ -103,20 +103,32 @@ def test_extract_targets_from_text_uses_playbook_prompt(monkeypatch):
         input = {"targets": [{"target_text": "t1", "anchor_text": "a1"}],
                  "article_title": "Title", "article_summary": "Summary"}
 
+    captured = {}
+
+    def fake_create(self, **kw):
+        captured.update(kw)
+        return type("r", (), {"content": [FakeText()]})()
+
     fake_client = type("c", (), {
-        "messages": type("m", (), {
-            "create": lambda self, **kw: type("r", (), {"content": [FakeText()]})()
-        })()
+        "messages": type("m", (), {"create": fake_create})()
     })()
     monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake_client)
 
     targets, title, summary = _extract_targets_from_text(
-        "some article text", "m", pb, _extraction_tool_for(pb))
+        "some article text", "m", pb, _extraction_tool_for(pb),
+        system_prompt="SHARED SYSTEM PROMPT TEXT")
+
     assert len(targets) == 1
     assert targets[0].target_text == "t1"
     assert targets[0].playbook == "test_check"
     assert title == "Title"
     assert summary == "Summary"
+    # The fix: system is the shared prompt, not the raw playbook template
+    assert captured["system"] == "SHARED SYSTEM PROMPT TEXT"
+    assert "{{article_text}}" not in captured["system"]
+    # The user message still has the substituted article text
+    assert "some article text" in captured["messages"][0]["content"]
+    assert "{{article_text}}" not in captured["messages"][0]["content"]
 
 
 def test_run_stage_a_playbook_path_writes_targets_json(tmp_path, monkeypatch):

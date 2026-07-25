@@ -208,7 +208,9 @@ _MISSED_CLAIMS_TOOL = {
 def _extract_targets_from_text(text: str, model: str, playbook,
                                tool_schema: dict,
                                quality_gate: bool = False,
-                               existing_target_texts=None):
+                               existing_target_texts=None,
+                               system_prompt: str = "",
+                               chunk_context_brief: str = ""):
     """Run a playbook's extraction prompt against a block of text.
     Returns (targets, article_title, article_summary).
     """
@@ -223,6 +225,13 @@ def _extract_targets_from_text(text: str, model: str, playbook,
     else:
         user_prompt = playbook.extraction_prompt.replace("{{article_text}}", text)
 
+    if chunk_context_brief:
+        user_prompt = (
+            f"This chunk is from an article about: {chunk_context_brief}. "
+            f"Resolve pronouns and generic references against this context.\n\n"
+            f"{user_prompt}"
+        )
+
     _leftover = _re.findall(r"\{\{.*?\}\}", user_prompt)
     if _leftover:
         print(f"  stage-a: unsubstituted placeholders in user prompt: {_leftover}",
@@ -234,7 +243,7 @@ def _extract_targets_from_text(text: str, model: str, playbook,
     response = client.messages.create(
         model=model,
         max_tokens=8192,
-        system=playbook.extraction_prompt,
+        system=system_prompt or playbook.extraction_prompt,
         messages=[{"role": "user", "content": user_prompt}],
         tools=[tool_schema],
         tool_choice={"type": "auto"},
@@ -503,6 +512,7 @@ def run_stage_a(
     quality_gate: bool = True,
     playbook_dir: str = "pipelines/",
     playbook_names: list[str] | None = None,
+    corpus_description: str = "",
 ) -> ClaimsDocument | FindingsDocument | None:
     """Read article, extract claims, write claims.json. Returns the ClaimsDocument.
 
@@ -513,9 +523,11 @@ def run_stage_a(
     # --- Generic playbook path (new, used when playbook_names is provided) ---
     if playbook_names:
         from pathlib import Path as _Path
+        from pipeline.prompts import build_extraction_system_prompt
 
         article_text = _Path(article_path).read_text(encoding="utf-8")
         chunks = _chunk_article(article_text)
+        extraction_system_prompt = build_extraction_system_prompt(corpus_description)
 
         playbooks = []
         for name in playbook_names:
@@ -541,14 +553,21 @@ def run_stage_a(
                       file=sys.stderr)
             pb_targets = []
 
-            # Phase 1: chunk-based extraction
-            for chunk in chunks:
+            # Phase 1: chunk-based extraction, sequential -- chunk 1's summary
+            # becomes the context brief for every later chunk (Tweak 3.3).
+            chunk_brief = ""
+            for i, chunk in enumerate(chunks):
                 targets, title, summary = _extract_targets_from_text(
-                    chunk, model, pb, tool_schema, quality_gate=False)
+                    chunk, model, pb, tool_schema, quality_gate=False,
+                    system_prompt=extraction_system_prompt,
+                    chunk_context_brief=chunk_brief)
                 pb_targets.extend(targets)
-                if title:
+                if i == 0:
+                    chunk_brief = summary
+                # First non-empty wins (was: last chunk wins).
+                if title and not article_title:
                     article_title = title
-                if summary:
+                if summary and not article_summary:
                     article_summary = summary
 
             # Phase 2: quality gate (full-article re-read)
@@ -557,7 +576,8 @@ def run_stage_a(
                 existing_texts = [t.target_text for t in pb_targets]
                 missed, _, _ = _extract_targets_from_text(
                     article_text, model, pb, tool_schema,
-                    quality_gate=True, existing_target_texts=existing_texts)
+                    quality_gate=True, existing_target_texts=existing_texts,
+                    system_prompt=extraction_system_prompt)
                 pb_targets.extend(missed)
 
             all_targets.extend(pb_targets)

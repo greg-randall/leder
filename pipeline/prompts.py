@@ -98,8 +98,9 @@ looking elsewhere on the filesystem.
 
 Search top-down through whatever levels exist for this corpus:
 
-1. Overview files at the corpus root (e.g. CORPUS_OVERVIEW.md) -- cross-cutting
-   patterns, entity index, topic-to-document map.
+1. Overview files at the corpus root -- CORPUS_OVERVIEW.md for the folder tree's
+   own summary; CORPUS_CROSSCUTTING.md for the entity index and topic-to-document
+   map (recurring people/organizations/places and which documents discuss them).
 2. `_FOLDER_SUMMARY.md` inside each folder, where folders exist -- one overview
    per sub-collection.
 3. `*_summary.md` files -- one summary per source document. Use these to find

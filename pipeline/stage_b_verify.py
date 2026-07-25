@@ -518,8 +518,11 @@ async def _verify_target_async(
     from pipeline.models import Claim
     from pipeline.finding import Finding, Severity
 
+    # sha1, not hash() -- hash() is randomized per-process (PYTHONHASHSEED),
+    # which would defeat web_cache/{claim_id}/ reuse across separate runs.
+    _text_hash = hashlib.sha1(target.get("target_text", "").encode("utf-8")).hexdigest()[:10]
     claim = Claim(
-        claim_id=f"{target['playbook']}-{hash(target.get('target_text',''))}",
+        claim_id=f"{target['playbook']}-{_text_hash}",
         claim_text=target["target_text"],
         source_quote=target["anchor_text"],
         claim_type=target.get("claim_type", "generalization"),

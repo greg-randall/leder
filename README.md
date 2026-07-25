@@ -251,7 +251,7 @@ leder/
 │   ├── startup_check.py            # Prerequisite validation
 │   ├── stage_a_extract.py          # Generic extraction runner
 │   ├── stage_b_verify.py           # Generic verification runner
-│   ├── stage_c_rebuild.py          # Footnote insertion (findings.json + claims.json)
+│   ├── stage_c_rebuild.py          # Footnote insertion (findings.json)
 │   ├── stage_d_html.py             # Bootstrap HTML with sidebar
 │   ├── stage_e_docx.py             # .docx with Word comments
 │   ├── prepare_1_convert.py        # Corpus prep: MarkItDown + OCR + vision
@@ -275,7 +275,7 @@ leder/
 
 `pipeline/stage_b_verify.py` spawns Claude Agent SDK agents with playbook-specific prompts and tools. The `FindingOutput` pydantic model enforces structured output.
 
-`pipeline/stage_c_rebuild.py` accepts either `findings.json` (new) or `claims.json` (old) and produces the same footnoted markdown. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
+`pipeline/stage_c_rebuild.py` accepts `findings.json` and produces footnoted markdown. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
 
 `pipeline/prepare_1_convert.py` is the corpus-prep converter. Routing: images go to tesseract then vision if thin or garbled (spellcheck-based detection), with tiny/duplicate images skipped; audio goes to local faster-whisper; `.eml`/`.msg` go to dedicated extractors with attachment extraction and an auto second pass; `.srt`/`.vtt` go to a pycaption based transcript extractor; PDF goes to MarkItDown first with OCR fallback if empty; already-text formats (`prepare.text_native_extensions`) are copied through verbatim; everything else goes to MarkItDown, then gap-fillers, then UNCONVERTED.md.
 

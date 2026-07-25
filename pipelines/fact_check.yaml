@@ -81,6 +81,14 @@ verification:
       severity is PASS and no edit is needed. Never restate the finding;
       state the fix.
 
+    - human_review: set true if severity is WARNING or CRITICAL, the source
+      is derived/secondary rather than primary, or confidence is below 0.8.
+
+    ## PACE YOURSELF
+
+    Aim to complete verification in 30 turns or fewer. If you search
+    repeatedly without narrowing, stop and work with what you have.
+
   allowed_tools: [Read, Bash, WebSearch, WebFetch]
 
 display:

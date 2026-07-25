@@ -244,7 +244,7 @@ leder/
 │   ├── cli.py                      # Entry point, .env loading, subcommands
 │   ├── config.yaml                 # Model, concurrency, playbook, prepare settings
 │   ├── config.py                   # Dataclass-based config loader
-│   ├── models.py                   # Claim, ClaimsDocument (backward compat)
+│   ├── models.py                   # Claim and its supporting enums
 │   ├── finding.py                  # Finding, Target, FindingsDocument, Severity
 │   ├── playbook.py                 # Playbook dataclass + YAML loader
 │   ├── template_render.py          # Display template engine
@@ -271,9 +271,9 @@ leder/
 
 `pipeline/playbook.py` defines the Playbook dataclass and `load_playbook(path)`. A playbook is a YAML file with `extraction.prompt`, `extraction.quality_gate`, `verification.prompt`, `verification.allowed_tools`, and a `display.template`.
 
-`pipeline/stage_a_extract.py` chunks the article and dispatches extraction prompts per playbook. When `playbook_names` is provided, it uses the generic path. When absent, the old hardcoded fact-check path runs for backward compat.
+`pipeline/stage_a_extract.py` chunks the article and dispatches extraction prompts per playbook. `playbook_names` is required.
 
-`pipeline/stage_b_verify.py` spawns Claude Agent SDK agents with playbook-specific prompts and tools. The `FindingOutput` pydantic model enforces structured output. `VerdictOutput` is kept for backward compat.
+`pipeline/stage_b_verify.py` spawns Claude Agent SDK agents with playbook-specific prompts and tools. The `FindingOutput` pydantic model enforces structured output.
 
 `pipeline/stage_c_rebuild.py` accepts either `findings.json` (new) or `claims.json` (old) and produces the same footnoted markdown. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
 
@@ -282,10 +282,6 @@ leder/
 ### Provider setup
 
 The pipeline detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, and related variables. Stage 2 agents use the Claude Agent SDK, which spawns Claude Code CLI processes. These inherit the environment and use DeepSeek through the Anthropic-compatible endpoint.
-
-### Backward compatibility
-
-The old `claims.json` format still works. The `--claims` flag on `stage-b` and `stage-c` is accepted (routed internally). Old `Claim` and `ClaimsDocument` classes in `models.py` are untouched. The old hardcoded fact-check path in `stage_a` and `stage_b` still runs when no playbook config is provided.
 
 ### Debug mode
 

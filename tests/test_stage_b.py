@@ -599,9 +599,11 @@ def test_verify_target_async_finding_id_no_collision_on_equal_length(monkeypatch
     """Two different-text targets of EQUAL length must not produce the same finding_id."""
     from pipeline import stage_b_verify as sb
 
-    async def fake_verify_claim_async(claim, corpus_root, system_prompt, timeout, max_turns,
-                                       debug_dir, article_summary, allowed_tools=None,
-                                       output_schema=None, web_cache_dir="web_cache"):
+    async def fake_verify_claim_async(
+        claim, corpus_root, system_prompt, timeout, max_turns,
+        debug_dir, article_summary, allowed_tools=None,
+        output_schema=None, web_cache_dir="web_cache",
+    ):
         claim.verdict = "supported"
         claim.rationale = "ok"
         claim.source_path = None

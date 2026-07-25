@@ -3,24 +3,14 @@ import asyncio
 import pytest
 import os
 from pipeline.stage_b_verify import (
-    AGENT_SYSTEM_PROMPT,
     agent_failure_result,
     parse_verdict,
     _populate_claim_from_dict,
     _summarize_web_cache,
     _write_web_cache_folder_summary,
     _check_corpus_ready,
-    VerdictOutput,
 )
 from pipeline.models import Claim
-
-
-def test_agent_system_prompt_contains_key_rules():
-    assert "SEARCH STRATEGY" in AGENT_SYSTEM_PROMPT
-    assert "Summaries are a map" in AGENT_SYSTEM_PROMPT
-    assert "ORIGINALS (MANDATORY VERIFICATION STEP)" in AGENT_SYSTEM_PROMPT
-    assert "OUTPUT" in AGENT_SYSTEM_PROMPT
-    assert "structured data" in AGENT_SYSTEM_PROMPT
 
 
 def test_structured_output_populates_claim():
@@ -32,7 +22,7 @@ def test_structured_output_populates_claim():
         claim_type="numeric",
     )
     data = {
-        "verdict": "supported",
+        "severity": "PASS",
         "source_proximity": "original",
         "source_path": "LA-0304/permits/2020.md",
         "source_url": None,
@@ -59,20 +49,10 @@ def test_structured_output_missing_field_falls_back():
     )
     result = _populate_claim_from_dict(
         claim,
-        {"verdict": "supported", "rationale": "ok", "human_review": False, "confidence": 0.5},
+        {"severity": "PASS", "rationale": "ok", "human_review": False, "confidence": 0.5},
     )
     assert result.verdict == "supported"
     assert result.source_proximity == "unverifiable"
-
-
-def test_verdict_output_schema():
-    """VerdictOutput schema should be valid JSON Schema."""
-    schema = VerdictOutput.model_json_schema()
-    assert schema["type"] == "object"
-    assert "verdict" in schema["properties"]
-    assert "source_proximity" in schema["properties"]
-    # Enum values should be enforced
-    assert "supported" in schema["properties"]["verdict"]["enum"]
 
 
 def test_parse_verdict_valid_json():
@@ -200,6 +180,7 @@ def test_verify_claim_integration():
         pytest.skip("Corpus not available")
 
     import asyncio
+    from pipeline.prompts import build_verification_rules_block
     from pipeline.stage_b_verify import _verify_claim_async
 
     claim = Claim(
@@ -209,7 +190,9 @@ def test_verify_claim_integration():
         claim_type="numeric",
     )
 
-    result = asyncio.run(_verify_claim_async(claim, corpus_root, AGENT_SYSTEM_PROMPT))
+    result = asyncio.run(_verify_claim_async(
+        claim, corpus_root, build_verification_rules_block(""),
+    ))
     assert result.verdict is not None
     assert result.rationale is not None
     assert len(result.rationale) > 5
@@ -547,16 +530,6 @@ def test_check_corpus_ready_finds_deep_folder_summary(tmp_path):
     assert issues == [], f"rglob should find nested _FOLDER_SUMMARY.md, got: {issues}"
 
 
-# ── Agent prompt contains web_cache instructions ──────────────────
-
-def test_agent_prompt_mentions_web_cache():
-    """System prompt tells agents to check web_cache before fetching."""
-    assert "web_cache/_FOLDER_SUMMARY.md" in AGENT_SYSTEM_PROMPT
-    assert "--cache-dir web_cache" in AGENT_SYSTEM_PROMPT
-    cache_hint = AGENT_SYSTEM_PROMPT.lower()
-    assert "already cached" in cache_hint or "already been cached" in cache_hint
-
-
 # ── Near-duplicate target dedup + finding fan-out ─────────────────
 
 def test_normalize_target_text_strips_only_one_trailing_punct():
@@ -565,6 +538,14 @@ def test_normalize_target_text_strips_only_one_trailing_punct():
     assert _normalize_target_text("Wow!!!") == "wow!!"
     assert _normalize_target_text("Plain sentence.") == "plain sentence"
     assert _normalize_target_text("  Extra   spaces  ") == "extra spaces"
+
+
+def test_run_stage_b_requires_targets_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("pipeline.stage_b_verify._check_corpus_ready", lambda *a, **k: [])
+    from pipeline.stage_b_verify import run_stage_b
+    with pytest.raises(ValueError, match="targets_path"):
+        run_stage_b(targets_path="", output_path=str(tmp_path / "out.json"),
+                    corpus_root=str(tmp_path), force_run=True)
 
 
 def test_run_stage_b_dedups_near_duplicate_targets_and_fans_out(tmp_path, monkeypatch):

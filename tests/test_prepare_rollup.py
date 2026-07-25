@@ -55,6 +55,48 @@ def test_crosscutting_uses_big_call_model(tmp_path, monkeypatch):
     assert "pro[1m]" in seen  # crosscutting call used the big-call model
 
 
+def test_build_folder_prompt_de_domained_and_cites_sources():
+    from pipeline.prepare_3_rollup import build_folder_prompt
+
+    p = build_folder_prompt("Transcripts of Waskom city council meetings.")
+    assert "RAD" not in p
+    assert "permit" not in p.lower()
+    assert "Transcripts of Waskom city council meetings." in p
+    assert "source document" in p.lower()
+    assert "[" in p and "]" in p  # bracket-citation instruction present
+
+
+def test_build_crosscutting_prompt_has_entity_index_and_topic_map():
+    from pipeline.prepare_3_rollup import build_crosscutting_prompt
+
+    p = build_crosscutting_prompt("A test corpus.")
+    assert "Entity index" in p
+    assert "Topic" in p and "document map" in p.lower()
+    assert "Suggested next analyses" not in p
+    assert "Cross-cutting patterns" in p
+    assert "Data highlights" in p
+    assert "A test corpus." in p
+
+
+def test_run_prepare_3_threads_corpus_description(tmp_path, monkeypatch):
+    corpus = tmp_path / "corpus"
+    _mk(corpus / "A" / "d1_summary.md", "**Summary:** one.")
+    _mk(corpus / "A" / "d2_summary.md", "**Summary:** two.")
+
+    captured = {}
+
+    def fake_llm(system, user, model, max_tokens=4096, stream=False):
+        captured["system"] = system
+        return "x"
+
+    monkeypatch.setattr(p3, "call_text_llm", fake_llm)
+    p3.run_prepare_3(corpus_root=str(corpus), model="pro", big_call_model="pro[1m]",
+                     workers=1, crosscutting=False, force=True,
+                     corpus_description="A test corpus about widgets.")
+
+    assert "A test corpus about widgets." in captured["system"]
+
+
 def test_failed_folder_summary_not_persisted(tmp_path, monkeypatch):
     corpus = tmp_path / "corpus"
     _mk(corpus / "A" / "d1_summary.md", "**Summary:** one.")

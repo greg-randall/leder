@@ -17,26 +17,41 @@ from pipeline.llm import call_text_llm
 BIG_CALL_MAX_TOKENS = 384000
 FOLDER_MAX_TOKENS = 12000
 
-FOLDER_PROMPT = """You are writing an overview of ONE folder in a document
-collection. The folder may contain individual document summaries and/or
-summaries of sub-collections (subfolders). Synthesize them into a single
-overview.
+
+def build_folder_prompt(corpus_description: str) -> str:
+    domain_block = ""
+    if corpus_description:
+        domain_block = f"This collection is:\n{corpus_description}\n\n"
+
+    return f"""You are writing an overview of ONE folder in a document
+collection. {domain_block}The folder may contain individual document summaries
+and/or summaries of sub-collections (subfolders). Synthesize them into a
+single overview.
+
+This overview will be read by a downstream fact-checking agent deciding which
+original document to open next. It is a routing table, not just a summary —
+every Timeline and Key-contents-&-findings bullet must end with the source
+document name(s) it came from, in brackets, so the agent can jump straight to
+the right file. For example: "The council approved the water rate increase on
+a 4-1 vote. [20260717 - Meeting for 7-14-26 [XQ3PK-qjSdk].en.srt]"
 
 Write these sections:
 
 **Overview:** 3-5 sentences describing what this folder contains as a whole.
 
 **Timeline (if applicable):** A chronological bullet list of the key events you
-can reconstruct from the summaries — applications received, permits issued,
-renewals, inspections, violations, RADs sent, responses filed, reports
-submitted, extensions granted. Put the date (or best-known date) at the start
-of each bullet. Only include events actually supported by the summaries. If
-dates are sparse or the folder isn't chronological (e.g., reference materials,
-form letters), skip this section.
+can reconstruct from the summaries — meetings held, votes taken, contracts
+awarded, incidents reported, applications filed, decisions made — whatever
+event types the summaries actually contain. Put the date (or best-known date)
+at the start of each bullet, and the source document name(s) in brackets at
+the end. Only include events actually supported by the summaries. If dates
+are sparse or the folder isn't chronological (e.g., reference materials, form
+letters), skip this section.
 
 **Key contents & findings:** Bullet list of the substantive matters across the
 documents and sub-collections — who/what/where, notable numbers, names,
-decisions, deficiencies, or issues. Cite specifics where the inputs give them.
+decisions, deficiencies, or issues. Cite specifics where the inputs give them,
+and end each bullet with the source document name(s) in brackets.
 
 **Open questions / gaps:** Anything the inputs suggest is unresolved, missing,
 or unclear.
@@ -44,10 +59,17 @@ or unclear.
 Stay grounded in what the summaries actually say. If the folder is thin or
 mostly administrative, say so rather than padding."""
 
-CROSSCUTTING_PROMPT = """You are writing the definitive analytical overview for
-an ENTIRE document collection. Below are the per-document summaries for every
-document across every folder. You have the complete picture — draw connections
-across folders that no single-folder view could reveal.
+
+def build_crosscutting_prompt(corpus_description: str) -> str:
+    domain_block = ""
+    if corpus_description:
+        domain_block = f"This collection is:\n{corpus_description}\n\n"
+
+    return f"""You are writing the definitive analytical overview for
+an ENTIRE document collection. {domain_block}Below are the per-document
+summaries for every document across every folder. You have the complete
+picture — draw connections across folders that no single-folder view could
+reveal.
 
 Write these sections:
 
@@ -61,7 +83,14 @@ that appear across multiple folders. Cite specific folders and numbers.
 
 **Data highlights:** Concrete quantitative findings worth surfacing.
 
-**Suggested next analyses:** Specific, grounded follow-ups.
+**Entity index:** Every person, organization, facility, and place that appears
+in multiple documents. For each, list the variant spellings/renderings seen
+and which documents it appears in, so a fact-checking agent can resolve a
+name to every place it's discussed.
+
+**Topic → document map:** For each major recurring topic, the list of
+documents that discuss it, so a fact-checking agent can jump straight to the
+relevant source material for a given subject.
 
 Be thorough — you have a large output budget. Stay grounded in the summaries;
 do not invent facts not present in them."""
@@ -106,19 +135,23 @@ def build_folder_user_msg(folder_name, file_summaries, subfolder_summaries) -> s
 
 
 def summarize_folder(folder: Path, corpus_root: Path, model: str, force: bool,
-                     failures: list, pbar=None):
+                     failures: list, pbar=None, corpus_description: str = ""):
     """Post-order: summarize children first, then this folder. Returns True if a
     _FOLDER_SUMMARY.md was written (folder had content)."""
     subdirs = sorted(c for c in folder.iterdir() if c.is_dir())
     if len(subdirs) > 1:
         from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
         with _TPE(max_workers=len(subdirs)) as pool:
-            futures = {pool.submit(summarize_folder, d, corpus_root, model, force, failures, pbar): d for d in subdirs}
+            futures = {
+                pool.submit(summarize_folder, d, corpus_root, model, force, failures, pbar,
+                            corpus_description): d
+                for d in subdirs
+            }
             for future in _ac(futures):
                 future.result()
     else:
         for d in subdirs:
-            summarize_folder(d, corpus_root, model, force, failures, pbar)
+            summarize_folder(d, corpus_root, model, force, failures, pbar, corpus_description)
 
     out = folder / "_FOLDER_SUMMARY.md"
     if not force and out.exists() and out.stat().st_size > 20:
@@ -141,7 +174,7 @@ def summarize_folder(folder: Path, corpus_root: Path, model: str, force: bool,
         pbar.update(1)
     user_msg = build_folder_user_msg(folder.name, file_summaries, subfolder_summaries)
     try:
-        overview = call_text_llm(FOLDER_PROMPT, user_msg, model=model,
+        overview = call_text_llm(build_folder_prompt(corpus_description), user_msg, model=model,
                                  max_tokens=FOLDER_MAX_TOKENS)
     except Exception as ex:
         rel = str(folder.relative_to(corpus_root)) or "."
@@ -172,7 +205,7 @@ def build_all_summaries(corpus_root: Path):
     return total
 
 
-def build_crosscutting(corpus_root: Path, big_call_model: str):
+def build_crosscutting(corpus_root: Path, big_call_model: str, corpus_description: str = ""):
     parts = ["# All document summaries\n"]
     for p in sorted(corpus_root.rglob("*_summary.md")):
         if p.name.startswith("_"):
@@ -181,7 +214,7 @@ def build_crosscutting(corpus_root: Path, big_call_model: str):
         parts.append(f"\n## Document: {doc_rel}\n\n{_read(p)}\n")
     user_msg = "\n".join(parts)
     try:
-        overview = call_text_llm(CROSSCUTTING_PROMPT, user_msg,
+        overview = call_text_llm(build_crosscutting_prompt(corpus_description), user_msg,
                                  model=big_call_model, max_tokens=BIG_CALL_MAX_TOKENS,
                                  stream=True)
     except Exception as ex:
@@ -193,7 +226,7 @@ def build_crosscutting(corpus_root: Path, big_call_model: str):
 
 def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
                   workers: int, crosscutting: bool, force: bool,
-                  only: str | None = None) -> None:
+                  only: str | None = None, corpus_description: str = "") -> None:
     root = Path(corpus_root)
 
     if only in (None, "tree"):
@@ -208,13 +241,14 @@ def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
         subdirs = sorted(c for c in root.iterdir() if c.is_dir())
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             futures = {
-                pool.submit(summarize_folder, d, root, model, force, failures, pbar): d
+                pool.submit(summarize_folder, d, root, model, force, failures, pbar,
+                            corpus_description): d
                 for d in subdirs
             }
             for future in as_completed(futures):
                 future.result()
         # Root itself (depends on all subdirs done).
-        summarize_folder(root, root, model, force, failures, pbar)
+        summarize_folder(root, root, model, force, failures, pbar, corpus_description)
         pbar.close()
         root_summary = root / "_FOLDER_SUMMARY.md"
         if root_summary.exists():
@@ -230,5 +264,5 @@ def run_prepare_3(corpus_root: str, model: str, big_call_model: str,
 
     if only == "crosscutting" or (crosscutting and only is None):
         print("prepare-3: building crosscutting overview (one big call)...")
-        build_crosscutting(root, big_call_model)
+        build_crosscutting(root, big_call_model, corpus_description)
         print("prepare-3: wrote CORPUS_CROSSCUTTING.md")

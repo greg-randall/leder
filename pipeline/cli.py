@@ -357,6 +357,7 @@ def main() -> None:
                 big_call_model=prep.rollup.big_call_model,
                 workers=prep.rollup.workers, crosscutting=prep.rollup.crosscutting,
                 force=force, only=getattr(args, "only", None),
+                corpus_description=config.corpus.description,
             )
 
         # Combined 'prepare': surface prepare-1 failures in the exit code even

@@ -256,3 +256,92 @@ def test_main_check_failure(monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 1
+
+
+def _write_full_config(tmp_path, article, corpus_description):
+    """Write a minimal-but-complete config.yaml for main() dispatch tests."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        yaml.dump(
+            {
+                "article": {"path": str(article)},
+                "corpus": {"root": str(tmp_path), "description": corpus_description},
+                "output": {"dir": str(tmp_path)},
+                "stage_a": {"model": "deepseek-v4-pro", "quality_gate": True},
+                "stage_b": {
+                    "model": "deepseek-v4-flash",
+                    "concurrency": 1,
+                    "timeout": 60,
+                    "max_turns": 1,
+                },
+            }
+        )
+    )
+    return cfg
+
+
+def test_main_stage_a_passes_corpus_description(tmp_path, monkeypatch):
+    """stage-a dispatch threads config.corpus.description into run_stage_a."""
+    article = tmp_path / "article.md"
+    article.write_text("# Article\n")
+    cfg = _write_full_config(tmp_path, article, "A test corpus about widgets")
+
+    captured = {}
+
+    def fake_run_stage_a(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr("pipeline.stage_a_extract.run_stage_a", fake_run_stage_a)
+    monkeypatch.setattr("pipeline.startup_check.validate_startup", lambda force=False: True)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pipeline.cli", "stage-a",
+            "--config", str(cfg),
+            "--output", str(tmp_path / "targets.json"),
+            "--skip-startup-check",
+        ],
+    )
+
+    from pipeline.cli import main
+
+    main()
+
+    assert captured.get("corpus_description") == "A test corpus about widgets"
+
+
+def test_main_stage_b_passes_corpus_description(tmp_path, monkeypatch):
+    """stage-b dispatch threads config.corpus.description into run_stage_b."""
+    from types import SimpleNamespace
+
+    article = tmp_path / "article.md"
+    article.write_text("# Article\n")
+    cfg = _write_full_config(tmp_path, article, "A test corpus about widgets")
+
+    (tmp_path / "targets.json").write_text("{}")
+
+    captured = {}
+
+    def fake_run_stage_b(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(findings=[])
+
+    monkeypatch.setattr("pipeline.stage_b_verify.run_stage_b", fake_run_stage_b)
+    monkeypatch.setattr("pipeline.startup_check.validate_startup", lambda force=False: True)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pipeline.cli", "stage-b",
+            "--config", str(cfg),
+            "--targets", str(tmp_path / "targets.json"),
+            "--output", str(tmp_path / "findings.json"),
+            "--skip-startup-check",
+        ],
+    )
+
+    from pipeline.cli import main
+
+    main()
+
+    assert captured.get("corpus_description") == "A test corpus about widgets"

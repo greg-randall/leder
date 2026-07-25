@@ -395,6 +395,7 @@ def main() -> None:
             quality_gate=not getattr(args, "no_quality_gate", False),
             playbook_dir=config.prepare.playbooks.dir,
             playbook_names=playbook_names,
+            corpus_description=config.corpus.description,
         )
         if doc is not None:
             n = getattr(doc, 'total_findings', None)
@@ -439,6 +440,7 @@ def main() -> None:
             playbook_dir=config.prepare.playbooks.dir,
             pricing=config.pricing,
             force_run=getattr(args, "force_run", False),
+            corpus_description=config.corpus.description,
         )
         if hasattr(doc, 'findings'):
             verified_count = len(doc.findings)

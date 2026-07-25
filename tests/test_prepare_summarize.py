@@ -98,6 +98,15 @@ def test_build_prepare_2_prompt_de_domained_and_retrieval_oriented():
     assert "self-correct" in p.lower() or "contradict" in p.lower()
     assert "variant" in p.lower() or "spelling" in p.lower()
     assert "verbatim" in p.lower()
+    assert "locations" in p.lower()
+    assert "deadlines" in p.lower()
+
+
+def test_build_prepare_2_prompt_empty_corpus_description_no_stray_text():
+    from pipeline.prepare_2_summarize import build_prepare_2_prompt
+
+    p = build_prepare_2_prompt("")
+    assert "following collection" not in p
 
 
 def test_run_prepare_2_uses_corpus_description(tmp_path, monkeypatch):

@@ -244,7 +244,7 @@ def test_fact_check_yaml_verification_prompt_has_two_level_verdict():
     pb = load_playbook("pipelines/fact_check.yaml")
     prompt = pb.verification_prompt
     assert "attribution accuracy" in prompt.lower()
-    assert "independent corroboration" in prompt.lower() or "corroboration" in prompt.lower()
+    assert "independent corroboration" in prompt.lower()
     assert "attribution_status" in prompt
 
 
@@ -252,6 +252,13 @@ def test_fact_check_yaml_quality_gate_has_near_duplicate_rule():
     from pipeline.playbook import load_playbook
     pb = load_playbook("pipelines/fact_check.yaml")
     assert "semantic equivalent" in pb.quality_gate_prompt.lower()
+
+
+def test_fact_check_yaml_has_severity_human_review_trigger():
+    from pipeline.playbook import load_playbook
+    pb = load_playbook("pipelines/fact_check.yaml")
+    prompt = pb.verification_prompt
+    assert "WARNING or CRITICAL" in prompt
 
 
 def test_get_playbook_caches(tmp_path):

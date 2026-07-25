@@ -67,10 +67,8 @@ verification:
     "attributed_and_confirmed", "stated_as_fact_testimony_only",
     "corroborated", "contradicted", "not_found".
 
-    - agent_summary: 1-2 sentences. Be specific -- mention the actual source
-      content. BAD: "A document was found that supports this." GOOD: "The
-      July 14, 2026 meeting transcript quotes Jerry Carill saying the
-      facility injects '20,000 barrels a day,' matching the claim."
+    - agent_summary: 1-2 sentences explaining what the source says (see
+      "Writing agent_summary" guidance above for style).
 
     - source_excerpt: verbatim text from the source that confirms or
       contradicts the claim. This is the evidence the human reviewer checks.

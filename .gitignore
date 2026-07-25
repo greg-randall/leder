@@ -42,3 +42,8 @@ web_cache/
 !/requirements.txt
 ~$*
 .prereq-cache.json
+
+
+# Other stuff to ignore
+*.bak
+*.orig

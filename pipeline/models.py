@@ -1,8 +1,7 @@
 """Data model shared across all three pipeline stages."""
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from typing import Optional
 from enum import Enum
 
@@ -24,19 +23,6 @@ class SourceProximity(str, Enum):
     ORIGINAL = "original"
     DERIVED = "derived"
     UNVERIFIABLE = "unverifiable"
-
-
-@dataclass
-class Article:
-    path: str
-    title: str
-    generated_at: str = ""
-
-
-@dataclass
-class Corpus:
-    root: str
-    project: str
 
 
 @dataclass
@@ -93,33 +79,3 @@ class Claim:
             raise ValueError(
                 f"confidence must be between 0.0 and 1.0, got {self.confidence}"
             )
-
-
-@dataclass
-class ClaimsDocument:
-    """Top-level document: the contract between all pipeline stages."""
-    article: Article
-    corpus: Corpus
-    claims: list[Claim] = field(default_factory=list)
-    article_summary: str = ""
-
-    def to_json(self) -> str:
-        return json.dumps(self._to_dict(), indent=2, ensure_ascii=False)
-
-    def _to_dict(self) -> dict:
-        return {
-            "article": asdict(self.article),
-            "corpus": asdict(self.corpus),
-            "claims": [asdict(c) for c in self.claims],
-            "article_summary": self.article_summary,
-        }
-
-    @classmethod
-    def from_json(cls, raw: str) -> ClaimsDocument:
-        data = json.loads(raw)
-        return cls(
-            article=Article(**data["article"]),
-            corpus=Corpus(**data["corpus"]),
-            claims=[Claim(**c) for c in data["claims"]],
-            article_summary=data.get("article_summary", ""),
-        )

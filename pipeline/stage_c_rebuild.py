@@ -11,7 +11,7 @@ import re
 import sys
 from types import SimpleNamespace
 
-from pipeline.models import Claim, ClaimsDocument, Verdict, SourceProximity, ClaimType
+from pipeline.models import Claim, Verdict, SourceProximity, ClaimType
 
 
 def normalize_text(text: str) -> str:
@@ -495,17 +495,13 @@ def _merge_placed_groups(
 
 def run_stage_c(
     article_path: str,
-    claims_path: str | None = None,
+    findings_path: str,
     output_path: str | None = None,
     model: str = "claude-sonnet-5",
-    findings_path: str | None = None,
 ) -> str:
-    """Rebuild article with source footnotes. Returns output path.
-
-    Accepts either a ``claims_path`` (legacy claims.json) or a
-    ``findings_path`` (findings.json from Stage 2).  When both are
-    ``None`` or ``output_path`` is ``None`` a ``ValueError`` is raised.
-    """
+    """Rebuild article with source footnotes. Returns output path."""
+    if not findings_path:
+        raise ValueError("findings_path is required")
     if output_path is None:
         raise ValueError("output_path is required")
 
@@ -513,15 +509,8 @@ def run_stage_c(
         article_text = f.read()
 
     # ── Load source data ──────────────────────────────────────────
-    if findings_path:
-        finding_dicts = _load_findings(findings_path)
-        claims = _finding_dicts_to_claim_like_objects(finding_dicts)
-    elif claims_path:
-        with open(claims_path, encoding="utf-8") as f:
-            doc = ClaimsDocument.from_json(f.read())
-        claims = doc.claims
-    else:
-        raise ValueError("Either claims_path or findings_path must be provided")
+    finding_dicts = _load_findings(findings_path)
+    claims = _finding_dicts_to_claim_like_objects(finding_dicts)
 
     # ── Deduplicate ───────────────────────────────────────────────
     # Use (claim_text, check_type, source_quote) as the dedup key so distinct

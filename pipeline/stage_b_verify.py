@@ -59,6 +59,26 @@ class FindingOutput(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+_CONFIDENCE_BANDS = (0.95, 0.8, 0.6, 0.4, 0.2)
+
+
+def _snap_confidence(value: float | None) -> float | None:
+    """Snap a confidence value to the nearest of the five allowed bands.
+
+    Belt-and-suspenders for the confidence rubric -- the DeepSeek endpoint
+    isn't guaranteed to honor JSON-schema float enum constraints reliably,
+    so this runs in code, not schema.
+    """
+    if value is None:
+        return None
+    # Round the delta before comparing -- raw float subtraction introduces
+    # representation noise (e.g. abs(0.6-0.7) < abs(0.8-0.7) in raw floats
+    # even though both are mathematically 0.1 away), which would silently
+    # break the "first band wins on a tie" rule below. Rounding restores the
+    # true tie so min() picks by _CONFIDENCE_BANDS iteration order.
+    return min(_CONFIDENCE_BANDS, key=lambda band: round(abs(band - value), 9))
+
+
 AGENT_SYSTEM_PROMPT = """You are a fact-checker verifying claims against a corpus of documents.
 For each claim, your job is to FIND the best available source and EVALUATE
 whether it supports, contradicts, or is silent on the claim.
@@ -216,13 +236,16 @@ def parse_verdict(claim: Claim, text: str) -> Claim:
         claim.rationale = data.get("rationale", "No rationale provided.")
         claim.source_excerpt = data.get("source_excerpt", "")
         claim.human_review = data.get("human_review", True)
-        claim.confidence = data.get("confidence")
+        claim.confidence = _snap_confidence(data.get("confidence"))
     except KeyError as e:
         print(f"  [{claim.claim_id}] Missing field: {e}", file=sys.stderr)
         return agent_failure_result(claim)
 
     if claim.source_proximity == "original" and _is_summary_path(claim.source_path):
         claim.source_proximity = "derived"
+        claim.human_review = True
+
+    if claim.confidence is not None and claim.confidence <= 0.6:
         claim.human_review = True
 
     return claim
@@ -466,6 +489,15 @@ async def _verify_target_async(
     rec_action = raw.get("recommended_action")
     meta = raw.get("metadata", {})
 
+    agent_summary = result.rationale or ""
+    human_review = result.human_review
+    if _is_summary_path(result.source_path):
+        human_review = True
+        agent_summary = (
+            agent_summary + " ⚠ cites a summary, not an original "
+            "— verify against the source document"
+        ).strip()
+
     _text_hash = hashlib.sha1(target.get("target_text", "").encode("utf-8")).hexdigest()[:10]
     return Finding(
         finding_id=f"{target['playbook']}-{_text_hash}",
@@ -474,13 +506,13 @@ async def _verify_target_async(
         target_text=target["target_text"],
         anchor_text=target["anchor_text"],
         context=target.get("context", ""),
-        agent_summary=result.rationale or "",
+        agent_summary=agent_summary,
         recommended_action=rec_action,
         source_path=result.source_path,
         source_url=result.source_url,
         source_excerpt=result.source_excerpt,
         confidence=result.confidence,
-        human_review=result.human_review,
+        human_review=human_review,
         metadata=meta,
     )
 
@@ -656,7 +688,7 @@ def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
         claim.rationale = data.get("rationale") or data.get("agent_summary", "No rationale provided.")
         claim.source_excerpt = data.get("source_excerpt", "")
         claim.human_review = data.get("human_review", True)
-        claim.confidence = data.get("confidence")
+        claim.confidence = _snap_confidence(data.get("confidence"))
     except KeyError as e:
         print(f"  [{claim.claim_id}] Missing field in structured output: {e}", file=sys.stderr)
         return agent_failure_result(claim)
@@ -671,6 +703,9 @@ def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
             f"(summary path: {claim.source_path})",
             file=sys.stderr,
         )
+
+    if claim.confidence is not None and claim.confidence <= 0.6:
+        claim.human_review = True
 
     return claim
 

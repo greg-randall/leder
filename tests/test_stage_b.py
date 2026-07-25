@@ -121,7 +121,10 @@ Some trailing text."""
     result = parse_verdict(claim, agent_output)
     assert result.verdict == "contradicted"
     assert result.human_review is True
-    assert result.confidence == 0.5
+    # 0.5 is equidistant between 0.4/0.6 bands; snaps to 0.6 per
+    # _CONFIDENCE_BANDS iteration order (0.6 appears before 0.4, and
+    # min() keeps the first minimum encountered on ties).
+    assert result.confidence == 0.6
 
 
 def test_parse_verdict_no_json():
@@ -626,3 +629,77 @@ def test_verify_target_async_finding_id_no_collision_on_equal_length(monkeypatch
         target_b, "sys", ["Read"], "/corpus", 60, 10, None, ""))
 
     assert finding_a.finding_id != finding_b.finding_id
+
+
+# ── Confidence snapping + forced human_review ─────────────────────
+
+def test_snap_confidence_to_nearest_band():
+    from pipeline.stage_b_verify import _snap_confidence
+    assert _snap_confidence(0.95) == 0.95
+    assert _snap_confidence(0.9) == 0.95  # closer to 0.95 than 0.8
+    assert _snap_confidence(0.7) == 0.8   # closer to 0.8 than 0.6
+    assert _snap_confidence(0.0) == 0.2
+    assert _snap_confidence(1.0) == 0.95
+    assert _snap_confidence(None) is None
+
+
+def test_populate_claim_from_dict_snaps_confidence():
+    from pipeline.stage_b_verify import _populate_claim_from_dict
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    result = _populate_claim_from_dict(claim, {
+        "verdict": "supported", "source_proximity": "original",
+        "rationale": "ok", "human_review": False, "confidence": 0.91,
+    })
+    assert result.confidence == 0.95
+
+
+def test_populate_claim_from_dict_forces_human_review_below_threshold():
+    from pipeline.stage_b_verify import _populate_claim_from_dict
+
+    claim = Claim(claim_id="c2", claim_text="T", source_quote="T", claim_type="numeric")
+    result = _populate_claim_from_dict(claim, {
+        "verdict": "supported", "source_proximity": "original",
+        "rationale": "ok", "human_review": False, "confidence": 0.55,
+    })
+    assert result.confidence == 0.6
+    assert result.human_review is True  # forced despite agent saying False
+
+
+def test_populate_claim_from_dict_leaves_human_review_alone_above_threshold():
+    from pipeline.stage_b_verify import _populate_claim_from_dict
+
+    claim = Claim(claim_id="c3", claim_text="T", source_quote="T", claim_type="numeric")
+    result = _populate_claim_from_dict(claim, {
+        "verdict": "supported", "source_proximity": "original",
+        "rationale": "ok", "human_review": False, "confidence": 0.85,
+    })
+    assert result.confidence == 0.8
+    assert result.human_review is False
+
+
+def test_verify_target_async_flags_summary_source(monkeypatch):
+    from pipeline import stage_b_verify as sb
+
+    async def fake_verify_claim_async(
+        claim, corpus_root, system_prompt, timeout, max_turns,
+        debug_dir, article_summary, allowed_tools=None, output_schema=None,
+    ):
+        claim.verdict = "supported"
+        claim.rationale = "The overview mentions this."
+        claim.source_path = "ALL_SUMMARIES.md"
+        claim.source_url = None
+        claim.source_excerpt = ""
+        claim.confidence = 0.8
+        claim.human_review = False
+        claim._raw_output = {}
+        return claim
+
+    monkeypatch.setattr(sb, "_verify_claim_async", fake_verify_claim_async)
+
+    target = {"playbook": "fact_check", "target_text": "Some claim.", "anchor_text": "a"}
+    finding = asyncio.run(sb._verify_target_async(
+        target, "sys", ["Read"], "/corpus", 60, 10, None, ""))
+
+    assert finding.human_review is True
+    assert "cites a summary" in finding.agent_summary

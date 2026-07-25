@@ -929,6 +929,10 @@ def run_stage_b(
             sem = asyncio.Semaphore(concurrency)
 
             async def _one(i, t):
+                # NOTE: i/t iterate over `representatives` (post-dedup), not the
+                # original targets_list -- --debug-ids/--debug N indices no longer
+                # correspond 1:1 to targets.json's original target order once
+                # near-duplicate targets have been collapsed to one representative.
                 async with sem:
                     # Per-target debug: debug_ids (explicit indices) or random sample
                     t_debug_dir = None

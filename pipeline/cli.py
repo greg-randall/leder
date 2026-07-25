@@ -128,7 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     b_parser.add_argument(
         "--debug-ids", type=str, default=None, metavar="1,3,5",
-        help="Debug specific target indices (comma-separated, 0-based)",
+        help="Debug specific target indices (comma-separated, 0-based; "
+             "indices apply post-dedup; see run_stage_b)",
     )
 
     c_parser = subparsers.add_parser(

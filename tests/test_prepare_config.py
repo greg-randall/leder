@@ -16,6 +16,26 @@ def _write(tmp_path: Path, body: str) -> str:
     return str(cfg)
 
 
+def test_corpus_description_defaults_to_empty(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.corpus.description == ""
+
+
+def test_corpus_description_parsed_from_yaml(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus:
+          root: "corpus/"
+          description: "Transcripts of city council meetings."
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.corpus.description == "Transcripts of city council meetings."
+
+
 def test_prepare_audio_defaults(tmp_path):
     cfg_path = _write(tmp_path, """
         article: {path: "article.md"}

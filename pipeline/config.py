@@ -30,6 +30,7 @@ class ArticleConfig:
 @dataclass
 class CorpusConfig:
     root: str = "./"
+    description: str = ""
 
 
 @dataclass

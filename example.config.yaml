@@ -3,6 +3,14 @@ article:
 
 corpus:
   root: "corpus/"
+  # A few sentences describing what's in the corpus and the topics/entities
+  # that recur across documents. Injected into prepare-2/3 summarization
+  # prompts and the stage-b verification rules so the model doesn't have to
+  # guess your document taxonomy from context alone.
+  description: >
+    Describe your document collection here: what kind of documents, what
+    time period, and the recurring people/organizations/topics an agent
+    fact-checking against this corpus should expect to see.
 
 output:
   dir: "."

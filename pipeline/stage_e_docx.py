@@ -15,11 +15,11 @@ from docx import Document
 from docx.shared import Pt
 
 
-def convert(article_sourced_md: str, claims_json: str, output_docx: str) -> None:
-    with open(claims_json, encoding="utf-8") as f:
+def convert(article_sourced_md: str, findings_json: str, output_docx: str) -> None:
+    with open(findings_json, encoding="utf-8") as f:
         claims_data = json.load(f)
     claims_by_id = {}
-    items = claims_data.get("findings") or claims_data.get("claims", [])
+    items = claims_data.get("findings", [])
     for c in items:
         cid = c.get("finding_id") or c.get("claim_id", "")
         claims_by_id[cid] = c
@@ -140,8 +140,8 @@ def _clean(text: str) -> str:
     return text
 
 
-def run_stage_e(article_sourced_md: str, claims_json: str, output_docx: str = "") -> str:
+def run_stage_e(article_sourced_md: str, findings_json: str, output_docx: str = "") -> str:
     if not output_docx:
         output_docx = article_sourced_md.replace(".md", ".docx")
-    convert(article_sourced_md, claims_json, output_docx)
+    convert(article_sourced_md, findings_json, output_docx)
     return output_docx

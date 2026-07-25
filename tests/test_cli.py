@@ -142,6 +142,13 @@ def test_parser_stage_e_claims_alias_still_works():
     assert args.claims == "old.json"
 
 
+def test_parser_stage_e_claims_overrides_findings_when_both_given():
+    parser = build_parser()
+    args = parser.parse_args(["stage-e", "--findings", "f.json", "--claims", "c.json"])
+    assert args.claims == "c.json"
+    assert args.findings == "f.json"
+
+
 def test_stage_b_output_defaults_to_findings_json():
     """stage-b's --output default matches stage-c/d/e's findings.json convention."""
     parser = build_parser()
@@ -343,3 +350,48 @@ def test_main_stage_b_passes_corpus_description(tmp_path, monkeypatch):
     main()
 
     assert captured.get("corpus_description") == "A test corpus about widgets"
+
+
+def test_main_stage_e_claims_alias_overrides_findings(tmp_path, monkeypatch):
+    """stage-e dispatch: when both --claims and --findings are given, --claims wins
+    and its resolved path is what gets passed to run_stage_e as the findings path."""
+    article = tmp_path / "article.md"
+    article.write_text("# Article\n")
+    cfg = _write_full_config(tmp_path, article, "A test corpus about widgets")
+
+    article_sourced = tmp_path / "article-sourced.md"
+    article_sourced.write_text("# Sourced Article\n")
+
+    findings_file = tmp_path / "findings.json"
+    findings_file.write_text("{}")
+    claims_file = tmp_path / "old-claims.json"
+    claims_file.write_text("{}")
+
+    captured = {}
+
+    def fake_run_stage_e(article_path, findings_path, output_path):
+        captured["article_path"] = article_path
+        captured["findings_path"] = findings_path
+        captured["output_path"] = output_path
+        return output_path
+
+    monkeypatch.setattr("pipeline.stage_e_docx.run_stage_e", fake_run_stage_e)
+    monkeypatch.setattr("pipeline.startup_check.validate_startup", lambda force=False: True)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pipeline.cli", "stage-e",
+            "--config", str(cfg),
+            "--article", str(article_sourced),
+            "--findings", str(findings_file),
+            "--claims", str(claims_file),
+            "--output", str(tmp_path / "out.docx"),
+            "--skip-startup-check",
+        ],
+    )
+
+    from pipeline.cli import main
+
+    main()
+
+    assert captured.get("findings_path") == str(claims_file)

@@ -346,11 +346,17 @@ def _get_playbook(name: str, playbook_dir: str):
     return _PLAYBOOK_CACHE[name]
 
 
-def _build_verification_prompt(playbook, article_summary: str, target_text: str, context: str) -> str:
-    return (playbook.verification_prompt
-            .replace("{{article_summary}}", article_summary)
-            .replace("{{target_text}}", target_text)
-            .replace("{{context}}", context))
+def _build_verification_prompt(
+    playbook, article_summary: str, target_text: str, context: str,
+    corpus_description: str = "",
+) -> str:
+    from pipeline.prompts import build_verification_rules_block
+
+    task_prompt = (playbook.verification_prompt
+                   .replace("{{article_summary}}", article_summary)
+                   .replace("{{target_text}}", target_text)
+                   .replace("{{context}}", context))
+    return build_verification_rules_block(corpus_description) + "\n\n" + task_prompt
 
 
 # ---- async agent logic ----
@@ -918,6 +924,7 @@ def run_stage_b(
     pricing: dict | None = None,
     debug_ids: list[int] | None = None,
     force_run: bool = False,
+    corpus_description: str = "",
 ) -> ClaimsDocument | FindingsDocument:
     """Load claims.json, verify each claim, write enriched claims.json.
 
@@ -933,6 +940,8 @@ def run_stage_b(
         targets_path: Path to targets.json from new Stage A (playbook-driven).
         playbook_dir: Directory containing playbook YAML files.
         force_run: Skip the corpus readiness check.
+        corpus_description: Domain description injected into the shared
+                             verification rules block (see pipeline.prompts).
     """
     # Compute web_cache_dir once, before the two code paths diverge.
     if not web_cache_dir:
@@ -1036,7 +1045,9 @@ def run_stage_b(
                     elif debug_count > 0 and i < debug_count:
                         t_debug_dir = base_debug_dir
                     pb = _get_playbook(t["playbook"], playbook_dir)
-                    prompt = _build_verification_prompt(pb, summary, t["target_text"], t.get("context", ""))
+                    prompt = _build_verification_prompt(
+                        pb, summary, t["target_text"], t.get("context", ""),
+                        corpus_description=corpus_description)
                     finding = await _verify_target_async(
                         t, prompt, pb.allowed_tools, corpus_root,
                         timeout, max_turns, t_debug_dir, summary,

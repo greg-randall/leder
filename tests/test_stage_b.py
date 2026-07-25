@@ -225,6 +225,35 @@ def test_build_verification_prompt_injects_variables():
     assert "Sum" in r and "Claim" in r and "Ctx" in r
 
 
+def test_build_verification_prompt_prepends_shared_rules_block():
+    from pipeline.playbook import Playbook
+    from pipeline.stage_b_verify import _build_verification_prompt
+
+    pb = Playbook(name="t", extraction_prompt="E",
+                  verification_prompt="S:{{article_summary}} C:{{target_text}} X:{{context}}")
+    r = _build_verification_prompt(pb, "Sum", "Claim", "Ctx", corpus_description="A test corpus.")
+    assert "SANDBOX" in r  # from the shared rules block
+    assert "A test corpus." in r
+    assert "Sum" in r and "Claim" in r and "Ctx" in r
+    # Shared rules must come before the check-specific prompt
+    assert r.index("SANDBOX") < r.index("S:Sum")
+
+
+def test_fact_check_yaml_verification_prompt_has_two_level_verdict():
+    from pipeline.playbook import load_playbook
+    pb = load_playbook("pipelines/fact_check.yaml")
+    prompt = pb.verification_prompt
+    assert "attribution accuracy" in prompt.lower()
+    assert "independent corroboration" in prompt.lower() or "corroboration" in prompt.lower()
+    assert "attribution_status" in prompt
+
+
+def test_fact_check_yaml_quality_gate_has_near_duplicate_rule():
+    from pipeline.playbook import load_playbook
+    pb = load_playbook("pipelines/fact_check.yaml")
+    assert "semantic equivalent" in pb.quality_gate_prompt.lower()
+
+
 def test_get_playbook_caches(tmp_path):
     pd = tmp_path / "p"
     pd.mkdir()

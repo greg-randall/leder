@@ -22,14 +22,12 @@ extraction:
       ---
 
       Identify any factual claims that were MISSED from the extraction above.
-      Only return claims NOT already listed.
+      A claim is NOT missed if any existing claim makes the same assertion in
+      different words -- report only assertions with no semantic equivalent
+      in the list.
 
 verification:
   prompt: |
-    You are a fact-checker verifying claims against a corpus of documents.
-    For each claim, your job is to FIND the best available source and EVALUATE
-    whether it supports, contradicts, or is silent on the claim.
-
     ## Article Summary
     {{article_summary}}
 
@@ -39,55 +37,49 @@ verification:
     ## Article Context
     {{context}}
 
-    ## SEARCH STRATEGY -- Tiered (Local First)
-
-    The corpus is organized with summaries at multiple levels. Search top-down.
-
-    **CRITICAL RULE: Summaries are a map, not the territory.** Summaries tell you
-    WHERE to look, but you MUST verify the claim against the ORIGINAL converted .md
-    file. Never cite a summary as your source -- the summary is a search index, not
-    evidence.
-
-    1. CORPUS_OVERVIEW.md: cross-cutting patterns, per-operator notes, data highlights.
-    2. _FOLDER_SUMMARY.md inside each folder: one overview per group.
-    3. _summary.md files within subfolders: one summary per source document.
-    4. ORIGINALS (MANDATORY): the .md file WITHOUT "_summary" in its name.
-       Read it with the Read tool. This is where the actual evidence lives.
-    5. WEB: when the claim involves information not in the local corpus.
-       Use WebSearch to find relevant pages, then fetch the best match
-       with the fetch_page tool:
-         python3 pipeline/tools/fetch_page.py <url> <target_id>
-       This saves the FULL raw page verbatim and prints it for you to
-       read. Do NOT summarize — future agents need the original.
-
     ## EVALUATION
 
-    For each claim, determine:
+    Distinguish two questions:
+    1. Attribution accuracy -- does the source confirm this was said/done as
+       the article describes?
+    2. Independent corroboration -- does any primary/official source confirm
+       the underlying fact itself?
 
-    - severity: pick ONE
-      "PASS"       -- source explicitly confirms the claim
-      "CRITICAL"   -- source directly contradicts the claim
-      "WARNING"    -- no source found, or source is ambiguous/silent
+    Pick ONE severity:
 
-    - human_review: set TRUE if severity is WARNING or CRITICAL, source is
-      derived/secondary, or confidence is below 80%
+    - PASS -- one of:
+        (a) the article attributes a statement ("X testified that Y") and the
+            source confirms X said Y. Note in agent_summary whether Y itself
+            is corroborated, contested, or unverified by anything else in the
+            corpus.
+        (b) the source explicitly confirms the claim as a bare fact, and
+            nothing contradicts it.
+    - WARNING -- one of:
+        (a) the article asserts a contested or testimony-only fact as bare
+            fact (no attribution) -- recommended_action should suggest adding
+            attribution, e.g. "add attribution: 'per testimony from X at the
+            July 2026 meeting...'".
+        (b) no source was found, or the source is ambiguous/silent.
+    - CRITICAL -- the source contradicts the claim: a specific number, date,
+      or count is wrong, or a speaker's self-correction the article missed.
 
-    - agent_summary: 1-2 sentences explaining what the source says and why.
-      Be specific -- mention the actual source content.
+    Set `metadata.attribution_status` to exactly one of:
+    "attributed_and_confirmed", "stated_as_fact_testimony_only",
+    "corroborated", "contradicted", "not_found".
 
-    - source_excerpt: verbatim text from the source that confirms or contradicts.
-      This is the evidence the human reviewer checks.
+    - agent_summary: 1-2 sentences. Be specific -- mention the actual source
+      content. BAD: "A document was found that supports this." GOOD: "The
+      July 14, 2026 meeting transcript quotes Jerry Carill saying the
+      facility injects '20,000 barrels a day,' matching the claim."
 
-    - source_path: relative path within the corpus, or null
-    - source_url: URL of the web source, or null
-    - confidence: 0.9+ = source states this directly. 0.5-0.7 = implied.
-      Below 0.5 = best read without solid grounding.
-    - recommended_action: what the editor should do, or null
+    - source_excerpt: verbatim text from the source that confirms or
+      contradicts the claim. This is the evidence the human reviewer checks.
 
-    ## PACE YOURSELF
-
-    Aim to complete verification in 30 turns or fewer. If you search repeatedly
-    without narrowing, stop and work with what you have.
+    - recommended_action: a concrete edit instruction for the article's
+      editor -- e.g. "change 'per week' to 'per day'", "add attribution: 'per
+      testimony from...'", "soften to 'nearly every meeting'". Null when
+      severity is PASS and no edit is needed. Never restate the finding;
+      state the fix.
 
   allowed_tools: [Read, Bash, WebSearch, WebFetch]
 

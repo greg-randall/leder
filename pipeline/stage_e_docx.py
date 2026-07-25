@@ -103,7 +103,7 @@ def convert(article_sourced_md: str, findings_json: str, output_docx: str) -> No
                         text += f"\n---\nRecommendation: {rec}"
                 else:
                     text = "[No verification data]"
-                    print(f"  stage-e: no claims.json entry for footnote [^{part}] "
+                    print(f"  stage-e: no findings.json entry for footnote [^{part}] "
                           f"(looked up as {fn_id}) — comment will show placeholder text",
                           file=sys.stderr)
 

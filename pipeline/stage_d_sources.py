@@ -145,7 +145,7 @@ def render_source_document(
     not_found: list[str] = []
 
     for excerpt, finding_id, severity in excerpts:
-        pos = _locate_excerpt(excerpt, text)
+        pos = _locate_excerpt(excerpt, text, finding_id)
         if pos is None:
             not_found.append(finding_id)
             continue
@@ -166,61 +166,133 @@ def render_source_document(
     return html, not_found
 
 
-def _locate_excerpt(excerpt: str, text: str) -> tuple[int, int] | None:
-    """Find an excerpt in a source document using fast word-overlap scoring.
+def _locate_excerpt(excerpt: str, text: str, finding_id: str = "?") -> tuple[int, int] | None:
+    """Find an excerpt in a source document.
 
-    Exact substring match (case-insensitive) is tried first.  For approximate
-    matches (common in transcripts where the LLM's extracted quote isn't
-    verbatim), the text is split at sentence boundaries and scored by word
-    overlap to locate the best-matching region in O(n) time."""
+    1. Exact substring match (fast path).
+    2. For short docs: Levenshtein via find_quote_position.
+    3. For long docs: word-overlap to find the best region, then narrow the
+       highlight to the substring where matching words cluster.
+    """
     import re as _re
+
+    def _clean(s: str) -> str:
+        return _re.sub(r'[^a-zA-Z0-9 ]', '', s.lower())
 
     # Fast path: exact substring (case-insensitive).
     idx = text.lower().find(excerpt.lower())
     if idx >= 0:
         return (idx, idx + len(excerpt))
 
-    # For short documents, use the full Levenshtein search directly.
+    # For short documents, use Levenshtein directly.
     if len(text) < 4000:
-        return find_quote_position(excerpt, text)
+        pos = find_quote_position(excerpt, text)
+        if pos is None:
+            print(f"  ⚠ [{finding_id}] excerpt not found in short doc "
+                  f"({len(text)} chars)")
+        return pos
 
-    # For long documents: split at sentence boundaries, score each sentence
-    # by word overlap with the excerpt, then pick the best-scoring contiguous
-    # region as the match span.
-    needle_words = _re.sub(r'[^a-zA-Z0-9 ]', '', excerpt.lower()).split()
+    needle_words = _clean(excerpt).split()
     if not needle_words:
         return None
     needle_set = set(needle_words)
 
-    # Split into sentences (on . ! ? followed by space/newline).  Track
-    # character offsets via finditer so duplicate sentence text doesn't
-    # confuse position tracking.
-    sentences: list[str] = []
+    # Split into chunks.  Try sentence boundaries first, but cap at
+    # 800 chars for transcripts with no punctuation.
+    raw_chunks: list[str] = []
+    raw_offsets: list[tuple[int, int]] = []
+    for m in _re.finditer(r'[^.!?\n]+[.!?\n]?', text):
+        raw_chunks.append(m.group())
+        raw_offsets.append((m.start(), m.end()))
+
+    MAX_CHUNK = 800
+    chunks: list[str] = []
     offsets: list[tuple[int, int]] = []
-    for m in _re.finditer(r'[^.!?\n]+[.!?]?', text):
-        s = m.group()
-        sentences.append(s)
-        offsets.append((m.start(), m.end()))
+    for chunk, (cs, ce) in zip(raw_chunks, raw_offsets):
+        if len(chunk) <= MAX_CHUNK:
+            chunks.append(chunk)
+            offsets.append((cs, ce))
+        else:
+            sub_start = cs
+            words = chunk.split()
+            i = 0
+            while i < len(words):
+                sub = ' '.join(words[i:i + 60])
+                sub_end = sub_start + len(sub)
+                chunks.append(sub)
+                offsets.append((sub_start, sub_end))
+                sub_start = sub_end + 1
+                i += 60
 
-    # Score each sentence by word overlap with the needle.
-    best_start = 0
-    best_end = 0
-    best_score = 0
-    window = max(3, len(sentences) // 20)  # search ~5% of sentences at a time
+    # Score each chunk by word overlap.
+    chunk_scores = []
+    for s in chunks:
+        s_words = set(_clean(s).split())
+        chunk_scores.append(len(needle_set & s_words))
+    best_idx = max(range(len(chunk_scores)), key=lambda i: chunk_scores[i])
+    best_score = chunk_scores[best_idx]
 
-    for i in range(len(sentences) - window + 1):
-        combined = ' '.join(sentences[i:i + window])
-        combined_words = set(_re.sub(r'[^a-zA-Z0-9 ]', '', combined.lower()).split())
-        score = len(needle_set & combined_words)
-        if score > best_score:
-            best_score = score
-            best_start = offsets[i][0]
-            best_end = offsets[i + window - 1][1]
+    # If single-chunk score is too low, try a 3-chunk sliding window.
+    if best_score < len(needle_words) * 0.15 and len(chunks) > 3:
+        for i in range(len(chunks) - 2):
+            window_words: set[str] = set()
+            for j in range(i, i + 3):
+                window_words |= set(_clean(chunks[j]).split())
+            score = len(needle_set & window_words)
+            if score > best_score:
+                best_score = score
+                best_idx = i
 
     if best_score < max(2, len(needle_words) * 0.2):
+        print(f"  ⚠ [{finding_id}] no chunk with meaningful word overlap "
+              f"(best={best_score}/{len(needle_words)} words)")
         return None
 
-    return (best_start, best_end)
+    # Use a 3-chunk window around the best chunk for the highlight region.
+    win_start = max(0, best_idx - 1)
+    win_end = min(len(chunks), best_idx + 2)
+    region_start = offsets[win_start][0]
+    region_end = offsets[win_end - 1][1]
+    region_text = text[region_start:region_end]
+
+    # Narrow within the region: find first and last matching word position,
+    # add a small margin for readability.
+    clean_rwords = _clean(region_text).split()
+    first_idx = len(clean_rwords)
+    last_idx = -1
+    for nw in needle_words:
+        try:
+            wi = clean_rwords.index(nw)
+            first_idx = min(first_idx, wi)
+            for j in range(len(clean_rwords) - 1, -1, -1):
+                if clean_rwords[j] == nw:
+                    last_idx = max(last_idx, j)
+                    break
+        except ValueError:
+            pass
+
+    if last_idx < 0:
+        return (region_start, region_end)
+
+    first_idx = max(0, first_idx - 3)
+    last_idx = min(len(clean_rwords) - 1, last_idx + 3)
+
+    word_positions = [(m.start(), m.end()) for m in _re.finditer(r'\S+', region_text)]
+    if first_idx < len(word_positions) and last_idx < len(word_positions):
+        char_start = word_positions[first_idx][0]
+        char_end = word_positions[last_idx][1]
+    else:
+        char_start = 0
+        char_end = len(region_text)
+
+    result_start = region_start + char_start
+    result_end = region_start + char_end
+    result_len = result_end - result_start
+    if result_len > 500:
+        print(f"  ⚠ [{finding_id}] highlight is {result_len} chars "
+              f"(word-overlap={best_score}/{len(needle_words)})")
+
+    return (result_start, result_end)
 
 
 def _run_fetch_page(url: str, target_id: str, cache_dir: str) -> None:

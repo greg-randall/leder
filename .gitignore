@@ -47,3 +47,5 @@ web_cache/
 # Other stuff to ignore
 *.bak
 *.orig
+.superpowers/
+article-html/

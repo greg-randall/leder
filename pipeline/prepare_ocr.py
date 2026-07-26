@@ -73,10 +73,17 @@ def _is_duplicate_image(filepath: Path) -> tuple[bool, Path | None]:
     except Exception:
         return False, None
 
+
 # Image formats we handle. tesseract (via Leptonica) reads png/jpg/tiff
 # directly; gif/bmp/webp are normalized to PNG with Pillow first.
-IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp", ".webp")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp", ".webp", ".heic", ".heif")
 _TESSERACT_NATIVE = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
 
 
 def _tesseract(img_path: Path) -> str:
@@ -89,14 +96,25 @@ def _tesseract(img_path: Path) -> str:
         return ""
 
 
-def _normalize_for_tesseract(img_path: Path, tmpdir: Path) -> Path:
-    """Return a path tesseract can read; convert odd formats to PNG via Pillow."""
+def _normalize_for_tesseract(img_path: Path, tmpdir: Path) -> Path | None:
+    """Return a path tesseract can read; convert odd formats to PNG via Pillow.
+
+    Returns None if the image can't be decoded at all (corrupt file, unsupported
+    variant) -- the only image-decoding call in this file that previously had no
+    try/except, unlike every other risky call here (_is_tiny_image,
+    _is_duplicate_image, _tesseract, _pdf_to_page_pngs all catch Exception).
+    """
     if img_path.suffix.lower() in _TESSERACT_NATIVE:
         return img_path
     from PIL import Image
     out = tmpdir / (img_path.stem + ".png")
-    Image.open(img_path).convert("RGB").save(out, format="PNG")
-    return out
+    try:
+        Image.open(img_path).convert("RGB").save(out, format="PNG")
+        return out
+    except Exception as ex:
+        print(f"  prepare-1 image decode failed: {img_path.name}: "
+              f"{type(ex).__name__}: {ex}", file=sys.stderr)
+        return None
 
 
 def _pdf_to_page_pngs(pdf_path: Path, outdir: Path, dpi: int = 300) -> list[Path]:
@@ -162,10 +180,11 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
 
     with tempfile.TemporaryDirectory() as td:
         norm = _normalize_for_tesseract(inpath, Path(td))
-        text = _tesseract(norm)
+        text = _tesseract(norm) if norm is not None else ""
+        decode_failed = norm is None
 
     if vision_cfg.get("enabled") and needs_vision(text, vision_cfg.get("min_words", 20),
-                                                    language=vision_cfg.get("language", "en")):
+                                                  language=vision_cfg.get("language", "en")):
         try:
             vtext = vision_extract(inpath, model=model)
             content = PROVENANCE_BANNER.format(model=model) + vtext
@@ -174,12 +193,15 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
         except Exception as ex:
             print(f"  prepare-1 vision failed: {inpath.name}: "
                   f"{type(ex).__name__}: {ex}", file=sys.stderr)
-            # fall through to whatever OCR produced
+            # fall through to whatever OCR produced (nothing, if decode_failed)
+
+    if not text:
+        reason = "could not be decoded" if decode_failed else "no OCR text extracted"
+        return False, 0, f"image-{reason.replace(' ', '-')}", None
 
     content = f"## OCR: {inpath.name}\n\n{text}\n"
     md_path.write_text(content, encoding="utf-8")
-    note = "image transcribed via OCR" if text else "image produced no OCR text"
-    return True, len(content), "tesseract", note
+    return True, len(content), "tesseract", "image transcribed via OCR"
 
 
 def ocr_pdf(inpath: Path, md_path: Path, vision_cfg: dict):
@@ -205,7 +227,7 @@ def ocr_pdf(inpath: Path, md_path: Path, vision_cfg: dict):
         for i, png in enumerate(pages, 1):
             text = _tesseract(png)
             if vision_enabled and needs_vision(text, min_words,
-                                                  language=vision_cfg.get("language", "en")):
+                                               language=vision_cfg.get("language", "en")):
                 if vision_used < max_vision_pages:
                     try:
                         vtext = vision_extract(png, model=model)

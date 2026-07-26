@@ -6,6 +6,7 @@ tqdm
 markitdown[all]>=0.1.0
 openai>=1.0.0
 Pillow>=10.0.0
+pillow-heif
 tiktoken>=0.7.0
 faster-whisper>=1.0.0
 trafilatura

@@ -318,3 +318,65 @@ def test_duplicate_image_stub_disambiguates_same_basename_in_different_dirs(tmp_
     # The note/markdown must include enough of the path to disambiguate.
     assert "email1_attachments" in note
     assert "email1_attachments" in md
+
+
+# ── HEIC extension, zero-text failure, corrupt decode ─────────────
+
+
+def test_heic_extension_recognized():
+    from pipeline.prepare_ocr import IMAGE_EXTS
+    assert ".heic" in IMAGE_EXTS
+    assert ".heif" in IMAGE_EXTS
+
+
+def test_zero_ocr_text_with_no_vision_recovery_is_a_failure(tmp_path, monkeypatch):
+    from pipeline.prepare_ocr import ocr_image
+
+    monkeypatch.setattr("pipeline.prepare_ocr._tesseract", lambda p: "")
+    monkeypatch.setattr("pipeline.prepare_ocr._is_tiny_image", lambda *a: False)
+    monkeypatch.setattr("pipeline.prepare_ocr._is_duplicate_image", lambda *a: (False, None))
+
+    import base64
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    img = tmp_path / "blank.png"
+    img.write_bytes(png_bytes)
+
+    vision_cfg = {"enabled": False, "min_words": 20, "min_image_dim": 0, "dedup_images": False}
+    ok, size, method, note = ocr_image(img, tmp_path / "blank.png.md", vision_cfg)
+
+    assert ok is False
+
+
+def test_vision_recovered_image_still_succeeds(tmp_path, monkeypatch):
+    from pipeline.prepare_ocr import ocr_image
+
+    monkeypatch.setattr("pipeline.prepare_ocr._tesseract", lambda p: "")
+    monkeypatch.setattr("pipeline.prepare_ocr._is_tiny_image", lambda *a: False)
+    monkeypatch.setattr("pipeline.prepare_ocr._is_duplicate_image", lambda *a: (False, None))
+    monkeypatch.setattr("pipeline.prepare_ocr.needs_vision", lambda *a, **k: True)
+    monkeypatch.setattr("pipeline.prepare_ocr.vision_extract", lambda *a, **k: "Recovered via vision.")
+
+    import base64
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    img = tmp_path / "thin.png"
+    img.write_bytes(png_bytes)
+
+    vision_cfg = {"enabled": True, "min_words": 20, "min_image_dim": 0, "dedup_images": False,
+                  "model": "gpt-4o-mini"}
+    ok, size, method, note = ocr_image(img, tmp_path / "thin.png.md", vision_cfg)
+
+    assert ok is True and method == "vision"
+
+
+def test_corrupt_image_decode_failure_does_not_raise(tmp_path):
+    from pipeline.prepare_ocr import _normalize_for_tesseract
+
+    corrupt = tmp_path / "corrupt.gif"
+    corrupt.write_bytes(b"not a real gif file")
+
+    result = _normalize_for_tesseract(corrupt, tmp_path)
+    assert result is None

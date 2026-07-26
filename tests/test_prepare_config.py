@@ -106,6 +106,27 @@ def test_file_timeout_and_min_content_bytes_default_when_unset(tmp_path):
     assert cfg.prepare.convert.min_content_bytes == 100
 
 
+def test_audio_vocabulary_defaults_to_empty_list(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.audio.vocabulary == []
+
+
+def test_audio_vocabulary_parsed_from_yaml(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+        prepare:
+          audio:
+            vocabulary: ['Jerry Carill', 'McBride Operating']
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.audio.vocabulary == ["Jerry Carill", "McBride Operating"]
+
+
 def test_file_timeout_and_min_content_bytes_parsed_from_yaml(tmp_path):
     cfg_path = _write(tmp_path, """
         article: {path: "article.md"}

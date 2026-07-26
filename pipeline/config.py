@@ -93,6 +93,7 @@ class AudioConfig:
     enabled: bool = True
     model: str = "medium"
     device: str = "auto"   # auto = GPU if available else CPU (with warning)
+    vocabulary: list[str] = field(default_factory=list)
 
 
 @dataclass

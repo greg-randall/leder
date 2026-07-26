@@ -155,8 +155,18 @@ def get_whisper_model(model_size: str = "medium", device: str = "auto"):
     return _WhisperModel(model_size, device="cpu", compute_type="int8"), "cpu"
 
 
-def convert_audio(inpath: Path, md_path: Path, whisper_model):
+def convert_audio(inpath: Path, md_path: Path, whisper_model,
+                  vocabulary: list[str] | None = None):
     """Transcribe an audio file locally via faster-whisper.
+
+    Args:
+        inpath: Path to the audio file.
+        md_path: Path to write the markdown transcript to.
+        whisper_model: A faster-whisper WhisperModel instance, or None.
+        vocabulary: Optional list of names/orgs/places to bias whisper's
+            decoding toward correct spellings. Joined with ", " and passed
+            as initial_prompt to transcribe(). An empty list or None means
+            no bias prompt is sent.
 
     Returns (ok, size, method, note). ok is False if whisper is unavailable
     (whisper_model is None) or transcription raises.
@@ -164,9 +174,12 @@ def convert_audio(inpath: Path, md_path: Path, whisper_model):
     inpath = Path(inpath)
     if whisper_model is None:
         return False, 0, "whisper-unavailable", None
+    transcribe_kwargs = {}
+    if vocabulary:
+        transcribe_kwargs["initial_prompt"] = ", ".join(vocabulary)
     try:
         with _model_lock:
-            segments, info = whisper_model.transcribe(str(inpath))
+            segments, info = whisper_model.transcribe(str(inpath), **transcribe_kwargs)
             transcript = " ".join(seg.text.strip() for seg in segments).strip()
     except Exception as ex:
         print(f"  prepare-1 whisper failed: {inpath.name}: {type(ex).__name__}: {ex}",

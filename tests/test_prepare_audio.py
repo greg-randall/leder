@@ -71,6 +71,43 @@ def test_convert_audio_reflows_long_transcript(tmp_path):
     assert body.split() == long_text.split()
 
 
+def test_vocabulary_reaches_transcribe_as_initial_prompt(tmp_path):
+    captured = {}
+
+    class FakeSegment:
+        text = "hello"
+
+    class FakeModel:
+        def transcribe(self, path, **kwargs):
+            captured.update(kwargs)
+            return [FakeSegment()], _Info()
+
+    src = tmp_path / "a.wav"
+    src.write_bytes(b"fake audio")
+    pa.convert_audio(src, tmp_path / "a.md", FakeModel(),
+                     vocabulary=["Jerry Carill", "McBride"])
+
+    assert captured.get("initial_prompt") == "Jerry Carill, McBride"
+
+
+def test_empty_vocabulary_passes_no_initial_prompt(tmp_path):
+    captured = {}
+
+    class FakeSegment:
+        text = "hello"
+
+    class FakeModel:
+        def transcribe(self, path, **kwargs):
+            captured.update(kwargs)
+            return [FakeSegment()], _Info()
+
+    src = tmp_path / "a.wav"
+    src.write_bytes(b"fake audio")
+    pa.convert_audio(src, tmp_path / "a.md", FakeModel())
+
+    assert "initial_prompt" not in captured
+
+
 def test_get_whisper_model_cpu_fallback_warns(monkeypatch, capsys):
     monkeypatch.setattr(pa, "_HAS_WHISPER", True)
     monkeypatch.setattr(pa, "_cuda_available", lambda: False)

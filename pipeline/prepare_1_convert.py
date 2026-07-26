@@ -648,7 +648,8 @@ def _finish(relpath: Path, result, md_path: Path | None = None, reflow: bool = T
 
 def process_file(filepath: Path, src_root: Path, out_root: Path,
                  vision_cfg: dict, whisper_model, force: bool, md_client=None,
-                 text_native_exts: set[str] | None = None):
+                 text_native_exts: set[str] | None = None,
+                 audio_cfg: dict | None = None):
     """Convert one file. Returns (relpath, status, detail, note_or_None)."""
     if text_native_exts is None:
         text_native_exts = {e.lower() for e in DEFAULT_TEXT_NATIVE_EXTS}
@@ -679,7 +680,8 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
 
     # Audio -> local whisper (MarkItDown uses network Google Web Speech).
     if ext in AUDIO_EXTS:
-        ok, size, method, note = convert_audio(filepath, md_path, whisper_model)
+        vocabulary = audio_cfg.get("vocabulary") if audio_cfg else None
+        ok, size, method, note = convert_audio(filepath, md_path, whisper_model, vocabulary=vocabulary)
         if ok:
             _reflow_md_file_in_place(md_path)
             return str(relpath), "ok", method, note
@@ -863,7 +865,7 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
         for f in files:
             fut = pool.submit(process_file, f, src_root, out_root,
                               vision_cfg, whisper_model, force, md_client,
-                              text_native_exts)
+                              text_native_exts, audio_cfg)
             futmap[fut] = f
         # Each future is judged against its OWN start time, not against "has
         # anything in the remaining set completed recently" -- re-arming
@@ -946,7 +948,7 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
             for f in new_files:
                 fut = pool2.submit(process_file, f, src_root, out_root,
                                    vision_cfg, whisper_model, force, md_client,
-                                   text_native_exts)
+                                   text_native_exts, audio_cfg)
                 futmap2[fut] = f
             start_times2 = {fut: time.monotonic() for fut in futmap2}
             pending2 = set(futmap2.keys())

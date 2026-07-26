@@ -98,6 +98,7 @@ prepare:
     enabled: true
     model: "medium"      # faster-whisper model size (tiny/base/small/medium/large-v3)
     device: "auto"       # auto = GPU if available else CPU (with a warning)
+    vocabulary: []       # names/orgs/places to bias whisper's decoding, e.g. ["Jerry Carill", "McBride Operating"]
   convert:
     file_timeout: 300       # seconds before a hung per-file conversion is abandoned
     min_content_bytes: 100  # minimum extracted chars to accept a conversion as meaningful

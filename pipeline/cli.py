@@ -329,6 +329,7 @@ def main() -> None:
                 "enabled": prep.audio.enabled,
                 "model": getattr(args, "whisper_model", None) or prep.audio.model,
                 "device": getattr(args, "whisper_device", None) or prep.audio.device,
+                "vocabulary": prep.audio.vocabulary,
             }
             report = run_prepare_1(
                 source_root=source_root, corpus_root=corpus_root,

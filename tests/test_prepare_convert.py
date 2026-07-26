@@ -232,7 +232,7 @@ def test_audio_routes_to_whisper(tmp_path, monkeypatch):
     src_root.mkdir()
     (src_root / "a.mp3").write_bytes(b"ID3")
 
-    def fake_convert_audio(inp, outp, wm):
+    def fake_convert_audio(inp, outp, wm, **kwargs):
         outp.write_text("audio transcript text")
         return True, 5, "whisper", "audio transcribed via whisper"
 
@@ -248,7 +248,7 @@ def test_audio_fail_when_whisper_unavailable(tmp_path, monkeypatch):
     src_root.mkdir()
     (src_root / "a.mp3").write_bytes(b"ID3")
     monkeypatch.setattr(p1, "convert_audio",
-                        lambda inp, outp, wm: (False, 0, "whisper-unavailable", None))
+                        lambda inp, outp, wm, **kwargs: (False, 0, "whisper-unavailable", None))
     rel, status, detail, note = p1.process_file(
         src_root / "a.mp3", src_root, corpus, VISION_CFG, None, True)
     assert status == "fail" and "audio not transcribed" in detail

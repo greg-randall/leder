@@ -98,6 +98,51 @@ _STYLE = """<style>
     .sc-toggle:hover { background: #ddd !important; color: #222 !important; }
     .unplaced { background: #2d1a1a; }
   }
+
+  /* Source document modal */
+  .src-modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 1000; align-items: center; justify-content: center;
+  }
+  .src-modal-overlay.open { display: flex; }
+  .src-modal {
+    background: #fff; width: 94vw; height: 92vh; border-radius: 8px;
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+  }
+  .src-modal-close {
+    position: absolute; top: 1.2rem; right: 1.5rem; font-size: 1.8rem;
+    background: none; border: none; cursor: pointer; color: #555; z-index: 1;
+  }
+  .src-modal-doc {
+    flex: 2; overflow-y: auto; padding: 2rem 3rem; font-family: Georgia, serif;
+  }
+  .src-modal-doc mark {
+    background: #fff3b0; padding: 0.05em 0.15em; scroll-margin-top: 2rem;
+  }
+  .src-modal-doc mark.active { background: #ffd23f; box-shadow: 0 0 0 2px #b08800; }
+  .src-modal-summary-banner {
+    background: #fff3cd; border: 1px solid #ffe69c; color: #664d03;
+    padding: 0.6em 1em; border-radius: 4px; margin-bottom: 1rem; font-weight: 600;
+  }
+  .src-modal-info {
+    flex: 1; overflow-y: auto; border-top: 2px solid #dee2e6; padding: 1rem 3rem;
+    background: #f8f9fa; font-family: -apple-system, sans-serif; font-size: 0.9em;
+  }
+  .src-modal-info .simi-col { display: inline-block; vertical-align: top; width: 32%; margin-right: 1%; }
+  .src-modal-info h4 { font-size: 0.85em; text-transform: uppercase; color: #888; margin-bottom: 0.3em; }
+  .src-explore-btn {
+    display: block; margin-top: 0.5em; font-size: 0.8em; padding: 0.3em 0.7em;
+    background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;
+  }
+  .src-explore-btn:hover { background: #e0e0e0; }
+
+  @media (prefers-color-scheme: dark) {
+    .src-modal { background: #1a1a1a; color: #ddd; }
+    .src-modal-info { background: #212529; border-top-color: #444; }
+    .src-modal-doc mark { background: #4a3f0a; color: #fff3b0; }
+    .src-modal-doc mark.active { background: #6b5b0f; box-shadow: 0 0 0 2px #facc15; }
+  }
 </style>"""
 
 _SCRIPT = """<script>
@@ -177,6 +222,18 @@ function smoothScrollTo(el, target, duration) {
       this.innerHTML = expanded ? '▼' : '▶';
       this.setAttribute('aria-label', expanded ? 'Collapse card' : 'Expand card');
     });
+
+    var sourceHtml = src.getAttribute('data-source-html');
+    if (sourceHtml) {
+      var exploreBtn = document.createElement('button');
+      exploreBtn.className = 'src-explore-btn';
+      exploreBtn.textContent = 'Explore the source material';
+      exploreBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        openSourceModal(fnId, sourceHtml, src);
+      });
+      card.appendChild(exploreBtn);
+    }
   });
 
   // Wire up footnote refs: click in article -> expand matching card
@@ -202,7 +259,69 @@ function smoothScrollTo(el, target, duration) {
     });
   });
 })();
-</script>"""
+</script>
+<script>
+function openSourceModal(fnId, sourceHtml, sourceDiv) {
+  var overlay = document.getElementById('srcModalOverlay');
+  var docPane = document.getElementById('srcModalDoc');
+  var infoPane = document.getElementById('srcModalInfo');
+
+  var isSummary = sourceDiv.getAttribute('data-is-summary') === 'true';
+  var claim = sourceDiv.querySelector('.claim');
+  var rationale = sourceDiv.querySelector('.rationale');
+  var recommendation = sourceDiv.querySelector('.recommendation');
+  var context = sourceDiv.querySelector('.context');
+  var srcLink = sourceDiv.querySelector('.src-link');
+  var sev = sourceDiv.getAttribute('data-severity');
+
+  var originalHref = sourceHtml.replace(/\\.html$/, '');
+  infoPane.innerHTML =
+    '<div class="simi-col"><h4>Finding</h4>' +
+    '<strong>' + sev + '</strong><br>' + (rationale ? rationale.innerHTML : '') +
+    (recommendation && recommendation.textContent.trim() ? '<br><em>' + recommendation.innerHTML + '</em>' : '') +
+    '</div>' +
+    '<div class="simi-col"><h4>Article context</h4>' +
+    (context ? context.innerHTML : '(no surrounding context captured)') +
+    '</div>' +
+    '<div class="simi-col"><h4>Original document</h4>' +
+    '<a href="' + originalHref + '" download>Download original file</a><br>' +
+    '<span style="color:#888;font-size:0.85em">' + (srcLink ? srcLink.innerHTML : '') + '</span>' +
+    '</div>';
+
+  docPane.innerHTML = '<p>Loading…</p>';
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  window.location.hash = 'exc-' + fnId;
+
+  fetch(sourceHtml).then(function(r) { return r.text(); }).then(function(text) {
+    var banner = isSummary
+      ? '<div class="src-modal-summary-banner">⚠ This is a summary, not the primary source.</div>'
+      : '';
+    docPane.innerHTML = banner + text;
+    var target = docPane.querySelector('#exc-' + fnId);
+    if (target) {
+      target.classList.add('active');
+      target.scrollIntoView({block: 'center'});
+    }
+  }).catch(function() {
+    docPane.innerHTML = '<p>Could not load the source document.</p>';
+  });
+}
+
+function closeSourceModal() {
+  document.getElementById('srcModalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+  if (window.location.hash.indexOf('exc-') === 1) {
+    history.replaceState(null, '', window.location.pathname);
+  }
+}
+
+document.getElementById('srcModalClose').addEventListener('click', closeSourceModal);
+document.getElementById('srcModalOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeSourceModal();
+});
+</script>
+"""
 
 
 def _escape(text: str) -> str:
@@ -274,6 +393,13 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
 </div>
 </div>
 <div class="sources" style="display:none">{sources_html}</div>
+<div class="src-modal-overlay" id="srcModalOverlay">
+  <div class="src-modal">
+    <button class="src-modal-close" id="srcModalClose" aria-label="Close">×</button>
+    <div class="src-modal-doc" id="srcModalDoc"></div>
+    <div class="src-modal-info" id="srcModalInfo"></div>
+  </div>
+</div>
 {_SCRIPT}
 </body>
 </html>"""

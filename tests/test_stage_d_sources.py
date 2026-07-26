@@ -280,3 +280,86 @@ def test_write_missing_snapshots_report_creates_and_removes(tmp_path):
 
     write_missing_snapshots_report(str(out), [])
     assert not report.exists()
+
+
+def test_build_sources_folder_corpus_document(tmp_path, monkeypatch):
+    from pipeline.stage_d_sources import build_sources_folder
+
+    corpus = tmp_path / "corpus"
+    (corpus / "McBride Facility").mkdir(parents=True)
+    (corpus / "McBride Facility" / "meeting.srt.md").write_text(
+        "The facility injects 20000 barrels a day into the well.")
+    (corpus / "McBride Facility" / "meeting.srt").write_text("1\n00:00:01 --> 00:00:02\nraw srt\n")
+
+    findings = [_finding("fn1", source_path="McBride Facility/meeting.srt.md",
+                         source_excerpt="injects 20000 barrels a day")]
+    output = tmp_path / "output"
+    output.mkdir()
+
+    mapping = build_sources_folder(findings, str(corpus), str(tmp_path / "web_cache"), str(output))
+
+    assert "McBride Facility/meeting.srt.md" in mapping
+    html_path = output / mapping["McBride Facility/meeting.srt.md"]
+    assert html_path.exists()
+    assert '<mark id="exc-fn1"' in html_path.read_text()
+    # Original copied alongside for download
+    assert (output / "sources" / "McBride Facility" / "meeting.srt").exists()
+
+
+def test_build_sources_folder_web_document(tmp_path, monkeypatch):
+    from pipeline.stage_d_sources import build_sources_folder
+
+    wc = tmp_path / "web_cache" / "fn2"
+    wc.mkdir(parents=True)
+    (wc / "page.md").write_text("The report confirms the finding directly.")
+
+    findings = [_finding("fn2", source_url="https://example.com/x",
+                         source_excerpt="confirms the finding directly")]
+    output = tmp_path / "output"
+    output.mkdir()
+
+    mapping = build_sources_folder(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"), str(output))
+
+    assert "fn2" in mapping
+    assert mapping["fn2"] == "sources/web/fn2.html"
+    assert (output / "sources" / "web" / "fn2.html").exists()
+    assert (output / "sources" / "web" / "fn2.md").exists()
+
+
+def test_build_sources_folder_missing_original_still_renders_html(tmp_path):
+    from pipeline.stage_d_sources import build_sources_folder
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("Some content here.")
+    # Deliberately no "a" original file (only the .md exists)
+
+    findings = [_finding("fn1", source_path="a.md", source_excerpt="content here")]
+    output = tmp_path / "output"
+    output.mkdir()
+
+    mapping = build_sources_folder(findings, str(corpus), str(tmp_path / "web_cache"), str(output))
+
+    assert "a.md" in mapping
+    assert (output / mapping["a.md"]).exists()
+
+
+def test_build_sources_folder_runs_backstop_before_resolving(tmp_path, monkeypatch):
+    from pipeline.stage_d_sources import build_sources_folder
+
+    def fake_fetch(url, target_id, cache_dir):
+        d = __import__("pathlib").Path(cache_dir) / target_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "page.md").write_text("Backstop-fetched content, matches the claim.")
+
+    monkeypatch.setattr("pipeline.stage_d_sources._run_fetch_page", fake_fetch)
+
+    findings = [_finding("fn9", source_url="https://example.com/never-cached",
+                         source_excerpt="matches the claim")]
+    output = tmp_path / "output"
+    output.mkdir()
+
+    mapping = build_sources_folder(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"), str(output))
+
+    assert "fn9" in mapping
+    assert not (output / "MISSING_SNAPSHOTS.md").exists()

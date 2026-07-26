@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html as html_mod
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path as _Path
@@ -213,3 +214,47 @@ def write_missing_snapshots_report(output_dir: str, still_missing: list[tuple[st
         lines.append(f"| {finding_id} | {url} |\n")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("".join(lines))
+
+
+def build_sources_folder(
+    findings: list[dict], corpus_root: str, web_cache_dir: str, output_dir: str,
+) -> dict[str, str]:
+    """Build {output_dir}/sources/ and return {resolve_key: output_relative_html_path}."""
+    still_missing = backstop_fetch_missing(findings, corpus_root, web_cache_dir)
+    write_missing_snapshots_report(output_dir, still_missing)
+
+    resolved = resolve_cited_sources(findings, corpus_root, web_cache_dir)
+    mapping: dict[str, str] = {}
+
+    for key, entry in resolved.items():
+        with open(entry["local_path"], encoding="utf-8") as fh:
+            text = fh.read()
+        html, _not_found = render_source_document(text, entry["excerpts"])
+
+        if entry["kind"] == "corpus":
+            rel_html = os.path.join("sources", os.path.splitext(key)[0] + ".html")
+            out_html_path = os.path.join(output_dir, rel_html)
+            os.makedirs(os.path.dirname(out_html_path), exist_ok=True)
+            with open(out_html_path, "w", encoding="utf-8") as fh:
+                fh.write(html)
+
+            # Original pre-conversion file: strip the ".md" sidecar suffix.
+            if key.endswith(".md"):
+                original_source = os.path.join(corpus_root, key[:-len(".md")])
+                if os.path.exists(original_source):
+                    original_dest = os.path.join(
+                        output_dir, "sources", os.path.dirname(key), os.path.basename(key)[:-len(".md")],
+                    )
+                    os.makedirs(os.path.dirname(original_dest), exist_ok=True)
+                    shutil.copy2(original_source, original_dest)
+        else:  # web
+            rel_html = f"sources/web/{key}.html"
+            out_html_path = os.path.join(output_dir, rel_html)
+            os.makedirs(os.path.dirname(out_html_path), exist_ok=True)
+            with open(out_html_path, "w", encoding="utf-8") as fh:
+                fh.write(html)
+            shutil.copy2(entry["local_path"], os.path.join(output_dir, "sources", "web", f"{key}.md"))
+
+        mapping[key] = rel_html
+
+    return mapping

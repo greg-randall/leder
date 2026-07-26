@@ -584,6 +584,71 @@ def test_eml_extracts_nested_email(tmp_path):
     assert "Forwarded" in nested_files[0].name
 
 
+def test_eml_html_only_body_converts_not_raw_tags(tmp_path):
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart()
+    msg["From"] = "sender@test.com"
+    msg["Subject"] = "HTML only"
+    msg["Date"] = "Mon, 1 Jan 2024 00:00:00 +0000"
+    msg.attach(MIMEText("<html><body><p>Hello from HTML.</p></body></html>", "html"))
+
+    src = tmp_path / "html.eml"
+    src.write_bytes(msg.as_bytes())
+
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "html.eml.md")
+    md = (tmp_path / "html.eml.md").read_text()
+    assert ok
+    assert "Hello from HTML." in md
+    assert "<html>" not in md and "<body>" not in md and "<p>" not in md
+
+
+def test_eml_prefers_plain_over_html_when_both_present(tmp_path):
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = "sender@test.com"
+    msg["Subject"] = "Both parts"
+    msg["Date"] = "Mon, 1 Jan 2024 00:00:00 +0000"
+    msg.attach(MIMEText("Plain text body.", "plain"))
+    msg.attach(MIMEText("<html><body><p>HTML text body.</p></body></html>", "html"))
+
+    src = tmp_path / "both.eml"
+    src.write_bytes(msg.as_bytes())
+
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "both.eml.md")
+    md = (tmp_path / "both.eml.md").read_text()
+    assert ok
+    assert "Plain text body." in md
+    assert "HTML text body." not in md
+    assert "<html>" not in md
+
+
+def test_eml_html_to_markdown_fallback_when_markitdown_unavailable(tmp_path, monkeypatch):
+    """When MarkItDown is unavailable, the HTML body is still used (not lost),
+    even though it won't be converted to clean markdown."""
+    monkeypatch.setattr(p1, "_get_markitdown", lambda: None)
+
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart()
+    msg["From"] = "sender@test.com"
+    msg["Subject"] = "HTML only, no markitdown"
+    msg["Date"] = "Mon, 1 Jan 2024 00:00:00 +0000"
+    msg.attach(MIMEText("<html><body><p>Fallback content.</p></body></html>", "html"))
+
+    src = tmp_path / "html2.eml"
+    src.write_bytes(msg.as_bytes())
+
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "html2.eml.md")
+    md = (tmp_path / "html2.eml.md").read_text()
+    assert ok
+    assert "Fallback content." in md
+
+
 # ── Subtitles (.srt / .vtt) via pycaption ─────────────────────────
 
 def test_convert_subtitle_vtt(tmp_path):

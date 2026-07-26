@@ -145,6 +145,28 @@ def _sanitize_filename(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_").replace("\x00", "")
 
 
+def _html_to_markdown(html: str) -> str:
+    """Convert an HTML email body to markdown via MarkItDown, writing to a
+    temp .html file first (MarkItDown converts by file path). Falls back to
+    the raw HTML if MarkItDown is unavailable or fails -- better to ship
+    something than crash the whole email conversion over one part."""
+    md_client = _get_markitdown()
+    if md_client is None:
+        return html
+    try:
+        with tempfile.NamedTemporaryFile(
+                suffix=".html", mode="w", encoding="utf-8", delete=False) as tf:
+            tf.write(html)
+            tmp_html_path = tf.name
+        try:
+            result = md_client.convert(tmp_html_path)
+            return result.text_content.strip()
+        finally:
+            Path(tmp_html_path).unlink(missing_ok=True)
+    except Exception:
+        return html
+
+
 def _extract_attachments(msg, attach_dir: Path) -> tuple[int, list[str]]:
     """Walk a parsed email message and extract attachments/nested emails.
 
@@ -153,7 +175,9 @@ def _extract_attachments(msg, attach_dir: Path) -> tuple[int, list[str]]:
     """
     attach_dir.mkdir(parents=True, exist_ok=True)
     idx = 0
-    body_parts = []
+    body_parts: list[str] = []
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
 
     for part in msg.walk():
         content_type = part.get_content_type()
@@ -193,16 +217,36 @@ def _extract_attachments(msg, attach_dir: Path) -> tuple[int, list[str]]:
             except Exception:
                 pass
 
-        elif content_type in ("text/plain", "text/html"):
+        elif content_type == "text/plain":
             try:
                 payload = part.get_payload(decode=True)
                 if payload:
                     charset = part.get_content_charset() or "utf-8"
-                    body_parts.append(payload.decode(charset, errors="replace"))
+                    plain_parts.append(payload.decode(charset, errors="replace"))
             except Exception:
                 pass
 
-    body = "\n\n".join(body_parts).strip() if body_parts else "(no text body)"
+        elif content_type == "text/html":
+            try:
+                payload = part.get_payload(decode=True)
+                if payload:
+                    charset = part.get_content_charset() or "utf-8"
+                    html_parts.append(payload.decode(charset, errors="replace"))
+            except Exception:
+                pass
+
+    # Prefer text/plain when present -- avoids concatenating near-duplicate
+    # plain + HTML renderings of the same message. HTML-only bodies are
+    # converted to markdown rather than dumped as raw tag soup.
+    if plain_parts:
+        text_body = "\n\n".join(plain_parts).strip()
+    elif html_parts:
+        text_body = _html_to_markdown("\n\n".join(html_parts)).strip()
+    else:
+        text_body = ""
+
+    all_parts = body_parts + ([text_body] if text_body else [])
+    body = "\n\n".join(all_parts).strip() if all_parts else "(no text body)"
     notes = f"{idx} attachment(s) extracted" if idx else ""
     return idx, body, notes
 

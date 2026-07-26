@@ -24,10 +24,11 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import pycaption
 import pymupdf
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 
 from pipeline.prepare_ocr import IMAGE_EXTS, ocr_image, ocr_pdf, _reset_dedup
 from pipeline.prepare_audio import AUDIO_EXTS, convert_audio, get_whisper_model
@@ -42,12 +43,13 @@ MIN_CONTENT_BYTES = 100  # default; run_prepare_1 may override module state via 
 # lost, just re-extracted -- an accepted tradeoff, not a bug.
 _MIN_CHARS_PER_PAGE = 200
 FILE_TIMEOUT = 300  # default; per-file timeout in seconds -- see above
+_POLL_INTERVAL = 1.0  # seconds between per-future timeout checks; small relative to FILE_TIMEOUT
 
 
 def _configure(file_timeout: int, min_content_bytes: int) -> None:
     """Override MIN_CONTENT_BYTES/FILE_TIMEOUT module state for this run.
 
-    These are read by is_meaningful() and the as_completed() timeout loops
+    These are read by is_meaningful() and the wait()-based timeout loops
     below via module-level globals rather than threaded through every call
     site, matching how they were already used before they became
     configurable (prepare.convert.file_timeout / .min_content_bytes).
@@ -847,7 +849,15 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
         # the stuck one. Instead we shut down with wait=False below so this
         # function can return/continue even while a worker is still stuck;
         # the abandoned thread keeps running in the background until it
-        # naturally finishes or the process exits.
+        # naturally finishes or the process exits. Note this only protects
+        # run_prepare_1 ITSELF: concurrent.futures.thread registers a
+        # process-wide atexit hook (_python_exit) that joins EVERY thread any
+        # ThreadPoolExecutor ever created, regardless of this pool's own
+        # shutdown(wait=...) call -- so a standalone `prepare-1` CLI run may
+        # still hang at interpreter exit after run_prepare_1 has already
+        # returned and correctly reported the timeout. That's an accepted,
+        # inherent Python limitation (threads can't be forcibly killed); a
+        # real fix would mean switching to ProcessPoolExecutor, out of scope.
         pool = ThreadPoolExecutor(max_workers=workers)
         futmap = {}
         for f in files:
@@ -855,47 +865,58 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                               vision_cfg, whisper_model, force, md_client,
                               text_native_exts)
             futmap[fut] = f
+        # Each future is judged against its OWN start time, not against "has
+        # anything in the remaining set completed recently" -- re-arming
+        # as_completed(pending, timeout=FILE_TIMEOUT) every iteration resets
+        # its deadline on ANY completion in `pending`, so with multiple
+        # workers one truly-hung file could hide behind other workers'
+        # steady progress for the whole rest of the run. Polling wait() on a
+        # short interval and comparing elapsed time per-future avoids that.
+        start_times = {fut: time.monotonic() for fut in futmap}
         pending = set(futmap.keys())
-        while pending:
-            try:
-                future = next(as_completed(pending, timeout=FILE_TIMEOUT))
-            except (TimeoutError, StopIteration):
-                break
-            pending.discard(future)
-            f = futmap[future]
-            rel = str(Path(f).relative_to(src_root))
-            try:
-                _, status, method, note = future.result()
-            except Exception as ex:
-                status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
-            with results_lock:
-                if status == "ok":
-                    ok_ct += 1
-                    if method == "image-tiny":
-                        tiny_ct += 1
-                    elif method == "image-dup":
-                        dup_ct += 1
-                    if note is not None:
-                        needs_review.append((rel, note))
-                elif status == "skip":
-                    skip_ct += 1
-                else:
-                    failures.append((rel, method))
-                pbar.update(1)
+        try:
+            while pending:
+                done, pending = wait(pending, timeout=_POLL_INTERVAL,
+                                     return_when=FIRST_COMPLETED)
+                for future in done:
+                    f = futmap[future]
+                    rel = str(Path(f).relative_to(src_root))
+                    try:
+                        _, status, method, note = future.result()
+                    except Exception as ex:
+                        status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
+                    with results_lock:
+                        if status == "ok":
+                            ok_ct += 1
+                            if method == "image-tiny":
+                                tiny_ct += 1
+                            elif method == "image-dup":
+                                dup_ct += 1
+                            if note is not None:
+                                needs_review.append((rel, note))
+                        elif status == "skip":
+                            skip_ct += 1
+                        else:
+                            failures.append((rel, method))
+                        pbar.update(1)
 
-        if pending:
-            stalled = [str(Path(futmap[fut]).relative_to(src_root)) for fut in pending]
-            print(f"\n  ⚠  {len(stalled)} file(s) still running after "
-                  f"{FILE_TIMEOUT}s and were not waited on further: "
-                  f"{', '.join(stalled[:5])}"
-                  f"{' ...' if len(stalled) > 5 else ''}", file=sys.stderr)
-            with results_lock:
-                for fut in pending:
-                    rel = str(Path(futmap[fut]).relative_to(src_root))
-                    failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
-                    pbar.update(1)
-
-        pool.shutdown(wait=False)
+                now = time.monotonic()
+                timed_out_now = {fut for fut in pending
+                                 if now - start_times[fut] > FILE_TIMEOUT}
+                if timed_out_now:
+                    stalled = [str(Path(futmap[fut]).relative_to(src_root)) for fut in timed_out_now]
+                    print(f"\n  ⚠  {len(stalled)} file(s) still running after "
+                          f"{FILE_TIMEOUT}s and were not waited on further: "
+                          f"{', '.join(stalled[:5])}"
+                          f"{' ...' if len(stalled) > 5 else ''}", file=sys.stderr)
+                    with results_lock:
+                        for fut in timed_out_now:
+                            pending.discard(fut)
+                            rel = str(Path(futmap[fut]).relative_to(src_root))
+                            failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
+                            pbar.update(1)
+        finally:
+            pool.shutdown(wait=False)
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)
@@ -912,9 +933,14 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
         print(f"\nprepare-1 pass 2: {len(new_files)} extracted file(s) from "
               f"email attachments", file=sys.stderr)
         with tqdm(total=len(new_files), desc="prepare-1 pass 2", unit="file") as pbar2:
-            # See the pass-1 comment above: not a context manager, for the
-            # same reason (a genuinely-hung converter thread can't be killed,
-            # so shutdown(wait=True) at __exit__ would block forever).
+            # See the pass-1 comments above: not a context manager (a
+            # genuinely-hung converter thread can't be killed, so
+            # shutdown(wait=True) at __exit__ would block forever); the
+            # standalone CLI process may still be delayed at interpreter
+            # exit by Python's atexit thread-join regardless of
+            # shutdown(wait=False) here -- accepted, inherent limitation.
+            # Per-future start times avoid the global-stall-detector trap of
+            # re-arming as_completed() on the whole remaining set each pass.
             pool2 = ThreadPoolExecutor(max_workers=workers)
             futmap2 = {}
             for f in new_files:
@@ -922,47 +948,51 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                                    vision_cfg, whisper_model, force, md_client,
                                    text_native_exts)
                 futmap2[fut] = f
+            start_times2 = {fut: time.monotonic() for fut in futmap2}
             pending2 = set(futmap2.keys())
-            while pending2:
-                try:
-                    future = next(as_completed(pending2, timeout=FILE_TIMEOUT))
-                except (TimeoutError, StopIteration):
-                    break
-                pending2.discard(future)
-                f2 = futmap2[future]
-                rel = str(Path(f2).relative_to(src_root))
-                try:
-                    _, status, method, note = future.result()
-                except Exception as ex:
-                    status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
-                with results_lock:
-                    if status == "ok":
-                        ok_ct += 1
-                        if method == "image-tiny":
-                            tiny_ct += 1
-                        elif method == "image-dup":
-                            dup_ct += 1
-                        if note is not None:
-                            needs_review.append((rel, note))
-                    elif status == "skip":
-                        skip_ct += 1
-                    else:
-                        failures.append((rel, method))
-                    pbar2.update(1)
+            try:
+                while pending2:
+                    done2, pending2 = wait(pending2, timeout=_POLL_INTERVAL,
+                                           return_when=FIRST_COMPLETED)
+                    for future in done2:
+                        f2 = futmap2[future]
+                        rel = str(Path(f2).relative_to(src_root))
+                        try:
+                            _, status, method, note = future.result()
+                        except Exception as ex:
+                            status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
+                        with results_lock:
+                            if status == "ok":
+                                ok_ct += 1
+                                if method == "image-tiny":
+                                    tiny_ct += 1
+                                elif method == "image-dup":
+                                    dup_ct += 1
+                                if note is not None:
+                                    needs_review.append((rel, note))
+                            elif status == "skip":
+                                skip_ct += 1
+                            else:
+                                failures.append((rel, method))
+                            pbar2.update(1)
 
-            if pending2:
-                stalled2 = [str(Path(futmap2[fut]).relative_to(src_root)) for fut in pending2]
-                print(f"\n  ⚠  {len(stalled2)} file(s) still running after "
-                      f"{FILE_TIMEOUT}s and were not waited on further: "
-                      f"{', '.join(stalled2[:5])}"
-                      f"{' ...' if len(stalled2) > 5 else ''}", file=sys.stderr)
-                with results_lock:
-                    for fut in pending2:
-                        rel = str(Path(futmap2[fut]).relative_to(src_root))
-                        failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
-                        pbar2.update(1)
-
-            pool2.shutdown(wait=False)
+                    now = time.monotonic()
+                    timed_out_now2 = {fut for fut in pending2
+                                      if now - start_times2[fut] > FILE_TIMEOUT}
+                    if timed_out_now2:
+                        stalled2 = [str(Path(futmap2[fut]).relative_to(src_root)) for fut in timed_out_now2]
+                        print(f"\n  ⚠  {len(stalled2)} file(s) still running after "
+                              f"{FILE_TIMEOUT}s and were not waited on further: "
+                              f"{', '.join(stalled2[:5])}"
+                              f"{' ...' if len(stalled2) > 5 else ''}", file=sys.stderr)
+                        with results_lock:
+                            for fut in timed_out_now2:
+                                pending2.discard(fut)
+                                rel = str(Path(futmap2[fut]).relative_to(src_root))
+                                failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
+                                pbar2.update(1)
+            finally:
+                pool2.shutdown(wait=False)
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)

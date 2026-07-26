@@ -852,6 +852,87 @@ def test_genuinely_hung_converter_does_not_block_run_prepare_1(tmp_path, monkeyp
         release.set()
 
 
+def test_hung_file_detected_via_own_elapsed_time_not_global_stall(tmp_path, monkeypatch):
+    """With multiple workers, a hung file must be judged against its OWN
+    elapsed time, not against "has anything in the pool completed recently".
+
+    The old `next(as_completed(pending, timeout=FILE_TIMEOUT))` pattern reset
+    its deadline on EVERY completion anywhere in `pending` -- so with several
+    other files completing steadily (gaps smaller than FILE_TIMEOUT), the
+    hung file's own window never got a clean, uninterrupted chance to expire
+    until it was the very LAST thing left in `pending` (i.e. after every
+    other file finished), and only THEN did a fresh FILE_TIMEOUT-length
+    window apply. That means detection was delayed by (time for all other
+    files to finish) + one more FILE_TIMEOUT -- far later than FILE_TIMEOUT
+    alone implies. The single-worker/single-file tests above cannot
+    distinguish this from a correct implementation (with only one file in
+    flight, there's nothing else to reset the old window against), which is
+    exactly how this gap slipped through initially.
+
+    Six "fast" files complete at staggered times spanning past FILE_TIMEOUT,
+    each gap smaller than FILE_TIMEOUT (so the old buggy window would keep
+    getting reset throughout). A per-future implementation detects the hang
+    around its own FILE_TIMEOUT mark, independent of the other files, and
+    the whole call returns close to when the slowest FAST file finishes --
+    not that PLUS an extra FILE_TIMEOUT tacked on at the end.
+    """
+    import threading as _threading
+    import time as _time
+
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "hang.xyz").write_text("content")
+
+    # All delays stay comfortably under file_timeout (2.5s) individually --
+    # none of these files should themselves be flagged as timed out -- but
+    # each gap between them is small, so the OLD buggy per-call window would
+    # keep getting reset throughout, right up to the last one at t=2.3s.
+    fast_delays = [0.3, 0.7, 1.1, 1.5, 1.9, 2.3]
+    file_timeout = 2.5
+    delay_by_name = {}
+    for i, delay in enumerate(fast_delays):
+        name = f"fast{i}.xyz"
+        (src_root / name).write_text("content")
+        delay_by_name[name] = delay
+
+    release = _threading.Event()
+
+    def staggered_process_file(filepath, *args, **kwargs):
+        name = Path(filepath).name
+        if name == "hang.xyz":
+            release.wait()  # never set during the test proper -- a genuine, unbounded hang
+            return name, "ok", "should-not-happen", None
+        _time.sleep(delay_by_name[name])
+        return name, "ok", "text-passthrough", None
+
+    monkeypatch.setattr(p1, "process_file", staggered_process_file)
+
+    start = _time.monotonic()
+    try:
+        report = p1.run_prepare_1(str(src_root), str(corpus), 7,
+                                  VISION_CFG, AUDIO_CFG, True,
+                                  convert_cfg={"file_timeout": file_timeout})
+        elapsed = _time.monotonic() - start
+
+        # Buggy (global-stall-detector) implementation: the window keeps
+        # resetting through the last fast completion (t=2.3s) before it can
+        # even start expiring uninterrupted, then a further file_timeout
+        # (2.5s) on top -- ~4.8s. Correct (per-future) implementation:
+        # detects the hang once ITS OWN elapsed time crosses file_timeout,
+        # bounded above by one extra poll interval past the last fast file
+        # (nothing left to trigger an earlier check) -- at most ~3.3s, well
+        # under half the buggy total.
+        assert elapsed < 4.2, (
+            f"run_prepare_1 took {elapsed:.1f}s -- looks like the old "
+            "global-stall-detector bug (timeout reset by unrelated completions)")
+        assert report["failure_count"] == 1
+        assert any(rel == "hang.xyz" and "timed out" in reason
+                   for rel, reason in report["failures"])
+    finally:
+        release.set()
+
+
 def test_subtitle_routes_directly_bypassing_markitdown(tmp_path, monkeypatch):
     """.srt/.vtt go straight to convert_subtitle, not through MarkItDown."""
     src_root = tmp_path / "src"

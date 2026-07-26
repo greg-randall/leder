@@ -68,11 +68,11 @@ One stage at a time:
 python3 -m pipeline.cli stage-a     # extract claims from article
 python3 -m pipeline.cli stage-b     # verify claims against corpus + web
 python3 -m pipeline.cli stage-c     # rebuild article with footnotes
-python3 -m pipeline.cli stage-d     # HTML with color-coded source cards
+python3 -m pipeline.cli stage-d     # HTML article + source viewer (output folder)
 python3 -m pipeline.cli stage-e     # .docx with Word comments
 ```
 
-Stage A prints `Wrote 219 targets → targets.json`. Stage B prints `Done: 132 findings → findings.json`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an HTML page with a sidebar of severity-colored source cards. Stage E writes a .docx you can upload to Google Docs with all comments intact.
+Stage A prints `Wrote 219 targets → targets.json`. Stage B prints `Done: 132 findings → findings.json`. Stage C prints `Mechanical match: 254/254 placed, 0 unmatched`. Stage D writes an output folder containing `article.html` (a Bootstrap HTML page with a sidebar of severity-colored source cards) and a `sources/` folder with highlighted original documents linked via a full-page modal viewer. Stage E writes a .docx you can upload to Google Docs with all comments intact.
 
 ### Config
 
@@ -162,7 +162,13 @@ Each finding's anchor_text is matched to the article via sliding-window Levensht
 
 ### Stage D: HTML
 
-The sourced markdown becomes a self-contained HTML page using Bootstrap 5. Footnote pills are green (PASS), yellow (WARNING), or red (CRITICAL). A sticky sidebar on the right shows every source card. The header is the check_type. The body is rendered through the playbook's display template. Click a pill in the article and the matching sidebar card opens and scrolls into view. Output: `article-sourced.html`.
+The sourced markdown becomes an output folder with `article.html` and a `sources/` subfolder. `article.html` is a Bootstrap 5 page: footnote pills are green (PASS), yellow (WARNING), or red (CRITICAL). A sticky sidebar on the right shows every source card. The header is the check_type. The body is rendered through the playbook's display template. Click a pill in the article and the matching sidebar card opens and scrolls into view.
+
+The `sources/` folder contains one highlighted HTML page per cited source document, with the finding's excerpt marked in yellow. Each sidebar card has an "Explore the source material" button that opens a full-page modal showing the source document (top ~2/3) with the excerpt auto-scrolled into view, plus the finding's details, article context, and a download link for the original file (bottom ~1/3). Press `n`/`p` to navigate between findings, Escape to close, and `article.html#exc-{finding_id}` links deep-link straight to a specific finding's source view.
+
+Because the source viewer loads documents via `fetch()`, the output folder must be served over HTTP (e.g. `python3 -m http.server` from inside it, or any static host) — opening `article.html` directly via a `file://` URL will show the article but the "Explore the source material" modal won't be able to load source documents due to browser security restrictions on local file access.
+
+Output: `article-html/article.html` + `article-html/sources/`.
 
 ### Stage E: Word document
 
@@ -212,7 +218,7 @@ article.md
 │   Markdown → Bootstrap 5 HTML                      │
 │   Color-coded pills (green/yellow/red)             │
 │   Sticky sidebar with playbook display templates   │
-│   Output: article-sourced.html                     │
+│   Output: article-html/article.html + sources/     │
 └────────────────────────────────────────────────────┘
     │
     ▼
@@ -231,7 +237,7 @@ leder/
 ├── .env.example                    # API key template
 ├── article.md                      # Input article
 ├── article-sourced.md              # Stage C output
-├── article-sourced.html            # Stage D output
+├── article-html/                   # Stage D output (folder)
 ├── article-sourced.docx            # Stage E output
 ├── targets.json                    # Stage 1 output
 ├── findings.json                   # Stage 2 output

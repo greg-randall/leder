@@ -144,7 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
         "stage-d", parents=[common], help="Convert sourced article to HTML"
     )
     d_parser.add_argument("--input", default="article-sourced.md")
-    d_parser.add_argument("--output", default="article-sourced.html")
+    d_parser.add_argument("--findings", default="findings.json", help="Input findings file")
+    d_parser.add_argument("--output", default="article-html", help="Output directory")
     d_parser.add_argument(
         "--config", default="config.yaml", help="Path to config file"
     )
@@ -466,16 +467,19 @@ def main() -> None:
     if args.command in ("all", "stage-d"):
         input_path = getattr(args, "input", "article-sourced.md")
         input_path = config.resolve_path(input_path) if config else input_path
-        output_path = getattr(args, "output", "article-sourced.html")
-        output_path = config.resolve_path(output_path) if config else output_path
+        findings_path = config.resolve_path(getattr(args, "findings", "findings.json"))
+        output_dir = getattr(args, "output", "article-html")
+        output_dir = config.resolve_path(output_dir) if config else output_dir
+        corpus_root = config.resolve_path(config.corpus.root)
+        web_cache_dir = os.path.join(corpus_root, "web_cache")
 
         from pipeline.stage_d_html import run_stage_d
         if not os.path.exists(input_path):
             print(f"ERROR: {input_path} not found. Run stage-c first to generate it.",
                   file=sys.stderr)
             sys.exit(1)
-        run_stage_d(input_path, output_path)
-        print(f"Stage D complete: {output_path}")
+        run_stage_d(input_path, findings_path, output_dir, corpus_root, web_cache_dir)
+        print(f"Stage D complete: {output_dir}/article.html")
 
     # --- Stage E: .docx with comments ---
     if args.command in ("all", "stage-e"):

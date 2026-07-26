@@ -70,6 +70,14 @@ def test_parser_stage_b_defaults():
     assert args.output == "findings.json"
 
 
+def test_parser_stage_d_defaults():
+    parser = build_parser()
+    args = parser.parse_args(["stage-d"])
+    assert args.input == "article-sourced.md"
+    assert args.findings == "findings.json"
+    assert args.output == "article-html"
+
+
 def test_parser_stage_c_defaults():
     parser = build_parser()
     args = parser.parse_args(["stage-c"])

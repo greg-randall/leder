@@ -418,6 +418,10 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
     body = parts[0] if parts else md
     footnotes_raw = parts[1] if len(parts) > 1 else ""
 
+    # Enrich each finding with surrounding article context (a few sentences
+    # around the target_text, with the target itself underlined).
+    _enrich_contexts(findings_list, body)
+
     unplaced_match = re.match(r'(# ⚠️ UNPLACED CLAIMS.*?)\n---\n\n', body, re.DOTALL)
     unplaced_html = ""
     if unplaced_match:
@@ -542,6 +546,61 @@ def _is_generated_summary_source(path: str) -> bool:
     return any(m in path for m in _SUMMARY_SOURCE_MARKERS)
 
 
+def _enrich_contexts(findings: list[dict], article_body: str) -> None:
+    """For each finding with a target_text, find its surrounding paragraph
+    in the article body and store a few sentences of context (with the
+    target sentence underlined) in finding['_context_html']."""
+    import re as _re
+
+    # Strip markdown headers and unplaced block from body for searching.
+    clean_body = _re.sub(r'^# .*\n', '', article_body, flags=_re.MULTILINE)
+    clean_body = _re.sub(r'# ⚠️ UNPLACED CLAIMS.*?\n---\n\n', '', clean_body, flags=_re.DOTALL)
+    paragraphs = [p.strip() for p in clean_body.split('\n\n') if p.strip()]
+
+    for f in findings:
+        target = f.get('target_text', '').strip()
+        if not target:
+            continue
+        # Find the paragraph containing the target text.
+        # Strip footnote markers (e.g. [^1], [^12]) from both sides
+        # since the sourced article has them inline.
+
+        def _strip_fns(s: str) -> str:
+            return _re.sub(r'\[\^?\d+\]', '', s)
+
+        para = ''
+        for p in paragraphs:
+            p_flat = _re.sub(r'\s+', ' ', _strip_fns(p))
+            t_flat = _re.sub(r'\s+', ' ', _strip_fns(target))
+            if t_flat in p_flat:
+                para = p
+                break
+        if not para:
+            continue
+
+        # Split the paragraph into sentences (~sentence boundaries).
+        sentences = _re.split(r'(?<=[.!?])\s+', para)
+        # Find which sentence(s) contain the target.
+        target_idx = None
+        t_clean = _re.sub(r'\s+', ' ', _strip_fns(target))
+        for i, s in enumerate(sentences):
+            s_flat = _re.sub(r'\s+', ' ', _strip_fns(s))
+            if t_clean[:30] in s_flat:
+                target_idx = i
+                break
+
+        # Take a window around the target: 2 sentences before, target, 2 after.
+        if target_idx is not None:
+            start = max(0, target_idx - 2)
+            end = min(len(sentences), target_idx + 3)
+            window = sentences[start:end]
+            # Underline the target sentence.
+            window[target_idx - start] = f'<u>{window[target_idx - start]}</u>'
+            f['_context_html'] = ' '.join(window)
+        else:
+            f['_context_html'] = para
+
+
 def _render_sources(raw: str, source_map: dict[str, str] | None = None,
                     findings_list: list[dict] | None = None) -> str:
     """Build HTML source cards (hidden) for the JS sidebar to read from."""
@@ -600,7 +659,8 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
         if finding_id:
             extra_attrs += f' data-finding-id="{_escape(finding_id)}"'
         finding = findings_list[idx] if finding_id else {}
-        context = finding.get("context") or finding.get("target_text", "")
+        raw_context = finding.get("_context_html") or finding.get("context") or finding.get("target_text", "")
+        context_html = raw_context  # _context_html is pre-escaped, plain text is safe as-is
         rec = _escape(c["recommendation"])
         html_parts.append(
             f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}"{extra_attrs}>'
@@ -609,7 +669,7 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
             f'<span class="rationale">{_escape(c["rationale"])}</span>'
             f'<span class="matched">{_escape(c["matched"])}</span>'
             + (f'<span class="recommendation">{rec}</span>' if rec else '')
-            + f'<span class="context">{_escape(context)}</span>'
+            + f'<span class="context">{context_html if finding.get("_context_html") else _escape(context_html)}</span>'
             f'<span class="src-link">{_escape(c["source"])}</span>'
             f'<span class="flags">{_escape(c["flags"])}</span>'
             f'</div>'

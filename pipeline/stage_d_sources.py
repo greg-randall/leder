@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import html as html_mod
 import os
+import subprocess
+import sys
+from pathlib import Path as _Path
 
 from pipeline.stage_c_rebuild import find_quote_position
 
 _FAILED_FETCH_PREFIX = "(failed to fetch "
+_FETCH_PAGE_SCRIPT = str(_Path(__file__).resolve().parent / "tools" / "fetch_page.py")
 
 
 def mark_excerpts(text: str, spans: list[tuple[int, int, str, str]]) -> str:
@@ -139,3 +143,73 @@ def render_source_document(
     html = "\n".join(blocks)
 
     return html, not_found
+
+
+def _run_fetch_page(url: str, target_id: str, cache_dir: str) -> None:
+    """Invoke fetch_page.py as a subprocess, same pattern already used for
+    agent-initiated fetches elsewhere in this codebase (absolute script path
+    + sys.executable, since a relative path doesn't resolve from an
+    arbitrary cwd)."""
+    subprocess.run(
+        [sys.executable, _FETCH_PAGE_SCRIPT, url, target_id, "--cache-dir", cache_dir],
+        capture_output=True, timeout=120,
+    )
+
+
+def backstop_fetch_missing(
+    findings: list[dict], corpus_root: str, web_cache_dir: str,
+) -> list[tuple[str, str]]:
+    """Attempt one fetch for every web-sourced finding that resolve_cited_sources
+    couldn't resolve. Returns [(finding_id, source_url), ...] for whatever is
+    still unresolved after the attempt.
+    """
+    still_missing: list[tuple[str, str]] = []
+    seen_finding_ids: set[str] = set()
+
+    for f in findings:
+        finding_id = f["finding_id"]
+        source_url = f.get("source_url")
+        source_path = f.get("source_path")
+        if source_path or not source_url or finding_id in seen_finding_ids:
+            continue
+        seen_finding_ids.add(finding_id)
+
+        page_path = os.path.join(web_cache_dir, finding_id, "page.md")
+        if os.path.exists(page_path):
+            with open(page_path, encoding="utf-8") as fh:
+                if not fh.read().startswith(_FAILED_FETCH_PREFIX):
+                    continue  # already resolved, nothing to backstop
+
+        _run_fetch_page(source_url, finding_id, web_cache_dir)
+
+        if not os.path.exists(page_path):
+            still_missing.append((finding_id, source_url))
+            continue
+        with open(page_path, encoding="utf-8") as fh:
+            if fh.read().startswith(_FAILED_FETCH_PREFIX):
+                still_missing.append((finding_id, source_url))
+
+    return still_missing
+
+
+def write_missing_snapshots_report(output_dir: str, still_missing: list[tuple[str, str]]) -> None:
+    """Write MISSING_SNAPSHOTS.md listing web citations that have no archived
+    snapshot even after the backstop-fetch attempt. Removes any stale report
+    when there's nothing to report, matching prepare_1_convert.py's
+    _write_unconverted convention."""
+    path = os.path.join(output_dir, "MISSING_SNAPSHOTS.md")
+    if not still_missing:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    lines = [
+        "# MISSING SNAPSHOTS\n",
+        f"**{len(still_missing)} web citation(s) have no archived snapshot** "
+        "and could not be fetched. These findings show as text-only in the "
+        "article -- no \"Explore the source material\" button.\n\n",
+        "| Finding | URL |\n| --- | --- |\n",
+    ]
+    for finding_id, url in sorted(still_missing):
+        lines.append(f"| {finding_id} | {url} |\n")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(lines))

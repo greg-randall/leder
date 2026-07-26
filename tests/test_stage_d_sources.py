@@ -211,3 +211,72 @@ def test_render_source_document_multiple_excerpts_some_found_some_not():
 
     assert not_found == ["fn2"]
     assert '<mark id="exc-fn1"' in html
+
+
+def test_backstop_fetch_missing_skips_already_resolved(tmp_path, monkeypatch):
+    from pipeline.stage_d_sources import backstop_fetch_missing
+
+    wc = tmp_path / "web_cache" / "fn1"
+    wc.mkdir(parents=True)
+    (wc / "page.md").write_text("Already have this one.")
+
+    calls = []
+    monkeypatch.setattr(
+        "pipeline.stage_d_sources._run_fetch_page",
+        lambda url, target_id, cache_dir: calls.append((url, target_id)),
+    )
+
+    findings = [_finding("fn1", source_url="https://example.com/a")]
+    still_missing = backstop_fetch_missing(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert calls == []  # never attempted -- already resolved
+    assert still_missing == []
+
+
+def test_backstop_fetch_missing_attempts_fetch_and_succeeds(tmp_path, monkeypatch):
+    from pipeline.stage_d_sources import backstop_fetch_missing
+
+    def fake_fetch(url, target_id, cache_dir):
+        d = __import__("pathlib").Path(cache_dir) / target_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "page.md").write_text("Freshly fetched content.")
+
+    monkeypatch.setattr("pipeline.stage_d_sources._run_fetch_page", fake_fetch)
+
+    findings = [_finding("fn2", source_url="https://example.com/b")]
+    still_missing = backstop_fetch_missing(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert still_missing == []
+    assert (tmp_path / "web_cache" / "fn2" / "page.md").read_text() == "Freshly fetched content."
+
+
+def test_backstop_fetch_missing_reports_still_failing(tmp_path, monkeypatch):
+    from pipeline.stage_d_sources import backstop_fetch_missing
+
+    def fake_fetch(url, target_id, cache_dir):
+        d = __import__("pathlib").Path(cache_dir) / target_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "page.md").write_text(f"(failed to fetch {url})\n")
+
+    monkeypatch.setattr("pipeline.stage_d_sources._run_fetch_page", fake_fetch)
+
+    findings = [_finding("fn3", source_url="https://example.com/dead")]
+    still_missing = backstop_fetch_missing(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert still_missing == [("fn3", "https://example.com/dead")]
+
+
+def test_write_missing_snapshots_report_creates_and_removes(tmp_path):
+    from pipeline.stage_d_sources import write_missing_snapshots_report
+
+    out = tmp_path / "output"
+    out.mkdir()
+    report = out / "MISSING_SNAPSHOTS.md"
+
+    write_missing_snapshots_report(str(out), [("fn3", "https://example.com/dead")])
+    assert report.exists()
+    assert "fn3" in report.read_text()
+    assert "https://example.com/dead" in report.read_text()
+
+    write_missing_snapshots_report(str(out), [])
+    assert not report.exists()

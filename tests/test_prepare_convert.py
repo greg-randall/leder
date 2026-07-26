@@ -273,6 +273,39 @@ def test_pdf_scanned_falls_back_to_ocr(tmp_path, monkeypatch):
     assert status == "ok" and method == "ocr" and calls == ["scan.pdf"]
 
 
+def test_pdf_partial_text_layer_falls_back_to_ocr(tmp_path, monkeypatch):
+    """A 10-page PDF whose MarkItDown output is short relative to page count
+    (e.g. one digital cover page, nine scanned pages MarkItDown can't read)
+    must fall through to OCR, not be accepted on an absolute-length check
+    alone."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "mixed.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    def fake_mk(fp, op, mc):
+        # 250 chars of "digital" text -- passes the old absolute MIN_CONTENT_BYTES=100
+        # check, but is thin for a 10-page document (25 chars/page).
+        op.write_text("A" * 250)
+        return True, 250, "markitdown"
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown", fake_mk)
+    monkeypatch.setattr(p1, "_pdf_page_count", lambda fp: 10)
+
+    calls = []
+
+    def fake_ocr_pdf(inp, outp, vc):
+        calls.append(inp.name)
+        outp.write_text("OCR TEXT FROM ALL PAGES")
+        return True, 23, "ocr", "scanned PDF; OCR only"
+
+    monkeypatch.setattr(p1, "ocr_pdf", fake_ocr_pdf)
+    rel, status, method, note = p1.process_file(
+        src_root / "mixed.pdf", src_root, corpus, VISION_CFG, None, True, md_client=object())
+
+    assert status == "ok" and method == "ocr" and calls == ["mixed.pdf"]
+
+
 def test_pdf_digital_uses_markitdown(tmp_path, monkeypatch):
     """A digital PDF with a real text layer stays with MarkItDown (no OCR)."""
     src_root = tmp_path / "src"
@@ -281,15 +314,44 @@ def test_pdf_digital_uses_markitdown(tmp_path, monkeypatch):
     (src_root / "digital.pdf").write_bytes(b"%PDF-1.4 fake")
 
     def fake_mk(fp, op, mc):
-        op.with_suffix(".md").write_text("A" * 200)  # meaningful text
+        op.write_text("A" * 200)  # meaningful text
         return True, 200, "markitdown"
 
     monkeypatch.setattr(p1, "_convert_with_markitdown", fake_mk)
+    monkeypatch.setattr(p1, "_pdf_page_count", lambda fp: 1)  # 200 chars / 1 page -- well above threshold
     monkeypatch.setattr(p1, "ocr_pdf",
                         lambda *a: (_ for _ in ()).throw(AssertionError("ocr_pdf should not run")))
     rel, status, method, note = p1.process_file(
         src_root / "digital.pdf", src_root, corpus, VISION_CFG, None, True, md_client=object())
     assert status == "ok" and method == "markitdown"
+
+
+def test_pdf_digital_output_gets_reflowed(tmp_path, monkeypatch):
+    """The MarkItDown-success PDF path must also get the pipeline's re-flow
+    guard applied -- it's a _finish-bypassing inline return that an earlier
+    task deliberately left un-reflowed pending this task."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "digital.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    long_line = " ".join(["word"] * 100)  # 499 chars, well over the 300-char reflow threshold
+
+    def fake_mk(fp, op, mc):
+        op.write_text(long_line)
+        return True, len(long_line), "markitdown"
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown", fake_mk)
+    monkeypatch.setattr(p1, "_pdf_page_count", lambda fp: 1)
+    rel, status, method, note = p1.process_file(
+        src_root / "digital.pdf", src_root, corpus, VISION_CFG, None, True, md_client=object())
+
+    assert status == "ok"
+    md = (corpus / "digital.pdf.md").read_text()
+    assert "\n" in md  # got wrapped, not left as one giant line
+    for line in md.split("\n"):
+        assert len(line) <= 300
+    assert md.replace("\n", " ").split() == long_line.split()  # no words lost/altered
 
 
 def test_process_file_falls_back_to_gap_filler(tmp_path, monkeypatch):

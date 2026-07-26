@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import pycaption
+import pymupdf
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -36,6 +37,7 @@ from pipeline.config import DEFAULT_TEXT_NATIVE_EXTS
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
 MIN_CONTENT_BYTES = 100
+_MIN_CHARS_PER_PAGE = 200
 FILE_TIMEOUT = 300  # per-file timeout in seconds
 
 # ── Optional: MarkItDown ──────────────────────────────────────
@@ -535,6 +537,17 @@ def is_meaningful(content: str) -> bool:
     return alpha_count >= 10
 
 
+def _pdf_page_count(filepath: Path) -> int:
+    """Return a PDF's page count, or 1 if it can't be opened (fail open --
+    a page count of 1 makes the per-page density check equivalent to the
+    old absolute-length check for a PDF that can't even be introspected)."""
+    try:
+        with pymupdf.open(str(filepath)) as doc:
+            return max(1, doc.page_count)
+    except Exception:
+        return 1
+
+
 # ── Dispatch ──────────────────────────────────────────────────
 
 def _reflow_md_file_in_place(md_path: Path) -> None:
@@ -599,14 +612,20 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
             return str(relpath), "ok", method, note
         return str(relpath), "fail", f"audio not transcribed ({method})", None
 
-    # PDF -> MarkItDown first (digital text/tables); OCR fallback if thin.
+    # PDF -> MarkItDown first (digital text/tables); OCR fallback if thin,
+    # including "thin relative to page count" (e.g. one digital cover page
+    # on an otherwise-scanned document, which an absolute-length check alone
+    # would wrongly accept).
     if ext == ".pdf":
         if md_client is not None:
             ok, size, method = _convert_with_markitdown(filepath, md_path, md_client)
             if ok:
                 text = md_path.read_text(encoding="utf-8", errors="replace")
-                if is_meaningful(text) and not is_garbled(
-                    text, language=vision_cfg.get("language", "en")):
+                page_count = _pdf_page_count(filepath)
+                dense_enough = len(text.strip()) >= _MIN_CHARS_PER_PAGE * page_count
+                if (is_meaningful(text) and dense_enough
+                        and not is_garbled(text, language=vision_cfg.get("language", "en"))):
+                    _reflow_md_file_in_place(md_path)
                     return str(relpath), "ok", method, None
         return _finish(relpath, ocr_pdf(filepath, md_path, vision_cfg), md_path)
 

@@ -196,7 +196,7 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
             # fall through to whatever OCR produced (nothing, if decode_failed)
 
     if not text:
-        reason = "could not be decoded" if decode_failed else "no OCR text extracted"
+        reason = "could not be decoded" if decode_failed else "no ocr text extracted"
         return False, 0, f"image-{reason.replace(' ', '-')}", None
 
     content = f"## OCR: {inpath.name}\n\n{text}\n"

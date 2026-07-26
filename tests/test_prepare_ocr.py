@@ -347,6 +347,9 @@ def test_zero_ocr_text_with_no_vision_recovery_is_a_failure(tmp_path, monkeypatc
     ok, size, method, note = ocr_image(img, tmp_path / "blank.png.md", vision_cfg)
 
     assert ok is False
+    assert method == "image-no-ocr-text-extracted"
+    assert note is None
+    assert not (tmp_path / "blank.png.md").exists()
 
 
 def test_vision_recovered_image_still_succeeds(tmp_path, monkeypatch):
@@ -380,3 +383,17 @@ def test_corrupt_image_decode_failure_does_not_raise(tmp_path):
 
     result = _normalize_for_tesseract(corrupt, tmp_path)
     assert result is None
+
+
+def test_decode_failure_through_ocr_image_returns_false_and_correct_method(tmp_path):
+    from pipeline.prepare_ocr import ocr_image
+
+    corrupt = tmp_path / "corrupt.heic"
+    corrupt.write_bytes(b"not a heic file")
+
+    vision_cfg = {"enabled": False, "min_image_dim": 0, "dedup_images": False}
+    ok, size, method, note = ocr_image(corrupt, tmp_path / "corrupt.heic.md", vision_cfg)
+
+    assert ok is False
+    assert method == "image-could-not-be-decoded"
+    assert not (tmp_path / "corrupt.heic.md").exists()

@@ -311,9 +311,21 @@ function openSourceModal(fnId, sourceHtml, sourceDiv) {
     docPane.innerHTML = banner + text;
     console.log('Modal loaded. Looking for #exc-' + fnId);
     var target = docPane.querySelector('#exc-' + fnId);
+    // Apply .active to ALL segments for this finding -- merged/split
+    // segments carrying this finding's ID in data-findings must also highlight.
+    docPane.querySelectorAll('mark[data-findings]').forEach(function(el) {
+      if (el.dataset.findings.split(',').indexOf(fnId) !== -1) {
+        el.classList.add('active');
+        // Use the first data-findings match as the scroll target if the
+        // exact id match wasn't found (overlap-at-top case).
+        if (!target) { target = el; }
+      }
+    });
     if (target) {
       console.log('Found target, scrolling...');
-      target.classList.add('active');
+      if (!target.classList.contains('active')) {
+        target.classList.add('active');
+      }
       target.scrollIntoView({block: 'center'});
     } else {
       console.log('Target not found. Available exc- IDs:');

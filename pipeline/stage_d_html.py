@@ -112,7 +112,7 @@ _STYLE = """<style>
     position: relative;
   }
   .src-modal-close {
-    position: absolute; top: 1.2rem; left: 1.5rem; font-size: 1.8rem;
+    position: absolute; top: 0.4rem; left: 0.6rem; font-size: 1.8rem;
     background: none; border: none; cursor: pointer; color: #555; z-index: 1;
   }
   .src-modal-doc {

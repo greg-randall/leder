@@ -798,7 +798,7 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
     """Convert every file under source_root into markdown under corpus_root.
 
     vision_cfg: {enabled, model, min_words, max_pages_per_doc, ocr_images}.
-    audio_cfg:  {enabled, model, device}.
+    audio_cfg:  {enabled, model, device, vocabulary}.
     text_native_exts: extensions copied through verbatim (see config.yaml
         prepare.text_native_extensions). Defaults to DEFAULT_TEXT_NATIVE_EXTS.
     convert_cfg: {file_timeout, min_content_bytes} (see config.yaml

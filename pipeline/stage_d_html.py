@@ -111,7 +111,7 @@ _STYLE = """<style>
     box-shadow: 0 10px 40px rgba(0,0,0,0.3);
   }
   .src-modal-close {
-    position: absolute; top: 1.2rem; right: 1.5rem; font-size: 1.8rem;
+    position: absolute; top: 1.2rem; left: 1.5rem; font-size: 1.8rem;
     background: none; border: none; cursor: pointer; color: #555; z-index: 1;
   }
   .src-modal-doc {
@@ -169,6 +169,7 @@ function smoothScrollTo(el, target, duration) {
   document.querySelectorAll('.sources .source').forEach(function(src) {
     var card = document.createElement('div');
     var fnId = src.id.replace('fn', '');
+    var findingId = src.getAttribute('data-finding-id') || fnId;
 
     var badge = src.querySelector('.badge');
     var claim = src.querySelector('.claim');
@@ -230,7 +231,7 @@ function smoothScrollTo(el, target, duration) {
       exploreBtn.textContent = 'Explore the source material';
       exploreBtn.addEventListener('click', function(e) {
         e.stopPropagation();
-        openSourceModal(fnId, sourceHtml, src);
+        openSourceModal(findingId, sourceHtml, src);
       });
       card.appendChild(exploreBtn);
     }
@@ -264,11 +265,13 @@ function smoothScrollTo(el, target, duration) {
 var _explorableFindingIds = [];
 var _currentModalFindingId = null;
 document.querySelectorAll('.sources .source[data-source-html]').forEach(function(src) {
-  _explorableFindingIds.push(src.id.replace('fn', ''));
+  var fid = src.getAttribute('data-finding-id');
+  if (fid) _explorableFindingIds.push(fid);
 });
 
 function openSourceModal(fnId, sourceHtml, sourceDiv) {
   _currentModalFindingId = fnId;
+  console.log('openSourceModal: findingId=' + fnId + ', source=' + sourceHtml);
   var overlay = document.getElementById('srcModalOverlay');
   var docPane = document.getElementById('srcModalDoc');
   var infoPane = document.getElementById('srcModalInfo');
@@ -305,12 +308,20 @@ function openSourceModal(fnId, sourceHtml, sourceDiv) {
       ? '<div class="src-modal-summary-banner">⚠ This is a summary, not the primary source.</div>'
       : '';
     docPane.innerHTML = banner + text;
+    console.log('Modal loaded. Looking for #exc-' + fnId);
     var target = docPane.querySelector('#exc-' + fnId);
     if (target) {
+      console.log('Found target, scrolling...');
       target.classList.add('active');
       target.scrollIntoView({block: 'center'});
+    } else {
+      console.log('Target not found. Available exc- IDs:');
+      docPane.querySelectorAll('[id^="exc-"]').forEach(function(el) {
+        console.log('  ' + el.id);
+      });
     }
-  }).catch(function() {
+  }).catch(function(err) {
+    console.log('Fetch failed: ' + err);
     docPane.innerHTML = '<p>Could not load the source document.</p>';
   });
 }
@@ -358,9 +369,13 @@ document.addEventListener('keydown', function(e) {
   var hash = window.location.hash;
   if (hash.indexOf('#exc-') !== 0) return;
   var fnId = hash.slice('#exc-'.length);
-  var sourceDiv = document.getElementById('fn' + fnId);
+  console.log('Deep-link: looking for data-finding-id=' + fnId);
+  var sourceDiv = document.querySelector('.source[data-finding-id="' + fnId + '"]');
   if (sourceDiv && sourceDiv.getAttribute('data-source-html')) {
+    console.log('Found source div, opening modal...');
     openSourceModal(fnId, sourceDiv.getAttribute('data-source-html'), sourceDiv);
+  } else {
+    console.log('No explorable source div found for ' + fnId);
   }
 })();
 </script>
@@ -396,7 +411,7 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
             source_map[f"`{source_path}`"] = source_key_map[source_path]
         elif source_url and not source_path and f["finding_id"] in source_key_map:
             source_map[source_url] = source_key_map[f["finding_id"]]
-    findings_by_id = {f["finding_id"]: f for f in findings_doc.get("findings", [])}
+    findings_list = findings_doc.get("findings", [])
 
     parts = md.split("\n---\n\n## Sources\n", 1)
     body = parts[0] if parts else md
@@ -410,7 +425,7 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
 
     fn_verdicts = _parse_footnote_verdicts(footnotes_raw)
     html_body = _md_to_html(body, fn_verdicts)
-    sources_html = _render_sources(footnotes_raw, source_map, findings_by_id)
+    sources_html = _render_sources(footnotes_raw, source_map, findings_list)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -527,12 +542,12 @@ def _is_generated_summary_source(path: str) -> bool:
 
 
 def _render_sources(raw: str, source_map: dict[str, str] | None = None,
-                    findings_by_id: dict[str, dict] | None = None) -> str:
+                    findings_list: list[dict] | None = None) -> str:
     """Build HTML source cards (hidden) for the JS sidebar to read from."""
     if not raw.strip():
         return ""
     source_map = source_map or {}
-    findings_by_id = findings_by_id or {}
+    findings_list = findings_list or []
     lines = raw.strip().splitlines()
     cards = []
     cur = None
@@ -572,7 +587,15 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
         extra_attrs = f' data-source-html="{_escape(source_html)}"' if source_html else ""
         if _is_generated_summary_source(c["source"]):
             extra_attrs += ' data-is-summary="true"'
-        finding = findings_by_id.get(c["id"], {})
+        # Map footnote number (1-based) to the actual finding_id for scroll-target matching.
+        try:
+            idx = int(c["id"]) - 1
+            finding_id = findings_list[idx].get("finding_id", "") if 0 <= idx < len(findings_list) else ""
+        except (ValueError, IndexError):
+            finding_id = ""
+        if finding_id:
+            extra_attrs += f' data-finding-id="{_escape(finding_id)}"'
+        finding = findings_list[idx] if finding_id else {}
         context = finding.get("context", "")
         html_parts.append(
             f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}"{extra_attrs}>'

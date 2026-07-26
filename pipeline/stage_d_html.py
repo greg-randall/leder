@@ -261,7 +261,14 @@ function smoothScrollTo(el, target, duration) {
 })();
 </script>
 <script>
+var _explorableFindingIds = [];
+var _currentModalFindingId = null;
+document.querySelectorAll('.sources .source[data-source-html]').forEach(function(src) {
+  _explorableFindingIds.push(src.id.replace('fn', ''));
+});
+
 function openSourceModal(fnId, sourceHtml, sourceDiv) {
+  _currentModalFindingId = fnId;
   var overlay = document.getElementById('srcModalOverlay');
   var docPane = document.getElementById('srcModalDoc');
   var infoPane = document.getElementById('srcModalInfo');
@@ -316,10 +323,46 @@ function closeSourceModal() {
   }
 }
 
+function navigateModal(direction) {
+  if (_currentModalFindingId === null || _explorableFindingIds.length === 0) return;
+  var idx = _explorableFindingIds.indexOf(_currentModalFindingId);
+  if (idx === -1) return;
+  var nextIdx = (idx + direction + _explorableFindingIds.length) % _explorableFindingIds.length;
+  var nextId = _explorableFindingIds[nextIdx];
+  var nextSourceDiv = document.getElementById('fn' + nextId);
+  var nextSourceHtml = nextSourceDiv.getAttribute('data-source-html');
+  openSourceModal(nextId, nextSourceHtml, nextSourceDiv);
+}
+
 document.getElementById('srcModalClose').addEventListener('click', closeSourceModal);
 document.getElementById('srcModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeSourceModal();
 });
+
+document.addEventListener('keydown', function(e) {
+  var overlay = document.getElementById('srcModalOverlay');
+  if (!overlay.classList.contains('open')) return;
+  var tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+
+  if (e.key === 'Escape') {
+    closeSourceModal();
+  } else if (e.key === 'n') {
+    navigateModal(1);
+  } else if (e.key === 'p') {
+    navigateModal(-1);
+  }
+});
+
+(function() {
+  var hash = window.location.hash;
+  if (hash.indexOf('#exc-') !== 0) return;
+  var fnId = hash.slice('#exc-'.length);
+  var sourceDiv = document.getElementById('fn' + fnId);
+  if (sourceDiv && sourceDiv.getAttribute('data-source-html')) {
+    openSourceModal(fnId, sourceDiv.getAttribute('data-source-html'), sourceDiv);
+  }
+})();
 </script>
 """
 

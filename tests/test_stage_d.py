@@ -179,3 +179,22 @@ def test_article_html_includes_modal_shell_and_explore_button_script(tmp_path):
     assert 'id="srcModalOverlay"' in html
     assert "Explore the source material" in html
     assert "function openSourceModal" in html
+
+
+def test_article_html_includes_keyboard_and_deep_link_script(tmp_path):
+    from pipeline.stage_c_rebuild import build_footnote_block
+    from pipeline.stage_d_html import run_stage_d
+
+    footnote_block = build_footnote_block([_make_claim(severity="PASS")])
+    md = tmp_path / "sourced.md"
+    md.write_text("# Test Article\n\nSome text here.[^1]\n" + footnote_block)
+    findings_path = tmp_path / "findings.json"
+    findings_path.write_text('{"article_file": "a.md", "article_summary": "", "findings": []}')
+    output_dir = tmp_path / "out"
+    run_stage_d(str(md), str(findings_path), str(output_dir),
+                corpus_root=str(tmp_path), web_cache_dir=str(tmp_path / "web_cache"))
+
+    html = (output_dir / "article.html").read_text()
+    assert "function navigateModal" in html
+    assert "e.key === 'Escape'" in html
+    assert "_explorableFindingIds" in html

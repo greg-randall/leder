@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pymupdf
+
 import pipeline.prepare_1_convert as p1
 
 VISION_CFG = {"enabled": False, "model": "gpt-4o-mini", "min_words": 20,
@@ -271,6 +273,26 @@ def test_pdf_scanned_falls_back_to_ocr(tmp_path, monkeypatch):
     rel, status, method, note = p1.process_file(
         src_root / "scan.pdf", src_root, corpus, VISION_CFG, None, True, md_client=object())
     assert status == "ok" and method == "ocr" and calls == ["scan.pdf"]
+
+
+def test_pdf_page_count_real_pdf(tmp_path):
+    """_pdf_page_count on a real, freshly-built multi-page PDF (no monkeypatch
+    -- exercises the actual pymupdf.open() context-manager body)."""
+    doc = pymupdf.open()
+    for _ in range(3):
+        doc.new_page()
+    pdf_path = tmp_path / "three_pages.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    assert p1._pdf_page_count(pdf_path) == 3
+
+
+def test_pdf_page_count_bad_file_returns_one(tmp_path):
+    """A PDF pymupdf can't open fails open to a page count of 1."""
+    bad = tmp_path / "not_a_pdf.pdf"
+    bad.write_bytes(b"this is not a pdf")
+    assert p1._pdf_page_count(bad) == 1
 
 
 def test_pdf_partial_text_layer_falls_back_to_ocr(tmp_path, monkeypatch):

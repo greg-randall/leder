@@ -37,6 +37,9 @@ from pipeline.config import DEFAULT_TEXT_NATIVE_EXTS
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
 MIN_CONTENT_BYTES = 100
+# Short-but-real digital PDFs (e.g. a 1-page memo under 200 chars) may fall
+# through to OCR unnecessarily under this per-page threshold; content isn't
+# lost, just re-extracted -- an accepted tradeoff, not a bug.
 _MIN_CHARS_PER_PAGE = 200
 FILE_TIMEOUT = 300  # per-file timeout in seconds
 

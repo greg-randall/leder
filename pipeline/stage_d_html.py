@@ -574,8 +574,16 @@ def _is_generated_summary_source(path: str) -> bool:
 def _enrich_contexts(findings: list[dict], article_body: str) -> None:
     """For each finding with a target_text, find its surrounding paragraph
     in the article body and store a few sentences of context (with the
-    target sentence underlined) in finding['_context_html']."""
+    closest-matching sentence underlined) in finding['_context_html'].
+
+    Uses word-overlap scoring rather than exact substring match because
+    stage B's LLM often rephrases target_text (e.g. spelling out a pronoun
+    as a full company name), so the target rarely appears verbatim.
+    """
     import re as _re
+
+    def _words(s: str) -> set[str]:
+        return set(_re.sub(r'[^a-zA-Z0-9 ]', '', _re.sub(r'\[\^?\d+\]', '', s.lower())).split())
 
     # Strip markdown headers and unplaced block from body for searching.
     clean_body = _re.sub(r'^# .*\n', '', article_body, flags=_re.MULTILINE)
@@ -586,44 +594,39 @@ def _enrich_contexts(findings: list[dict], article_body: str) -> None:
         target = f.get('target_text', '').strip()
         if not target:
             continue
-        # Find the paragraph containing the target text.
-        # Strip footnote markers (e.g. [^1], [^12]) from both sides
-        # since the sourced article has them inline.
-
-        def _strip_fns(s: str) -> str:
-            return _re.sub(r'\[\^?\d+\]', '', s)
-
-        para = ''
-        for p in paragraphs:
-            p_flat = _re.sub(r'\s+', ' ', _strip_fns(p))
-            t_flat = _re.sub(r'\s+', ' ', _strip_fns(target))
-            if t_flat in p_flat:
-                para = p
-                break
-        if not para:
+        target_words = _words(target)
+        if not target_words:
             continue
 
-        # Split the paragraph into sentences (~sentence boundaries).
-        sentences = _re.split(r'(?<=[.!?])\s+', para)
-        # Find which sentence(s) contain the target.
-        target_idx = None
-        t_clean = _re.sub(r'\s+', ' ', _strip_fns(target))
-        for i, s in enumerate(sentences):
-            s_flat = _re.sub(r'\s+', ' ', _strip_fns(s))
-            if t_clean[:30] in s_flat:
-                target_idx = i
-                break
+        # Find the paragraph with the highest word overlap.
+        best_para = ''
+        best_score = 0
+        for p in paragraphs:
+            score = len(target_words & _words(p))
+            if score > best_score:
+                best_score = score
+                best_para = p
+        if best_score < max(2, len(target_words) * 0.25):
+            continue
 
-        # Take a window around the target: 2 sentences before, target, 2 after.
-        if target_idx is not None:
-            start = max(0, target_idx - 2)
-            end = min(len(sentences), target_idx + 3)
-            window = sentences[start:end]
-            # Underline the target sentence.
-            window[target_idx - start] = f'<u>{window[target_idx - start]}</u>'
-            f['_context_html'] = ' '.join(window)
-        else:
-            f['_context_html'] = para
+        # Split the best paragraph into sentences, find the one with
+        # the highest word overlap to the target.
+        sentences = _re.split(r'(?<=[.!?])\s+', best_para)
+        best_sent_idx = 0
+        best_sent_score = 0
+        for i, s in enumerate(sentences):
+            score = len(target_words & _words(s))
+            if score > best_sent_score:
+                best_sent_score = score
+                best_sent_idx = i
+
+        # Window: 2 sentences before, best, 2 after.
+        start = max(0, best_sent_idx - 2)
+        end = min(len(sentences), best_sent_idx + 3)
+        window = sentences[start:end]
+        if best_sent_score >= 2:
+            window[best_sent_idx - start] = f'<u>{window[best_sent_idx - start]}</u>'
+        f['_context_html'] = ' '.join(window)
 
 
 def _render_sources(raw: str, source_map: dict[str, str] | None = None,

@@ -176,3 +176,38 @@ def test_resolve_cited_sources_missing_corpus_file_not_resolved(tmp_path):
     resolved = resolve_cited_sources(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
 
     assert resolved == {}
+
+
+def test_render_source_document_highlights_found_excerpt():
+    from pipeline.stage_d_sources import render_source_document
+
+    text = "First paragraph here.\n\nThe facility injects 20000 barrels a day."
+    html, not_found = render_source_document(text, [("injects 20000 barrels a day", "fn1", "WARNING")])
+
+    assert not_found == []
+    assert '<mark id="exc-fn1"' in html
+    assert "<p>First paragraph here.</p>" in html
+
+
+def test_render_source_document_reports_not_found_excerpt_without_failing():
+    from pipeline.stage_d_sources import render_source_document
+
+    text = "This document says nothing relevant."
+    html, not_found = render_source_document(text, [("a phrase that is not in the text", "fn2", "CRITICAL")])
+
+    assert not_found == ["fn2"]
+    assert "This document says nothing relevant." in html
+    assert "<mark" not in html
+
+
+def test_render_source_document_multiple_excerpts_some_found_some_not():
+    from pipeline.stage_d_sources import render_source_document
+
+    text = "The vote passed six to one. Nothing else notable happened."
+    html, not_found = render_source_document(text, [
+        ("vote passed six to one", "fn1", "PASS"),
+        ("a completely absent phrase", "fn2", "CRITICAL"),
+    ])
+
+    assert not_found == ["fn2"]
+    assert '<mark id="exc-fn1"' in html

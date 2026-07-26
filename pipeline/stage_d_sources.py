@@ -9,6 +9,8 @@ from __future__ import annotations
 import html as html_mod
 import os
 
+from pipeline.stage_c_rebuild import find_quote_position
+
 _FAILED_FETCH_PREFIX = "(failed to fetch "
 
 
@@ -104,3 +106,36 @@ def resolve_cited_sources(
         resolved[key]["excerpts"].append((excerpt, finding_id, severity))
 
     return resolved
+
+
+def render_source_document(
+    text: str, excerpts: list[tuple[str, str, str]],
+) -> tuple[str, list[str]]:
+    """Render a source document's raw text to paragraph-wrapped HTML with
+    its cited excerpts highlighted. Returns (html, not_found_finding_ids)
+    for any excerpt that couldn't be located in the text -- the document
+    still renders in full either way.
+    """
+    spans: list[tuple[int, int, str, str]] = []
+    not_found: list[str] = []
+
+    for excerpt, finding_id, severity in excerpts:
+        pos = find_quote_position(excerpt, text)
+        if pos is None:
+            not_found.append(finding_id)
+            continue
+        start, end = pos
+        spans.append((start, end, finding_id, severity))
+
+    marked = mark_excerpts(text, spans)
+
+    paragraphs = marked.split("\n\n")
+    blocks = []
+    for block in paragraphs:
+        block = block.strip()
+        if not block:
+            continue
+        blocks.append(f"<p>{block.replace(chr(10), '<br>')}</p>")
+    html = "\n".join(blocks)
+
+    return html, not_found

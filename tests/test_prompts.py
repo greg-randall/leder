@@ -93,3 +93,9 @@ def test_verification_rules_well_formed_with_empty_description():
     p = build_verification_rules_block("")
     assert "{corpus_description}" not in p
     assert "{{" not in p and "}}" not in p
+
+
+def test_verification_rules_has_validate_excerpt_step():
+    p = build_verification_rules_block("")
+    assert "VALIDATE EXCERPT (MANDATORY)" in p
+    assert "validate_excerpt.py" in p

@@ -81,3 +81,98 @@ def test_mark_excerpts_escapes_html_special_chars_in_and_around_marks():
     assert "Cost &lt; $5 &amp; rising" in result
     assert "&lt;report&gt;" in result
     assert "<report>" not in result  # never appears unescaped
+
+
+def _finding(finding_id, source_path=None, source_url=None, source_excerpt="a quote",
+             severity="PASS"):
+    return {
+        "finding_id": finding_id, "severity": severity,
+        "source_path": source_path, "source_url": source_url,
+        "source_excerpt": source_excerpt,
+    }
+
+
+def test_resolve_cited_sources_corpus_path(tmp_path):
+    from pipeline.stage_d_sources import resolve_cited_sources
+
+    corpus = tmp_path / "corpus"
+    (corpus / "docs").mkdir(parents=True)
+    (corpus / "docs" / "a.md").write_text("Some corpus content.")
+
+    findings = [_finding("fn1", source_path="docs/a.md", source_excerpt="corpus content")]
+    resolved = resolve_cited_sources(findings, str(corpus), str(tmp_path / "web_cache"))
+
+    assert "docs/a.md" in resolved
+    entry = resolved["docs/a.md"]
+    assert entry["kind"] == "corpus"
+    assert entry["local_path"] == str(corpus / "docs" / "a.md")
+    assert entry["excerpts"] == [("corpus content", "fn1", "PASS")]
+
+
+def test_resolve_cited_sources_web_cache_snapshot(tmp_path):
+    from pipeline.stage_d_sources import resolve_cited_sources
+
+    wc = tmp_path / "web_cache" / "fn2"
+    wc.mkdir(parents=True)
+    (wc / "page.md").write_text("Real fetched page content.")
+
+    findings = [_finding("fn2", source_url="https://example.com/x",
+                         source_excerpt="fetched page content", severity="WARNING")]
+    resolved = resolve_cited_sources(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert "fn2" in resolved
+    entry = resolved["fn2"]
+    assert entry["kind"] == "web"
+    assert entry["local_path"] == str(wc / "page.md")
+    assert entry["excerpts"] == [("fetched page content", "fn2", "WARNING")]
+
+
+def test_resolve_cited_sources_failed_fetch_placeholder_not_resolved(tmp_path):
+    from pipeline.stage_d_sources import resolve_cited_sources
+
+    wc = tmp_path / "web_cache" / "fn3"
+    wc.mkdir(parents=True)
+    (wc / "page.md").write_text("(failed to fetch https://example.com/dead)\n")
+
+    findings = [_finding("fn3", source_url="https://example.com/dead")]
+    resolved = resolve_cited_sources(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert "fn3" not in resolved
+
+
+def test_resolve_cited_sources_multiple_findings_same_document(tmp_path):
+    from pipeline.stage_d_sources import resolve_cited_sources
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("First bit. Second bit.")
+
+    findings = [
+        _finding("fn1", source_path="a.md", source_excerpt="First bit", severity="PASS"),
+        _finding("fn2", source_path="a.md", source_excerpt="Second bit", severity="CRITICAL"),
+    ]
+    resolved = resolve_cited_sources(findings, str(corpus), str(tmp_path / "web_cache"))
+
+    assert len(resolved) == 1
+    assert resolved["a.md"]["excerpts"] == [
+        ("First bit", "fn1", "PASS"),
+        ("Second bit", "fn2", "CRITICAL"),
+    ]
+
+
+def test_resolve_cited_sources_skips_findings_with_no_source(tmp_path):
+    from pipeline.stage_d_sources import resolve_cited_sources
+
+    findings = [_finding("fn1", source_path=None, source_url=None)]
+    resolved = resolve_cited_sources(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert resolved == {}
+
+
+def test_resolve_cited_sources_missing_corpus_file_not_resolved(tmp_path):
+    from pipeline.stage_d_sources import resolve_cited_sources
+
+    findings = [_finding("fn1", source_path="does/not/exist.md")]
+    resolved = resolve_cited_sources(findings, str(tmp_path / "corpus"), str(tmp_path / "web_cache"))
+
+    assert resolved == {}

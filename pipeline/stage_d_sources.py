@@ -220,16 +220,20 @@ def build_sources_folder(
     findings: list[dict], corpus_root: str, web_cache_dir: str, output_dir: str,
 ) -> dict[str, str]:
     """Build {output_dir}/sources/ and return {resolve_key: output_relative_html_path}."""
+    print(f"Resolving source documents for {len(findings)} findings...")
     still_missing = backstop_fetch_missing(findings, corpus_root, web_cache_dir)
     write_missing_snapshots_report(output_dir, still_missing)
 
     resolved = resolve_cited_sources(findings, corpus_root, web_cache_dir)
     mapping: dict[str, str] = {}
+    n = len(resolved)
 
-    for key, entry in resolved.items():
+    for i, (key, entry) in enumerate(resolved.items(), 1):
+        print(f"  [{i}/{n}] Rendering {key}...", end=" ", flush=True)
         with open(entry["local_path"], encoding="utf-8") as fh:
             text = fh.read()
         html, _not_found = render_source_document(text, entry["excerpts"])
+        print("done.")
 
         if entry["kind"] == "corpus":
             rel_html = os.path.join("sources", os.path.splitext(key)[0] + ".html")
@@ -257,4 +261,5 @@ def build_sources_folder(
 
         mapping[key] = rel_html
 
+    print(f"Built sources/ with {n} document(s).")
     return mapping

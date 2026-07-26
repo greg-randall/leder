@@ -8,8 +8,12 @@ Features:
 """
 from __future__ import annotations
 
-import re
 import html as html_mod
+import json
+import os
+import re
+
+from pipeline.stage_d_sources import build_sources_folder
 
 
 _STYLE = """<style>
@@ -205,9 +209,32 @@ def _escape(text: str) -> str:
     return html_mod.escape(text, quote=False)
 
 
-def convert(article_sourced_md: str, output_html: str) -> None:
+def convert(article_sourced_md: str, findings_path: str, output_dir: str,
+            corpus_root: str, web_cache_dir: str) -> None:
     with open(article_sourced_md, encoding="utf-8") as f:
         md = f.read()
+
+    os.makedirs(output_dir, exist_ok=True)
+    with open(findings_path, encoding="utf-8") as f:
+        findings_doc = json.load(f)
+    source_key_map = build_sources_folder(
+        findings_doc.get("findings", []), corpus_root, web_cache_dir, output_dir,
+    )
+    # _render_sources parses the "Source:" line stage-c already wrote into the
+    # sourced markdown, verbatim -- and stage_c_rebuild.py wraps corpus
+    # source_path values in backticks there (source_ref = f"`{claim.source_path}`"),
+    # while web source_url values are written raw, unwrapped. The lookup keys
+    # built here must match that exact text, backticks included for corpus paths,
+    # not build_sources_folder's own (backtick-free) keys.
+    source_map: dict[str, str] = {}
+    for f in findings_doc.get("findings", []):
+        source_path = f.get("source_path")
+        source_url = f.get("source_url")
+        if source_path and source_path in source_key_map:
+            source_map[f"`{source_path}`"] = source_key_map[source_path]
+        elif source_url and not source_path and f["finding_id"] in source_key_map:
+            source_map[source_url] = source_key_map[f["finding_id"]]
+    findings_by_id = {f["finding_id"]: f for f in findings_doc.get("findings", [])}
 
     parts = md.split("\n---\n\n## Sources\n", 1)
     body = parts[0] if parts else md
@@ -221,7 +248,7 @@ def convert(article_sourced_md: str, output_html: str) -> None:
 
     fn_verdicts = _parse_footnote_verdicts(footnotes_raw)
     html_body = _md_to_html(body, fn_verdicts)
-    sources_html = _render_sources(footnotes_raw)
+    sources_html = _render_sources(footnotes_raw, source_map, findings_by_id)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -251,10 +278,11 @@ def convert(article_sourced_md: str, output_html: str) -> None:
 </body>
 </html>"""
 
-    with open(output_html, "w", encoding="utf-8") as f:
+    article_path = os.path.join(output_dir, "article.html")
+    with open(article_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"HTML written → {output_html}")
+    print(f"HTML written → {article_path}")
 
 
 def _parse_footnote_verdicts(raw: str) -> dict[str, str]:
@@ -329,10 +357,13 @@ def _is_generated_summary_source(path: str) -> bool:
     return any(m in path for m in _SUMMARY_SOURCE_MARKERS)
 
 
-def _render_sources(raw: str) -> str:
+def _render_sources(raw: str, source_map: dict[str, str] | None = None,
+                    findings_by_id: dict[str, dict] | None = None) -> str:
     """Build HTML source cards (hidden) for the JS sidebar to read from."""
     if not raw.strip():
         return ""
+    source_map = source_map or {}
+    findings_by_id = findings_by_id or {}
     lines = raw.strip().splitlines()
     cards = []
     cur = None
@@ -368,13 +399,20 @@ def _render_sources(raw: str) -> str:
         else:
             severity = "WARNING"
         vclass = severity.lower()
+        source_html = source_map.get(c["source"], "")
+        extra_attrs = f' data-source-html="{_escape(source_html)}"' if source_html else ""
+        if _is_generated_summary_source(c["source"]):
+            extra_attrs += ' data-is-summary="true"'
+        finding = findings_by_id.get(c["id"], {})
+        context = finding.get("context", "")
         html_parts.append(
-            f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}">'
+            f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}"{extra_attrs}>'
             f'<span class="badge {vclass}">{_escape(raw)}</span>'
             f'<span class="claim">{_escape(c["claim"])}</span>'
             f'<span class="rationale">{_escape(c["rationale"])}</span>'
             f'<span class="matched">{_escape(c["matched"])}</span>'
             f'<span class="recommendation">{_escape(c["recommendation"])}</span>'
+            f'<span class="context">{_escape(context)}</span>'
             f'<span class="src-link">{_escape(c["source"])}</span>'
             f'<span class="flags">{_escape(c["flags"])}</span>'
             f'</div>'
@@ -445,8 +483,7 @@ def _render_unplaced(text: str) -> str:
     return html
 
 
-def run_stage_d(article_sourced_md: str, output_html: str = "") -> str:
-    if not output_html:
-        output_html = article_sourced_md.replace(".md", ".html")
-    convert(article_sourced_md, output_html)
-    return output_html
+def run_stage_d(article_sourced_md: str, findings_path: str, output_dir: str,
+                corpus_root: str, web_cache_dir: str) -> str:
+    convert(article_sourced_md, findings_path, output_dir, corpus_root, web_cache_dir)
+    return os.path.join(output_dir, "article.html")

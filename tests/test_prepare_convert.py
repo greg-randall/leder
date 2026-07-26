@@ -118,6 +118,54 @@ def test_text_native_routes_to_passthrough_not_converter(tmp_path):
     assert status2 != status
 
 
+def test_stale_sidecar_reconverts_when_source_is_newer(tmp_path):
+    import os
+    import time
+
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    src = src_root / "doc.txt"
+    src.write_text("original content, long enough to look meaningful " * 3)
+
+    # First conversion
+    p1.process_file(
+        src, src_root, corpus, VISION_CFG, None, True,
+        md_client=None, text_native_exts={".txt"})
+    md_path = corpus / "doc.txt.md"
+    assert md_path.read_text().startswith("original content")
+
+    # Touch the source with newer content and a later mtime
+    time.sleep(0.01)
+    src.write_text("UPDATED content, long enough to look meaningful too " * 3)
+    newer_time = time.time() + 1
+    os.utime(src, (newer_time, newer_time))
+
+    rel, status, method, note = p1.process_file(
+        src, src_root, corpus, VISION_CFG, None, False,  # force=False
+        md_client=None, text_native_exts={".txt"})
+
+    assert status == "ok"  # not "skip" -- re-converted because source is newer
+    assert md_path.read_text().startswith("UPDATED content")
+
+
+def test_untouched_sidecar_still_skips(tmp_path):
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    src = src_root / "doc.txt"
+    src.write_text("original content, long enough to look meaningful " * 3)
+
+    p1.process_file(
+        src, src_root, corpus, VISION_CFG, None, True,
+        md_client=None, text_native_exts={".txt"})
+    rel, status, method, note = p1.process_file(
+        src, src_root, corpus, VISION_CFG, None, False,
+        md_client=None, text_native_exts={".txt"})
+
+    assert status == "skip" and method == "already converted"
+
+
 def test_convert_xml(tmp_path):
     src = tmp_path / "d.xml"
     src.write_text("<root><a>1</a></root>")

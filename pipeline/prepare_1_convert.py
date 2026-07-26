@@ -578,8 +578,9 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
 
     if not force and md_path.exists() and md_path.stat().st_size > 0:
         try:
+            source_is_newer = filepath.stat().st_mtime > md_path.stat().st_mtime
             existing = md_path.read_text(encoding="utf-8", errors="replace")
-            if is_meaningful(existing):
+            if not source_is_newer and is_meaningful(existing):
                 return str(relpath), "skip", "already converted", None
         except Exception:
             pass

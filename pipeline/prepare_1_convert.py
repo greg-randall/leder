@@ -145,33 +145,38 @@ def _sanitize_filename(name: str) -> str:
     return name.replace("/", "_").replace("\\", "_").replace("\x00", "")
 
 
-def _html_to_markdown(html: str) -> str:
+def _html_to_markdown(html: str, md_client) -> str:
     """Convert an HTML email body to markdown via MarkItDown, writing to a
     temp .html file first (MarkItDown converts by file path). Falls back to
     the raw HTML if MarkItDown is unavailable or fails -- better to ship
-    something than crash the whole email conversion over one part."""
-    md_client = _get_markitdown()
+    something than crash the whole email conversion over one part.
+
+    Takes md_client rather than building its own -- callers (ultimately the
+    batch driver in run_prepare_1) construct MarkItDown exactly once per run
+    and thread it down through process_file, the same convention
+    _convert_with_markitdown follows; rebuilding it per email here would
+    defeat that for a batch of thousands of messages.
+    """
     if md_client is None:
         return html
     try:
-        with tempfile.NamedTemporaryFile(
-                suffix=".html", mode="w", encoding="utf-8", delete=False) as tf:
-            tf.write(html)
-            tmp_html_path = tf.name
-        try:
-            result = md_client.convert(tmp_html_path)
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td) / "body.html"
+            tmp_path.write_text(html, encoding="utf-8")
+            result = md_client.convert(str(tmp_path))
             return result.text_content.strip()
-        finally:
-            Path(tmp_html_path).unlink(missing_ok=True)
     except Exception:
         return html
 
 
-def _extract_attachments(msg, attach_dir: Path) -> tuple[int, list[str]]:
+def _extract_attachments(msg, attach_dir: Path, md_client=None) -> tuple[int, list[str]]:
     """Walk a parsed email message and extract attachments/nested emails.
 
     Returns (count, notes). Nested .eml files are saved as .eml so
     prepare-1 picks them up on the next pass.
+
+    md_client: shared MarkItDown instance (built once by the batch driver),
+    used only if an HTML-only body needs converting -- see _html_to_markdown.
     """
     attach_dir.mkdir(parents=True, exist_ok=True)
     idx = 0
@@ -241,21 +246,26 @@ def _extract_attachments(msg, attach_dir: Path) -> tuple[int, list[str]]:
     if plain_parts:
         text_body = "\n\n".join(plain_parts).strip()
     elif html_parts:
-        text_body = _html_to_markdown("\n\n".join(html_parts)).strip()
+        text_body = _html_to_markdown("\n\n".join(html_parts), md_client).strip()
     else:
         text_body = ""
 
+    # attachment/nested-email markers are grouped before body text, not
+    # interleaved by original MIME position
     all_parts = body_parts + ([text_body] if text_body else [])
     body = "\n\n".join(all_parts).strip() if all_parts else "(no text body)"
     notes = f"{idx} attachment(s) extracted" if idx else ""
     return idx, body, notes
 
 
-def convert_eml(inpath: Path, md_path: Path):
+def convert_eml(inpath: Path, md_path: Path, md_client=None):
     """MIME .eml -> markdown body + extract attachments/nested emails.
 
     Attachments and nested emails are saved to {stem}_attachments/ with
     sequential numbering so prepare-1 converts them on the next pass.
+
+    md_client: shared MarkItDown instance from the batch driver, forwarded
+    to _extract_attachments for HTML-only bodies (see _html_to_markdown).
     """
     from email import policy
     from email.parser import BytesParser
@@ -268,7 +278,7 @@ def convert_eml(inpath: Path, md_path: Path):
         subject = msg.get("Subject", "(unknown)")
 
         attach_dir = md_path.parent / (md_path.stem + "_attachments")
-        count, body, notes = _extract_attachments(msg, attach_dir)
+        count, body, notes = _extract_attachments(msg, attach_dir, md_client)
 
         md = (f"# {subject}\n\n**From:** {sender}\n**To:** {to}\n"
               f"**Date:** {date}\n\n---\n\n{body}")
@@ -680,7 +690,7 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
     if ext == ".msg":
         return _finish(relpath, convert_msg(filepath, md_path), md_path)
     if ext == ".eml":
-        return _finish(relpath, convert_eml(filepath, md_path), md_path)
+        return _finish(relpath, convert_eml(filepath, md_path, md_client), md_path)
 
     # Already-text formats (.csv, .txt, .json, source code, …) -> copy verbatim.
     # These are readable as-is; the converter would only reformat/bloat them.

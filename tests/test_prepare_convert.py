@@ -597,7 +597,10 @@ def test_eml_html_only_body_converts_not_raw_tags(tmp_path):
     src = tmp_path / "html.eml"
     src.write_bytes(msg.as_bytes())
 
-    ok, size, method, note = p1.convert_eml(src, tmp_path / "html.eml.md")
+    # md_client mirrors how the batch driver builds it once and threads it
+    # down through process_file -> convert_eml -> _extract_attachments.
+    md_client = p1._get_markitdown()
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "html.eml.md", md_client)
     md = (tmp_path / "html.eml.md").read_text()
     assert ok
     assert "Hello from HTML." in md
@@ -618,7 +621,8 @@ def test_eml_prefers_plain_over_html_when_both_present(tmp_path):
     src = tmp_path / "both.eml"
     src.write_bytes(msg.as_bytes())
 
-    ok, size, method, note = p1.convert_eml(src, tmp_path / "both.eml.md")
+    md_client = p1._get_markitdown()
+    ok, size, method, note = p1.convert_eml(src, tmp_path / "both.eml.md", md_client)
     md = (tmp_path / "both.eml.md").read_text()
     assert ok
     assert "Plain text body." in md
@@ -626,11 +630,10 @@ def test_eml_prefers_plain_over_html_when_both_present(tmp_path):
     assert "<html>" not in md
 
 
-def test_eml_html_to_markdown_fallback_when_markitdown_unavailable(tmp_path, monkeypatch):
-    """When MarkItDown is unavailable, the HTML body is still used (not lost),
-    even though it won't be converted to clean markdown."""
-    monkeypatch.setattr(p1, "_get_markitdown", lambda: None)
-
+def test_eml_html_to_markdown_fallback_when_markitdown_unavailable(tmp_path):
+    """When no md_client is available (e.g. MarkItDown not installed, or the
+    batch driver's construction failed), the HTML body is still used as-is
+    (not lost), even though it won't be converted to clean markdown."""
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
@@ -643,6 +646,8 @@ def test_eml_html_to_markdown_fallback_when_markitdown_unavailable(tmp_path, mon
     src = tmp_path / "html2.eml"
     src.write_bytes(msg.as_bytes())
 
+    # No md_client passed -> defaults to None -> _html_to_markdown's
+    # unavailable branch returns the raw HTML rather than crashing.
     ok, size, method, note = p1.convert_eml(src, tmp_path / "html2.eml.md")
     md = (tmp_path / "html2.eml.md").read_text()
     assert ok

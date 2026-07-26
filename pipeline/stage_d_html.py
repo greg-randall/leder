@@ -408,10 +408,35 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
     for f in findings_doc.get("findings", []):
         source_path = f.get("source_path")
         source_url = f.get("source_url")
-        if source_path and source_path in source_key_map:
-            source_map[f"`{source_path}`"] = source_key_map[source_path]
-        elif source_url and not source_path and f["finding_id"] in source_key_map:
-            source_map[source_url] = source_key_map[f["finding_id"]]
+        finding_id = f.get("finding_id", "")
+        # Normalize source_path the same way resolve_cited_sources does.
+        normalized = None
+        if source_path:
+            sp = source_path
+            if os.path.isabs(sp):
+                corpus_abs = os.path.abspath(corpus_root)
+                if sp.startswith(corpus_abs + os.sep):
+                    sp = os.path.relpath(sp, corpus_abs)
+            for prefix in ("corpus/", "./"):
+                if sp.startswith(prefix):
+                    sp = sp[len(prefix):]
+                    break
+            if sp in source_key_map:
+                normalized = sp
+        # Determine the output-relative HTML path for this finding.
+        html_path = None
+        if normalized:
+            html_path = source_key_map[normalized]
+        elif source_url and finding_id in source_key_map:
+            html_path = source_key_map[finding_id]
+        if not html_path:
+            continue
+        # Map every prefix variant that might appear in the Source: line.
+        for variant in {source_path, f"./{source_path}", f"corpus/{source_path}"}:
+            if variant:
+                source_map[f"`{variant}`"] = html_path
+        if source_url:
+            source_map[source_url] = html_path
     findings_list = findings_doc.get("findings", [])
 
     parts = md.split("\n---\n\n## Sources\n", 1)

@@ -96,7 +96,13 @@ def resolve_cited_sources(
                     continue  # points outside the corpus
             else:
                 key = source_path
-                local_path = os.path.join(corpus_root, source_path)
+                # Strip common accidental prefixes (corpus/, ./) that
+                # cause double-prefix paths when joined with corpus_root.
+                for prefix in ("corpus/", "./"):
+                    if key.startswith(prefix):
+                        key = key[len(prefix):]
+                        break
+                local_path = os.path.join(corpus_root, key)
             if not os.path.exists(local_path):
                 continue
             if not os.path.isfile(local_path):

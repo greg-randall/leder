@@ -806,6 +806,52 @@ def test_hung_converter_is_reported_as_timed_out(tmp_path, monkeypatch):
     assert any("timed out" in reason for _, reason in report["failures"])
 
 
+def test_genuinely_hung_converter_does_not_block_run_prepare_1(tmp_path, monkeypatch):
+    """A converter that truly never returns (no internal bound at all -- e.g.
+    stuck on a blocking call with no timeout of its own) must not hang
+    run_prepare_1 itself. Python threads can't be forcibly killed from the
+    outside, so the abandoned worker thread may keep running in the
+    background past this function's return -- that's an inherent, accepted
+    limitation -- but run_prepare_1 must stop waiting on it and return.
+
+    Uses threading.Event().wait() with no timeout for a genuine, unbounded
+    hang -- NOT time.sleep(N), which is bounded and would let
+    ThreadPoolExecutor's old wait=True teardown mask the bug (the sleep
+    finishes on its own before any test-scale assertion would notice).
+    """
+    import threading as _threading
+    import time as _time
+
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "slow.xyz").write_text("content")
+
+    release = _threading.Event()
+
+    def hanging_process_file(*args, **kwargs):
+        release.wait()  # blocks indefinitely until explicitly released below
+        return "slow.xyz", "ok", "should-not-happen", None
+
+    monkeypatch.setattr(p1, "process_file", hanging_process_file)
+
+    start = _time.monotonic()
+    try:
+        report = p1.run_prepare_1(str(src_root), str(corpus), 1,
+                                  VISION_CFG, AUDIO_CFG, True,
+                                  convert_cfg={"file_timeout": 0.2})
+        elapsed = _time.monotonic() - start
+        assert elapsed < 10, f"run_prepare_1 blocked for {elapsed:.1f}s on a hung converter"
+        assert report["failure_count"] == 1
+        assert any("timed out" in reason for _, reason in report["failures"])
+    finally:
+        # Let the abandoned worker thread finish so interpreter shutdown's
+        # atexit thread-join (concurrent.futures.thread._python_exit) doesn't
+        # hang the test process itself -- shutdown(wait=False) only stops
+        # run_prepare_1 from waiting, it doesn't kill the thread.
+        release.set()
+
+
 def test_subtitle_routes_directly_bypassing_markitdown(tmp_path, monkeypatch):
     """.srt/.vtt go straight to convert_subtitle, not through MarkItDown."""
     src_root = tmp_path / "src"

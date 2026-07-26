@@ -286,3 +286,35 @@ def test_duplicate_image_stub_names_the_surviving_file(tmp_path):
     assert method == "image-dup"
     md = (tmp_path / "second.png.md").read_text()
     assert "first.png" in md
+
+
+def test_duplicate_image_stub_disambiguates_same_basename_in_different_dirs(tmp_path):
+    """Two same-named files in different subfolders (common for email
+    attachments, e.g. image001.png repeated across many messages) must be
+    disambiguated by a relative PATH in the duplicate note, not just a bare
+    basename -- a basename alone can't tell the two apart."""
+    _reset_dedup()
+    vision_cfg = {"enabled": False, "min_words": 20, "min_image_dim": 0, "dedup_images": True}
+
+    import base64
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    dir_a = tmp_path / "email1_attachments"
+    dir_b = tmp_path / "email2_attachments"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    first = dir_a / "image001.png"
+    second = dir_b / "image001.png"
+    first.write_bytes(png_bytes)
+    second.write_bytes(png_bytes)
+
+    ocr.ocr_image(first, dir_a / "image001.png.md", vision_cfg)
+    ok, size, method, note = ocr.ocr_image(second, dir_b / "image001.png.md", vision_cfg)
+
+    assert method == "image-dup"
+    md = (dir_b / "image001.png.md").read_text()
+    # A bare basename ("image001.png") is ambiguous -- both files share it.
+    # The note/markdown must include enough of the path to disambiguate.
+    assert "email1_attachments" in note
+    assert "email1_attachments" in md

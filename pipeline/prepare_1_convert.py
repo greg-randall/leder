@@ -839,22 +839,98 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                   f"loaded on {dev}", file=sys.stderr)
 
     with tqdm(total=len(files), desc="prepare-1 convert", unit="file") as pbar:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futmap = {}
-            for f in files:
-                fut = pool.submit(process_file, f, src_root, out_root,
-                                  vision_cfg, whisper_model, force, md_client,
-                                  text_native_exts)
-                futmap[fut] = f
-            pending = set(futmap.keys())
-            while pending:
+        # Not a context manager: a genuinely-hung converter thread can never
+        # be forcibly killed (Python has no API to terminate a running
+        # thread), so `with ThreadPoolExecutor(...) as pool:` would block
+        # run_prepare_1 forever at teardown -- __exit__ calls
+        # shutdown(wait=True), which joins every worker thread including
+        # the stuck one. Instead we shut down with wait=False below so this
+        # function can return/continue even while a worker is still stuck;
+        # the abandoned thread keeps running in the background until it
+        # naturally finishes or the process exits.
+        pool = ThreadPoolExecutor(max_workers=workers)
+        futmap = {}
+        for f in files:
+            fut = pool.submit(process_file, f, src_root, out_root,
+                              vision_cfg, whisper_model, force, md_client,
+                              text_native_exts)
+            futmap[fut] = f
+        pending = set(futmap.keys())
+        while pending:
+            try:
+                future = next(as_completed(pending, timeout=FILE_TIMEOUT))
+            except (TimeoutError, StopIteration):
+                break
+            pending.discard(future)
+            f = futmap[future]
+            rel = str(Path(f).relative_to(src_root))
+            try:
+                _, status, method, note = future.result()
+            except Exception as ex:
+                status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
+            with results_lock:
+                if status == "ok":
+                    ok_ct += 1
+                    if method == "image-tiny":
+                        tiny_ct += 1
+                    elif method == "image-dup":
+                        dup_ct += 1
+                    if note is not None:
+                        needs_review.append((rel, note))
+                elif status == "skip":
+                    skip_ct += 1
+                else:
+                    failures.append((rel, method))
+                pbar.update(1)
+
+        if pending:
+            stalled = [str(Path(futmap[fut]).relative_to(src_root)) for fut in pending]
+            print(f"\n  ⚠  {len(stalled)} file(s) still running after "
+                  f"{FILE_TIMEOUT}s and were not waited on further: "
+                  f"{', '.join(stalled[:5])}"
+                  f"{' ...' if len(stalled) > 5 else ''}", file=sys.stderr)
+            with results_lock:
+                for fut in pending:
+                    rel = str(Path(futmap[fut]).relative_to(src_root))
+                    failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
+                    pbar.update(1)
+
+        pool.shutdown(wait=False)
+
+    _write_unconverted(out_root, failures)
+    _write_needs_review(out_root, needs_review)
+
+    # Second pass: process any new files extracted from email attachments
+    new_files = [f for f in sorted(src_root.rglob("*"))
+                 if f.is_file()
+                 and f.suffix.lower() != ".md"
+                 and f.name != ".gitkeep"
+                 and not f.name.startswith("._")
+                 and f not in futmap.values()]
+    if new_files:
+        random.shuffle(new_files)
+        print(f"\nprepare-1 pass 2: {len(new_files)} extracted file(s) from "
+              f"email attachments", file=sys.stderr)
+        with tqdm(total=len(new_files), desc="prepare-1 pass 2", unit="file") as pbar2:
+            # See the pass-1 comment above: not a context manager, for the
+            # same reason (a genuinely-hung converter thread can't be killed,
+            # so shutdown(wait=True) at __exit__ would block forever).
+            pool2 = ThreadPoolExecutor(max_workers=workers)
+            futmap2 = {}
+            for f in new_files:
+                fut = pool2.submit(process_file, f, src_root, out_root,
+                                   vision_cfg, whisper_model, force, md_client,
+                                   text_native_exts)
+                futmap2[fut] = f
+            pending2 = set(futmap2.keys())
+            while pending2:
                 try:
-                    future = next(as_completed(pending, timeout=FILE_TIMEOUT))
+                    future = next(as_completed(pending2, timeout=FILE_TIMEOUT))
                 except (TimeoutError, StopIteration):
                     break
-                pending.discard(future)
-                f = futmap[future]
-                rel = str(Path(f).relative_to(src_root))
+                pending2.discard(future)
+                f2 = futmap2[future]
+                rel = str(Path(f2).relative_to(src_root))
                 try:
                     _, status, method, note = future.result()
                 except Exception as ex:
@@ -872,81 +948,21 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                         skip_ct += 1
                     else:
                         failures.append((rel, method))
-                    pbar.update(1)
+                    pbar2.update(1)
 
-            if pending:
-                stalled = [str(Path(futmap[fut]).relative_to(src_root)) for fut in pending]
-                print(f"\n  ⚠  {len(stalled)} file(s) still running after "
+            if pending2:
+                stalled2 = [str(Path(futmap2[fut]).relative_to(src_root)) for fut in pending2]
+                print(f"\n  ⚠  {len(stalled2)} file(s) still running after "
                       f"{FILE_TIMEOUT}s and were not waited on further: "
-                      f"{', '.join(stalled[:5])}"
-                      f"{' ...' if len(stalled) > 5 else ''}", file=sys.stderr)
+                      f"{', '.join(stalled2[:5])}"
+                      f"{' ...' if len(stalled2) > 5 else ''}", file=sys.stderr)
                 with results_lock:
-                    for fut in pending:
-                        rel = str(Path(futmap[fut]).relative_to(src_root))
+                    for fut in pending2:
+                        rel = str(Path(futmap2[fut]).relative_to(src_root))
                         failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
-                        pbar.update(1)
-
-    _write_unconverted(out_root, failures)
-    _write_needs_review(out_root, needs_review)
-
-    # Second pass: process any new files extracted from email attachments
-    new_files = [f for f in sorted(src_root.rglob("*"))
-                 if f.is_file()
-                 and f.suffix.lower() != ".md"
-                 and f.name != ".gitkeep"
-                 and not f.name.startswith("._")
-                 and f not in futmap.values()]
-    if new_files:
-        random.shuffle(new_files)
-        print(f"\nprepare-1 pass 2: {len(new_files)} extracted file(s) from "
-              f"email attachments", file=sys.stderr)
-        with tqdm(total=len(new_files), desc="prepare-1 pass 2", unit="file") as pbar2:
-            with ThreadPoolExecutor(max_workers=workers) as pool2:
-                futmap2 = {}
-                for f in new_files:
-                    fut = pool2.submit(process_file, f, src_root, out_root,
-                                       vision_cfg, whisper_model, force, md_client,
-                                       text_native_exts)
-                    futmap2[fut] = f
-                pending2 = set(futmap2.keys())
-                while pending2:
-                    try:
-                        future = next(as_completed(pending2, timeout=FILE_TIMEOUT))
-                    except (TimeoutError, StopIteration):
-                        break
-                    pending2.discard(future)
-                    f2 = futmap2[future]
-                    rel = str(Path(f2).relative_to(src_root))
-                    try:
-                        _, status, method, note = future.result()
-                    except Exception as ex:
-                        status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
-                    with results_lock:
-                        if status == "ok":
-                            ok_ct += 1
-                            if method == "image-tiny":
-                                tiny_ct += 1
-                            elif method == "image-dup":
-                                dup_ct += 1
-                            if note is not None:
-                                needs_review.append((rel, note))
-                        elif status == "skip":
-                            skip_ct += 1
-                        else:
-                            failures.append((rel, method))
                         pbar2.update(1)
 
-                if pending2:
-                    stalled2 = [str(Path(futmap2[fut]).relative_to(src_root)) for fut in pending2]
-                    print(f"\n  ⚠  {len(stalled2)} file(s) still running after "
-                          f"{FILE_TIMEOUT}s and were not waited on further: "
-                          f"{', '.join(stalled2[:5])}"
-                          f"{' ...' if len(stalled2) > 5 else ''}", file=sys.stderr)
-                    with results_lock:
-                        for fut in pending2:
-                            rel = str(Path(futmap2[fut]).relative_to(src_root))
-                            failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
-                            pbar2.update(1)
+            pool2.shutdown(wait=False)
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)

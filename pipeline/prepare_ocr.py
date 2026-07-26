@@ -143,7 +143,12 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
         is_dup, dup_of = _is_duplicate_image(inpath)
         if is_dup:
             rel = os.path.relpath(inpath, md_path.parent)
-            dup_note = f" (duplicate of `{dup_of.name}`)" if dup_of else ""
+            # Relative path, not just basename -- a corpus with many
+            # same-named email attachments (image001.png, signature.jpg, ...)
+            # across different subfolders needs this to disambiguate which
+            # file the duplicate actually matches.
+            dup_rel = os.path.relpath(dup_of, md_path.parent) if dup_of else None
+            dup_note = f" (duplicate of `{dup_rel}`)" if dup_rel else ""
             content = (f"![{inpath.name}]({rel})\n\n"
                        f"*Image skipped — duplicate of previously processed image{dup_note}.*\n")
             md_path.write_text(content, encoding="utf-8")

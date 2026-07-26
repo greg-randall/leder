@@ -36,6 +36,58 @@ def test_passthrough_text_is_byte_for_byte(tmp_path):
     assert (tmp_path / "d.csv.md").read_bytes() == src.read_bytes()  # CRLF preserved
 
 
+def test_process_file_reflows_long_line_through_finish(tmp_path, monkeypatch):
+    """Proves the real wiring: process_file -> _finish -> _reflow_md_file_in_place,
+    not just reflow_pipeline_text() called in isolation. A converter that bypasses
+    _finish with a stub returning one line well over the 300-char threshold must
+    come out wrapped once process_file has run, because _finish re-flows the
+    written .md file in place on the way out.
+    """
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    long_line = " ".join(["word"] * 100)  # 499 chars, no sentence punctuation
+    assert len(long_line) > 300
+
+    def fake_ocr_image(inp, outp, vc):
+        outp.write_text(long_line)
+        return True, len(long_line), "tesseract", "image transcribed via OCR"
+
+    monkeypatch.setattr(p1, "ocr_image", fake_ocr_image)
+    rel, status, method, note = p1.process_file(
+        src_root / "x.png", src_root, corpus, VISION_CFG, None, True)
+    assert status == "ok"
+    md = (corpus / "x.png.md").read_text()
+    assert "\n" in md
+    for line in md.split("\n"):
+        assert len(line) <= 300
+    # Confirm no words were lost or altered by the wrap.
+    assert md.split() == long_line.split()
+
+
+def test_process_file_passthrough_text_not_reflowed(tmp_path):
+    """Proves reflow=False actually suppresses reflow at its real call site:
+    process_file's text-native branch calls _finish(..., md_path, reflow=False).
+    A long single line routed through passthrough_text must survive untouched —
+    still exactly one line, byte-for-byte — not wrapped like every other branch.
+    """
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    long_line = " ".join(["word"] * 100)  # 499 chars, over the reflow threshold
+    assert len(long_line) > 300
+    (src_root / "wells.csv").write_text(long_line)
+
+    rel, status, method, note = p1.process_file(
+        src_root / "wells.csv", src_root, corpus, VISION_CFG, None, True,
+        md_client=None, text_native_exts={".csv"})
+    assert status == "ok" and method == "text-passthrough"
+    out = (corpus / "wells.csv.md").read_text()
+    assert out == long_line
+    assert "\n" not in out
+
+
 def test_text_native_routes_to_passthrough_not_converter(tmp_path):
     """A .csv is copied through verbatim, not converted to a pipe table.
 

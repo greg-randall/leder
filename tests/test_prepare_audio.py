@@ -47,6 +47,30 @@ def test_convert_audio_no_speech(tmp_path):
     assert ok and "no speech detected" in md
 
 
+def test_convert_audio_reflows_long_transcript(tmp_path):
+    """convert_audio calls reflow_pipeline_text on the transcript itself (not
+    just via process_file's separate guard) -- a long, unpunctuated single
+    segment must come out wrapped, proving that line actually fires rather
+    than being a no-op like every existing short-transcript fixture here."""
+    long_text = " ".join(["word"] * 100)  # 499 chars, one segment, no punctuation
+    assert len(long_text) > 300
+
+    class FakeModel:
+        def transcribe(self, path):
+            return [_Seg(long_text)], _Info()
+
+    ok, size, method, note = pa.convert_audio(tmp_path / "a.mp3", tmp_path / "a.md", FakeModel())
+    md = (tmp_path / "a.md").read_text()
+    assert ok
+
+    body = md.split("---\n\n", 1)[1]
+    assert "\n" in body
+    for line in body.split("\n"):
+        assert len(line) <= 120
+    # Confirm no words were lost or altered by the wrap.
+    assert body.split() == long_text.split()
+
+
 def test_get_whisper_model_cpu_fallback_warns(monkeypatch, capsys):
     monkeypatch.setattr(pa, "_HAS_WHISPER", True)
     monkeypatch.setattr(pa, "_cuda_available", lambda: False)

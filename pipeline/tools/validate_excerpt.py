@@ -31,34 +31,27 @@ def _clean(s: str) -> str:
 
 def _chunk_document(text: str, max_chunk: int = 800) -> list[tuple[str, int, int]]:
     """Split text into sentence-boundary chunks, each with its (start, end)
-    character offsets. Chunks longer than max_chunk are split further at
-    word boundaries."""
+    character offsets. Chunks longer than max_chunk are kept as-is rather
+    than sub-split (find_quote_position handles them fine, and any
+    sentence-sized passage is still much smaller than the full document).
+    Avoiding sub-splitting eliminates synthetic-string offset math errors."""
     chunks: list[tuple[str, int, int]] = []
     for m in re.finditer(r'[^.!?\n]+[.!?\n]?', text):
-        chunk = m.group()
-        cs, ce = m.start(), m.end()
-        if len(chunk) <= max_chunk:
-            chunks.append((chunk, cs, ce))
-        else:
-            words = chunk.split()
-            sub_start = cs
-            for i in range(0, len(words), 60):
-                sub = ' '.join(words[i:i + 60])
-                sub_end = sub_start + len(sub)
-                chunks.append((sub, sub_start, sub_end))
-                sub_start = sub_end + 1  # +1 for the space between sub-chunks
+        chunks.append((m.group(), m.start(), m.end()))
     return chunks
 
 
 def _score_chunks(candidate_clean: str, chunks: list[tuple[str, int, int]]) -> list[tuple[int, float]]:
-    """Score each chunk by word-overlap with the candidate. Returns [(idx, score), ...]."""
+    """Score each chunk by word-overlap with the candidate, normalised to
+    [0.0, 1.0] as the fraction of needle words present in the chunk.
+    Returns [(idx, score), ...]."""
     needle_words = set(candidate_clean.split())
     if not needle_words:
         return [(i, 0.0) for i in range(len(chunks))]
     scores = []
     for i, (chunk_text, _, _) in enumerate(chunks):
         chunk_words = set(_clean(chunk_text).split())
-        scores.append((i, len(needle_words & chunk_words)))
+        scores.append((i, len(needle_words & chunk_words) / len(needle_words)))
     return scores
 
 

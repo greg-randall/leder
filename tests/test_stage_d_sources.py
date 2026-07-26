@@ -106,7 +106,7 @@ def test_resolve_cited_sources_corpus_path(tmp_path):
     entry = resolved["docs/a.md"]
     assert entry["kind"] == "corpus"
     assert entry["local_path"] == str(corpus / "docs" / "a.md")
-    assert entry["excerpts"] == [("corpus content", "fn1", "PASS")]
+    assert entry["excerpts"] == [("corpus content", "fn1", "PASS", None)]
 
 
 def test_resolve_cited_sources_web_cache_snapshot(tmp_path):
@@ -124,7 +124,7 @@ def test_resolve_cited_sources_web_cache_snapshot(tmp_path):
     entry = resolved["fn2"]
     assert entry["kind"] == "web"
     assert entry["local_path"] == str(wc / "page.md")
-    assert entry["excerpts"] == [("fetched page content", "fn2", "WARNING")]
+    assert entry["excerpts"] == [("fetched page content", "fn2", "WARNING", None)]
 
 
 def test_resolve_cited_sources_failed_fetch_placeholder_not_resolved(tmp_path):
@@ -155,8 +155,8 @@ def test_resolve_cited_sources_multiple_findings_same_document(tmp_path):
 
     assert len(resolved) == 1
     assert resolved["a.md"]["excerpts"] == [
-        ("First bit", "fn1", "PASS"),
-        ("Second bit", "fn2", "CRITICAL"),
+        ("First bit", "fn1", "PASS", None),
+        ("Second bit", "fn2", "CRITICAL", None),
     ]
 
 
@@ -182,7 +182,7 @@ def test_render_source_document_highlights_found_excerpt():
     from pipeline.stage_d_sources import render_source_document
 
     text = "First paragraph here.\n\nThe facility injects 20000 barrels a day."
-    html, not_found = render_source_document(text, [("injects 20000 barrels a day", "fn1", "WARNING")])
+    html, not_found = render_source_document(text, [("injects 20000 barrels a day", "fn1", "WARNING", None)])
 
     assert not_found == []
     assert '<mark id="exc-fn1"' in html
@@ -193,7 +193,7 @@ def test_render_source_document_reports_not_found_excerpt_without_failing():
     from pipeline.stage_d_sources import render_source_document
 
     text = "This document says nothing relevant."
-    html, not_found = render_source_document(text, [("a phrase that is not in the text", "fn2", "CRITICAL")])
+    html, not_found = render_source_document(text, [("a phrase that is not in the text", "fn2", "CRITICAL", None)])
 
     assert not_found == ["fn2"]
     assert "This document says nothing relevant." in html
@@ -205,8 +205,8 @@ def test_render_source_document_multiple_excerpts_some_found_some_not():
 
     text = "The vote passed six to one. Nothing else notable happened."
     html, not_found = render_source_document(text, [
-        ("vote passed six to one", "fn1", "PASS"),
-        ("a completely absent phrase", "fn2", "CRITICAL"),
+        ("vote passed six to one", "fn1", "PASS", None),
+        ("a completely absent phrase", "fn2", "CRITICAL", None),
     ])
 
     assert not_found == ["fn2"]

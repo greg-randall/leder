@@ -13,8 +13,6 @@ import subprocess
 import sys
 from pathlib import Path as _Path
 
-from pipeline.stage_c_rebuild import find_quote_position
-
 _FAILED_FETCH_PREFIX = "(failed to fetch "
 _FETCH_PAGE_SCRIPT = str(_Path(__file__).resolve().parent / "tools" / "fetch_page.py")
 
@@ -70,7 +68,7 @@ def resolve_cited_sources(
     """Map cited findings to their resolvable source documents.
 
     Returns {key: {"kind": "corpus"|"web", "local_path": str,
-                   "original_path": str | None, "excerpts": [(excerpt, finding_id, severity)]}}
+                   "original_path": str | None, "excerpts": [(excerpt, finding_id, severity, offset)]}}
     keyed by source_path (corpus documents) or finding_id (web-sourced findings).
     Findings whose source can't be resolved (missing file, failed-fetch
     placeholder, or neither source_path nor source_url set) are skipped.
@@ -83,6 +81,7 @@ def resolve_cited_sources(
         finding_id = f["finding_id"]
         severity = f["severity"]
         excerpt = f.get("source_excerpt") or ""
+        offset = f.get("source_excerpt_offset")
 
         if source_path:
             # Normalize: if source_path is absolute and lives under
@@ -128,13 +127,13 @@ def resolve_cited_sources(
                 "kind": kind, "local_path": local_path,
                 "original_path": None, "excerpts": [],
             }
-        resolved[key]["excerpts"].append((excerpt, finding_id, severity))
+        resolved[key]["excerpts"].append((excerpt, finding_id, severity, offset))
 
     return resolved
 
 
 def render_source_document(
-    text: str, excerpts: list[tuple[str, str, str]],
+    text: str, excerpts: list[tuple[str, str, str, list[int] | None]],
     highlight_margin: int = 10,
 ) -> tuple[str, list[str]]:
     """Render a source document's raw text to paragraph-wrapped HTML with
@@ -145,13 +144,17 @@ def render_source_document(
     spans: list[tuple[int, int, str, str]] = []
     not_found: list[str] = []
 
-    for excerpt, finding_id, severity in excerpts:
-        pos = _locate_excerpt(excerpt, text, finding_id, highlight_margin)
-        if pos is None:
-            not_found.append(finding_id)
-            continue
-        start, end = pos
-        spans.append((start, end, finding_id, severity))
+    for excerpt, finding_id, severity, offset in excerpts:
+        if offset and len(offset) == 2 and 0 <= offset[0] < offset[1] <= len(text):
+            # Use the agent-verified position directly -- no search needed.
+            spans.append((offset[0], offset[1], finding_id, severity))
+        else:
+            pos = _locate_excerpt(excerpt, text, finding_id, highlight_margin)
+            if pos is None:
+                not_found.append(finding_id)
+                continue
+            start, end = pos
+            spans.append((start, end, finding_id, severity))
 
     marked = mark_excerpts(text, spans)
 
@@ -169,132 +172,18 @@ def render_source_document(
 
 def _locate_excerpt(excerpt: str, text: str, finding_id: str = "?",
                     highlight_margin: int = 10) -> tuple[int, int] | None:
-    """Find an excerpt in a source document.
+    """Find an excerpt in a source document via exact substring match only.
 
-    1. Exact substring match (fast path).
-    2. For short docs: Levenshtein via find_quote_position.
-    3. For long docs: word-overlap to find the best region, then narrow the
-       highlight to the substring where matching words cluster.
+    The verification agent now calls validate_excerpt to confirm position
+    data at verification time -- this function is a fallback for findings
+    that reach stage D without offset data.
     """
-    import re as _re
-
-    def _clean(s: str) -> str:
-        return _re.sub(r'[^a-zA-Z0-9 ]', '', s.lower())
-
-    # Fast path: exact substring (case-insensitive).
     idx = text.lower().find(excerpt.lower())
     if idx >= 0:
         return (idx, idx + len(excerpt))
-
-    # For short documents, use Levenshtein directly.
-    if len(text) < 4000:
-        pos = find_quote_position(excerpt, text)
-        if pos is None:
-            print(f"  ⚠ [{finding_id}] excerpt not found in short doc "
-                  f"({len(text)} chars)")
-        return pos
-
-    needle_words = _clean(excerpt).split()
-    if not needle_words:
-        return None
-    needle_set = set(needle_words)
-
-    # Split into chunks.  Try sentence boundaries first, but cap at
-    # 800 chars for transcripts with no punctuation.
-    raw_chunks: list[str] = []
-    raw_offsets: list[tuple[int, int]] = []
-    for m in _re.finditer(r'[^.!?\n]+[.!?\n]?', text):
-        raw_chunks.append(m.group())
-        raw_offsets.append((m.start(), m.end()))
-
-    MAX_CHUNK = 800
-    chunks: list[str] = []
-    offsets: list[tuple[int, int]] = []
-    for chunk, (cs, ce) in zip(raw_chunks, raw_offsets):
-        if len(chunk) <= MAX_CHUNK:
-            chunks.append(chunk)
-            offsets.append((cs, ce))
-        else:
-            sub_start = cs
-            words = chunk.split()
-            i = 0
-            while i < len(words):
-                sub = ' '.join(words[i:i + 60])
-                sub_end = sub_start + len(sub)
-                chunks.append(sub)
-                offsets.append((sub_start, sub_end))
-                sub_start = sub_end + 1
-                i += 60
-
-    # Score each chunk by word overlap.
-    chunk_scores = []
-    for s in chunks:
-        s_words = set(_clean(s).split())
-        chunk_scores.append(len(needle_set & s_words))
-    best_idx = max(range(len(chunk_scores)), key=lambda i: chunk_scores[i])
-    best_score = chunk_scores[best_idx]
-
-    # If single-chunk score is too low, try a 3-chunk sliding window.
-    if best_score < len(needle_words) * 0.15 and len(chunks) > 3:
-        for i in range(len(chunks) - 2):
-            window_words: set[str] = set()
-            for j in range(i, i + 3):
-                window_words |= set(_clean(chunks[j]).split())
-            score = len(needle_set & window_words)
-            if score > best_score:
-                best_score = score
-                best_idx = i
-
-    if best_score < max(2, len(needle_words) * 0.2):
-        print(f"  ⚠ [{finding_id}] no chunk with meaningful word overlap "
-              f"(best={best_score}/{len(needle_words)} words)")
-        return None
-
-    # Use a 3-chunk window around the best chunk for the highlight region.
-    win_start = max(0, best_idx - 1)
-    win_end = min(len(chunks), best_idx + 2)
-    region_start = offsets[win_start][0]
-    region_end = offsets[win_end - 1][1]
-    region_text = text[region_start:region_end]
-
-    # Narrow within the region: find first and last matching word position,
-    # add a small margin for readability.
-    clean_rwords = _clean(region_text).split()
-    first_idx = len(clean_rwords)
-    last_idx = -1
-    for nw in needle_words:
-        try:
-            wi = clean_rwords.index(nw)
-            first_idx = min(first_idx, wi)
-            for j in range(len(clean_rwords) - 1, -1, -1):
-                if clean_rwords[j] == nw:
-                    last_idx = max(last_idx, j)
-                    break
-        except ValueError:
-            pass
-
-    if last_idx < 0:
-        return (region_start, region_end)
-
-    first_idx = max(0, first_idx - highlight_margin)
-    last_idx = min(len(clean_rwords) - 1, last_idx + highlight_margin)
-
-    word_positions = [(m.start(), m.end()) for m in _re.finditer(r'\S+', region_text)]
-    if first_idx < len(word_positions) and last_idx < len(word_positions):
-        char_start = word_positions[first_idx][0]
-        char_end = word_positions[last_idx][1]
-    else:
-        char_start = 0
-        char_end = len(region_text)
-
-    result_start = region_start + char_start
-    result_end = region_start + char_end
-    result_len = result_end - result_start
-    if result_len > 500:
-        print(f"  ⚠ [{finding_id}] highlight is {result_len} chars "
-              f"(word-overlap={best_score}/{len(needle_words)})")
-
-    return (result_start, result_end)
+    print(f"  ⚠ [{finding_id}] excerpt not found via exact match "
+          f"({len(text)} chars, no offset data)")
+    return None
 
 
 def _run_fetch_page(url: str, target_id: str, cache_dir: str) -> None:

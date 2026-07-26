@@ -109,6 +109,7 @@ _STYLE = """<style>
     background: #fff; width: 94vw; height: 92vh; border-radius: 8px;
     display: flex; flex-direction: column; overflow: hidden;
     box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    position: relative;
   }
   .src-modal-close {
     position: absolute; top: 1.2rem; left: 1.5rem; font-size: 1.8rem;
@@ -563,7 +564,10 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
         elif line.strip().startswith("Matched:") and cur:
             cur["matched"] = line.strip()[8:].strip().strip('"')
         elif line.strip().startswith("Recommendation:") and cur:
-            cur["recommendation"] = line.strip()[len("Recommendation:"):].strip()
+            raw = line.strip()[len("Recommendation:"):].strip()
+            if raw.lower() in ("null", "none", ""):
+                raw = ""
+            cur["recommendation"] = raw
         elif line.strip().startswith("Source:") and cur:
             cur["source"] = line.strip()[7:].strip()
             if _is_generated_summary_source(cur["source"]):
@@ -597,14 +601,15 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
             extra_attrs += f' data-finding-id="{_escape(finding_id)}"'
         finding = findings_list[idx] if finding_id else {}
         context = finding.get("context", "")
+        rec = _escape(c["recommendation"])
         html_parts.append(
             f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}"{extra_attrs}>'
             f'<span class="badge {vclass}">{_escape(raw)}</span>'
             f'<span class="claim">{_escape(c["claim"])}</span>'
             f'<span class="rationale">{_escape(c["rationale"])}</span>'
             f'<span class="matched">{_escape(c["matched"])}</span>'
-            f'<span class="recommendation">{_escape(c["recommendation"])}</span>'
-            f'<span class="context">{_escape(context)}</span>'
+            + (f'<span class="recommendation">{rec}</span>' if rec else '')
+            + f'<span class="context">{_escape(context)}</span>'
             f'<span class="src-link">{_escape(c["source"])}</span>'
             f'<span class="flags">{_escape(c["flags"])}</span>'
             f'</div>'

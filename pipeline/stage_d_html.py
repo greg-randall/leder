@@ -600,7 +600,7 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
         if finding_id:
             extra_attrs += f' data-finding-id="{_escape(finding_id)}"'
         finding = findings_list[idx] if finding_id else {}
-        context = finding.get("context", "")
+        context = finding.get("context") or finding.get("target_text", "")
         rec = _escape(c["recommendation"])
         html_parts.append(
             f'<div class="source {vclass}" id="fn{c["id"]}" data-severity="{severity}"{extra_attrs}>'

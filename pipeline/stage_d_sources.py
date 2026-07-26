@@ -85,15 +85,29 @@ def resolve_cited_sources(
         excerpt = f.get("source_excerpt") or ""
 
         if source_path:
-            key = source_path
-            local_path = os.path.join(corpus_root, source_path)
+            # Normalize: if source_path is absolute and lives under
+            # corpus_root, make it relative so it keys and copies correctly.
+            if os.path.isabs(source_path):
+                corpus_root_abs = os.path.abspath(corpus_root)
+                if source_path.startswith(corpus_root_abs + os.sep):
+                    key = os.path.relpath(source_path, corpus_root_abs)
+                    local_path = source_path
+                else:
+                    continue  # points outside the corpus
+            else:
+                key = source_path
+                local_path = os.path.join(corpus_root, source_path)
             if not os.path.exists(local_path):
+                continue
+            if not os.path.isfile(local_path):
                 continue
             kind = "corpus"
         elif source_url:
             key = finding_id
             local_path = os.path.join(web_cache_dir, finding_id, "page.md")
             if not os.path.exists(local_path):
+                continue
+            if not os.path.isfile(local_path):
                 continue
             with open(local_path, encoding="utf-8") as fh:
                 content = fh.read()
@@ -125,7 +139,7 @@ def render_source_document(
     not_found: list[str] = []
 
     for excerpt, finding_id, severity in excerpts:
-        pos = find_quote_position(excerpt, text)
+        pos = _locate_excerpt(excerpt, text)
         if pos is None:
             not_found.append(finding_id)
             continue
@@ -144,6 +158,63 @@ def render_source_document(
     html = "\n".join(blocks)
 
     return html, not_found
+
+
+def _locate_excerpt(excerpt: str, text: str) -> tuple[int, int] | None:
+    """Find an excerpt in a source document using fast word-overlap scoring.
+
+    Exact substring match (case-insensitive) is tried first.  For approximate
+    matches (common in transcripts where the LLM's extracted quote isn't
+    verbatim), the text is split at sentence boundaries and scored by word
+    overlap to locate the best-matching region in O(n) time."""
+    import re as _re
+
+    # Fast path: exact substring (case-insensitive).
+    idx = text.lower().find(excerpt.lower())
+    if idx >= 0:
+        return (idx, idx + len(excerpt))
+
+    # For short documents, use the full Levenshtein search directly.
+    if len(text) < 4000:
+        return find_quote_position(excerpt, text)
+
+    # For long documents: split at sentence boundaries, score each sentence
+    # by word overlap with the excerpt, then pick the best-scoring contiguous
+    # region as the match span.
+    needle_words = _re.sub(r'[^a-zA-Z0-9 ]', '', excerpt.lower()).split()
+    if not needle_words:
+        return None
+    needle_set = set(needle_words)
+
+    # Split into sentences (on . ! ? followed by space/newline).  Track
+    # character offsets via finditer so duplicate sentence text doesn't
+    # confuse position tracking.
+    sentences: list[str] = []
+    offsets: list[tuple[int, int]] = []
+    for m in _re.finditer(r'[^.!?\n]+[.!?]?', text):
+        s = m.group()
+        sentences.append(s)
+        offsets.append((m.start(), m.end()))
+
+    # Score each sentence by word overlap with the needle.
+    best_start = 0
+    best_end = 0
+    best_score = 0
+    window = max(3, len(sentences) // 20)  # search ~5% of sentences at a time
+
+    for i in range(len(sentences) - window + 1):
+        combined = ' '.join(sentences[i:i + window])
+        combined_words = set(_re.sub(r'[^a-zA-Z0-9 ]', '', combined.lower()).split())
+        score = len(needle_set & combined_words)
+        if score > best_score:
+            best_score = score
+            best_start = offsets[i][0]
+            best_end = offsets[i + window - 1][1]
+
+    if best_score < max(2, len(needle_words) * 0.2):
+        return None
+
+    return (best_start, best_end)
 
 
 def _run_fetch_page(url: str, target_id: str, cache_dir: str) -> None:

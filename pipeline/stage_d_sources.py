@@ -135,6 +135,7 @@ def resolve_cited_sources(
 
 def render_source_document(
     text: str, excerpts: list[tuple[str, str, str]],
+    highlight_margin: int = 10,
 ) -> tuple[str, list[str]]:
     """Render a source document's raw text to paragraph-wrapped HTML with
     its cited excerpts highlighted. Returns (html, not_found_finding_ids)
@@ -145,7 +146,7 @@ def render_source_document(
     not_found: list[str] = []
 
     for excerpt, finding_id, severity in excerpts:
-        pos = _locate_excerpt(excerpt, text, finding_id)
+        pos = _locate_excerpt(excerpt, text, finding_id, highlight_margin)
         if pos is None:
             not_found.append(finding_id)
             continue
@@ -166,7 +167,8 @@ def render_source_document(
     return html, not_found
 
 
-def _locate_excerpt(excerpt: str, text: str, finding_id: str = "?") -> tuple[int, int] | None:
+def _locate_excerpt(excerpt: str, text: str, finding_id: str = "?",
+                    highlight_margin: int = 10) -> tuple[int, int] | None:
     """Find an excerpt in a source document.
 
     1. Exact substring match (fast path).
@@ -274,8 +276,8 @@ def _locate_excerpt(excerpt: str, text: str, finding_id: str = "?") -> tuple[int
     if last_idx < 0:
         return (region_start, region_end)
 
-    first_idx = max(0, first_idx - 3)
-    last_idx = min(len(clean_rwords) - 1, last_idx + 3)
+    first_idx = max(0, first_idx - highlight_margin)
+    last_idx = min(len(clean_rwords) - 1, last_idx + highlight_margin)
 
     word_positions = [(m.start(), m.end()) for m in _re.finditer(r'\S+', region_text)]
     if first_idx < len(word_positions) and last_idx < len(word_positions):
@@ -367,6 +369,7 @@ def write_missing_snapshots_report(output_dir: str, still_missing: list[tuple[st
 
 def build_sources_folder(
     findings: list[dict], corpus_root: str, web_cache_dir: str, output_dir: str,
+    highlight_margin: int = 10,
 ) -> dict[str, str]:
     """Build {output_dir}/sources/ and return {resolve_key: output_relative_html_path}."""
     print(f"Resolving source documents for {len(findings)} findings...")
@@ -381,7 +384,8 @@ def build_sources_folder(
         print(f"  [{i}/{n}] Rendering {key}...", end=" ", flush=True)
         with open(entry["local_path"], encoding="utf-8") as fh:
             text = fh.read()
-        html, _not_found = render_source_document(text, entry["excerpts"])
+        html, _not_found = render_source_document(
+            text, entry["excerpts"], highlight_margin=highlight_margin)
         print("done.")
 
         if entry["kind"] == "corpus":

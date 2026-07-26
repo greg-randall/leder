@@ -481,7 +481,8 @@ def main() -> None:
             print(f"ERROR: {input_path} not found. Run stage-c first to generate it.",
                   file=sys.stderr)
             sys.exit(1)
-        run_stage_d(input_path, findings_path, output_dir, corpus_root, web_cache_dir)
+        run_stage_d(input_path, findings_path, output_dir, corpus_root, web_cache_dir,
+                    highlight_margin=config.stage_d.highlight_margin)
         print(f"Stage D complete: {output_dir}/article.html")
 
     # --- Stage E: .docx with comments ---

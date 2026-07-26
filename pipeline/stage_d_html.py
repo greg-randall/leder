@@ -388,7 +388,8 @@ def _escape(text: str) -> str:
 
 
 def convert(article_sourced_md: str, findings_path: str, output_dir: str,
-            corpus_root: str, web_cache_dir: str) -> None:
+            corpus_root: str, web_cache_dir: str,
+            highlight_margin: int = 10) -> None:
     with open(article_sourced_md, encoding="utf-8") as f:
         md = f.read()
 
@@ -397,6 +398,7 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
         findings_doc = json.load(f)
     source_key_map = build_sources_folder(
         findings_doc.get("findings", []), corpus_root, web_cache_dir, output_dir,
+        highlight_margin=highlight_margin,
     )
     # _render_sources parses the "Source:" line stage-c already wrote into the
     # sourced markdown, verbatim -- and stage_c_rebuild.py wraps corpus
@@ -769,6 +771,8 @@ def _render_unplaced(text: str) -> str:
 
 
 def run_stage_d(article_sourced_md: str, findings_path: str, output_dir: str,
-                corpus_root: str, web_cache_dir: str) -> str:
-    convert(article_sourced_md, findings_path, output_dir, corpus_root, web_cache_dir)
+                corpus_root: str, web_cache_dir: str,
+                highlight_margin: int = 10) -> str:
+    convert(article_sourced_md, findings_path, output_dir, corpus_root, web_cache_dir,
+            highlight_margin=highlight_margin)
     return os.path.join(output_dir, "article.html")

@@ -58,6 +58,11 @@ class StageCConfig:
 
 
 @dataclass
+class StageDConfig:
+    highlight_margin: int = 10  # words before/after matched region in source viewer
+
+
+@dataclass
 class VisionFallbackConfig:
     enabled: bool = True
     model: str = "gpt-4o-mini"
@@ -142,6 +147,7 @@ class PipelineConfig:
     stage_a: StageAConfig = field(default_factory=StageAConfig)
     stage_b: StageBConfig = field(default_factory=StageBConfig)
     stage_c: StageCConfig = field(default_factory=StageCConfig)
+    stage_d: StageDConfig = field(default_factory=StageDConfig)
     prepare: PrepareConfig = field(default_factory=PrepareConfig)
     pricing: dict = field(default_factory=dict)
     project_root: str = ""
@@ -179,6 +185,7 @@ class PipelineConfig:
             stage_a=StageAConfig(**raw.get("stage_a", {})),
             stage_b=StageBConfig(**raw.get("stage_b", {})),
             stage_c=StageCConfig(**raw.get("stage_c", {})),
+            stage_d=StageDConfig(**raw.get("stage_d", {})),
             prepare=PrepareConfig.from_raw(raw.get("prepare")),
             pricing=raw.get("pricing", {}),
         )

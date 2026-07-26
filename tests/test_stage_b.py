@@ -796,3 +796,36 @@ def test_verify_claim_async_fetch_page_command_uses_absolute_path(monkeypatch):
     assert "/corpus/web_cache" in prompt
     # Must be an absolute path to the script, not the bare relative form
     assert "python3 pipeline/tools/fetch_page.py" not in prompt
+
+
+# ── FindingOutput source_excerpt_offset / source_excerpt_similarity ──
+
+def test_finding_output_schema_includes_offset_and_similarity_fields():
+    """FindingOutput schema should declare the new optional fields."""
+    from pipeline.stage_b_verify import FindingOutput
+    schema = FindingOutput.model_json_schema()
+    props = schema["properties"]
+    assert "source_excerpt_offset" in props
+    assert "source_excerpt_similarity" in props
+
+
+def test_finding_output_accepts_new_fields():
+    """FindingOutput should accept source_excerpt_offset and source_excerpt_similarity."""
+    from pipeline.stage_b_verify import FindingOutput
+    f = FindingOutput(
+        severity="PASS",
+        agent_summary="test",
+        source_excerpt="road commission issued a notice",
+        source_excerpt_offset=[1423, 1507],
+        source_excerpt_similarity=1.0,
+    )
+    assert f.source_excerpt_offset == [1423, 1507]
+    assert f.source_excerpt_similarity == 1.0
+
+
+def test_finding_output_defaults_new_fields_to_none():
+    """Both source_excerpt_offset and source_excerpt_similarity should default to None."""
+    from pipeline.stage_b_verify import FindingOutput
+    f = FindingOutput(severity="PASS", agent_summary="test")
+    assert f.source_excerpt_offset is None
+    assert f.source_excerpt_similarity is None

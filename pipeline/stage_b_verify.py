@@ -65,8 +65,21 @@ class FindingOutput(BaseModel):
     source_excerpt: Optional[str] = Field(
         default=None,
         description=(
-            "Verbatim text copied from the source that supports or "
-            "contradicts the claim."
+            "Actual text from the source file as returned by validate_excerpt. "
+            "Guaranteed to be a verbatim substring of the source document. "
+            "Populated from the tool's 'actual_text' field, never from the agent's own wording."
+        ),
+    )
+    source_excerpt_offset: Optional[list[int]] = Field(
+        default=None,
+        description="[start_char, end_char] character positions in the source document, from validate_excerpt.",
+    )
+    source_excerpt_similarity: Optional[float] = Field(
+        default=None,
+        description=(
+            "1.0 if exact match from validate_excerpt; lower if fuzzy-matched via Levenshtein. "
+            "Null if validate_excerpt was not called or returned found=false. "
+            "Informs confidence — a 0.62 match should lower confidence vs. a 1.0 match."
         ),
     )
     confidence: Optional[float] = Field(
@@ -503,6 +516,10 @@ def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
     Synthesizes claim.verdict from data["severity"] -- the shared Claim
     model (and stage-c's rendering) still key off verdict internally, even
     though only FindingOutput (severity-keyed) data ever arrives now.
+
+    Fields the Claim model doesn't carry (recommended_action, metadata,
+    source_excerpt_offset, source_excerpt_similarity) pass through via
+    _raw_output, which the caller stashes from the full structured output dict.
     """
     # severity -> verdict mapping (new FindingOutput schema)
     if "verdict" not in data and "severity" in data:

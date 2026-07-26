@@ -113,10 +113,21 @@ Search top-down through whatever levels exist for this corpus:
    it, treat it as unconfirmed. NOTE: some `.md` files are image stubs
    (containing "Image skipped") -- these have no extractable text; skip them
    as evidence sources.
-5. `web_cache/` -- pages a previous verification agent already fetched. Check
+5. VALIDATE EXCERPT (MANDATORY) -- before reporting any source_excerpt, you MUST
+   call `python3 pipeline/tools/validate_excerpt.py <source_path> "<candidate>"`
+   with the source file path and the text you believe supports the claim. The tool
+   returns the ACTUAL text from the source (never your paraphrase) and its match
+   position. Use the returned `actual_text` as `source_excerpt` and the returned
+   `offset` as `source_excerpt_offset` -- never your own wording. If the tool
+   returns `{{"found": false}}`, you may: (a) try a different candidate excerpt,
+   (b) lower your confidence and set `human_review: true`, or (c) report the
+   finding as unverifiable in this corpus. You may NOT fabricate a source_excerpt
+   that the tool did not confirm. Findings verified against web sources
+   (source_url, no local source_path) do not need to call this tool.
+6. `web_cache/` -- pages a previous verification agent already fetched. Check
    `web_cache/_FOLDER_SUMMARY.md` BEFORE fetching a new URL; a prior agent may
    have already cached the page you need.
-6. THE WEB -- see "Corroboration" below. Not just a fallback for missing local
+7. THE WEB -- see "Corroboration" below. Not just a fallback for missing local
    information.
 
 `source_path` format: relative to the corpus root, exactly as the file exists

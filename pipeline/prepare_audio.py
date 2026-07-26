@@ -173,12 +173,14 @@ def convert_audio(inpath: Path, md_path: Path, whisper_model):
               file=sys.stderr)
         return False, 0, "whisper-error", None
 
+    from pipeline.prepare_reflow import reflow_pipeline_text
+
     lang = getattr(info, "language", "?")
     dur = getattr(info, "duration", 0.0) or 0.0
     header = (f"# Audio transcript: {inpath.name}\n\n"
               f"**Language:** {lang}  |  **Duration:** {dur:.0f}s  "
               f"|  *Transcribed locally via faster-whisper*\n\n---\n\n")
-    body = transcript if transcript else "*(no speech detected)*"
+    body = reflow_pipeline_text(transcript) if transcript else "*(no speech detected)*"
     content = header + body
     md_path.write_text(content, encoding="utf-8")
     note = ("audio transcribed via whisper" if transcript

@@ -444,10 +444,16 @@ def convert_subtitle(inpath: Path, md_path: Path):
                 lines.append(line)
                 last_line = line
 
-    content = " ".join(lines).strip()
-    if not content:
+    transcript = " ".join(lines).strip()
+    if not transcript:
         return False, 0, "pycaption-empty", None
-    content += "\n"
+    header = (
+        f"# Transcript: {inpath.name}\n\n"
+        "*Extracted from a caption file; cue numbers and timestamps removed; "
+        "consecutive duplicate caption lines collapsed. Original file preserved "
+        "alongside.*\n\n---\n\n"
+    )
+    content = header + transcript + "\n"
     _write_md(md_path, content)
     return True, len(content), "pycaption-transcript", None
 
@@ -531,10 +537,25 @@ def is_meaningful(content: str) -> bool:
 
 # ── Dispatch ──────────────────────────────────────────────────
 
-def _finish(relpath: Path, result):
-    """Turn an (ok, size, method, note) converter result into a process_file tuple."""
+def _reflow_md_file_in_place(md_path: Path) -> None:
+    from pipeline.prepare_reflow import reflow_pipeline_text
+    text = md_path.read_text(encoding="utf-8", errors="replace")
+    reflowed = reflow_pipeline_text(text)
+    if reflowed != text:
+        md_path.write_text(reflowed, encoding="utf-8")
+
+
+def _finish(relpath: Path, result, md_path: Path | None = None, reflow: bool = True):
+    """Turn an (ok, size, method, note) converter result into a process_file tuple.
+
+    Re-flows the written .md file in place on success, unless reflow=False
+    (used only for passthrough_text, whose byte-for-byte-identical guarantee
+    must never be touched).
+    """
     ok, size, method, note = result
     if ok:
+        if reflow and md_path is not None:
+            _reflow_md_file_in_place(md_path)
         return str(relpath), "ok", method, note
     return str(relpath), "fail", f"{method} produced no usable text", None
 
@@ -567,12 +588,13 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
 
     # Images -> our OCR path (MarkItDown has no local OCR).
     if ext in IMAGE_EXTS:
-        return _finish(relpath, ocr_image(filepath, md_path, vision_cfg))
+        return _finish(relpath, ocr_image(filepath, md_path, vision_cfg), md_path)
 
     # Audio -> local whisper (MarkItDown uses network Google Web Speech).
     if ext in AUDIO_EXTS:
         ok, size, method, note = convert_audio(filepath, md_path, whisper_model)
         if ok:
+            _reflow_md_file_in_place(md_path)
             return str(relpath), "ok", method, note
         return str(relpath), "fail", f"audio not transcribed ({method})", None
 
@@ -585,28 +607,29 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
                 if is_meaningful(text) and not is_garbled(
                     text, language=vision_cfg.get("language", "en")):
                     return str(relpath), "ok", method, None
-        return _finish(relpath, ocr_pdf(filepath, md_path, vision_cfg))
+        return _finish(relpath, ocr_pdf(filepath, md_path, vision_cfg), md_path)
 
     # .msg / .eml -> our extractors (MarkItDown only gets body, not attachments).
     if ext == ".msg":
-        return _finish(relpath, convert_msg(filepath, md_path))
+        return _finish(relpath, convert_msg(filepath, md_path), md_path)
     if ext == ".eml":
-        return _finish(relpath, convert_eml(filepath, md_path))
+        return _finish(relpath, convert_eml(filepath, md_path), md_path)
 
     # Already-text formats (.csv, .txt, .json, source code, …) -> copy verbatim.
     # These are readable as-is; the converter would only reformat/bloat them.
     if ext in text_native_exts:
-        return _finish(relpath, passthrough_text(filepath, md_path))
+        return _finish(relpath, passthrough_text(filepath, md_path), md_path, reflow=False)
 
     # .srt / .vtt -> our own pycaption based extractor (not through
     # MarkItDown, so we control the transcript cleanup ourselves).
     if ext in (".srt", ".vtt"):
-        return _finish(relpath, convert_subtitle(filepath, md_path))
+        return _finish(relpath, convert_subtitle(filepath, md_path), md_path)
 
     # Everything else -> MarkItDown, then gap-fillers.
     if md_client is not None:
         ok, size, method = _convert_with_markitdown(filepath, md_path, md_client)
         if ok:
+            _reflow_md_file_in_place(md_path)
             return str(relpath), "ok", method, None
 
     gap_filler = GAP_FILLERS.get(ext)
@@ -617,6 +640,7 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
                 result = (*result, None)
             ok, size, method, note = result
             if ok:
+                _reflow_md_file_in_place(md_path)
                 return str(relpath), "ok", method, note or f"used {method} fallback"
         except Exception as ex:
             print(f"  prepare-1 gap-filler failed: {relpath}: {type(ex).__name__}: {ex}",

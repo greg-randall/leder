@@ -113,8 +113,12 @@ def test_image_routes_to_ocr(tmp_path, monkeypatch):
     corpus = tmp_path / "corpus"
     src_root.mkdir()
     (src_root / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-    monkeypatch.setattr(p1, "ocr_image",
-                        lambda inp, outp, vc: (True, 5, "tesseract", "image transcribed via OCR"))
+
+    def fake_ocr_image(inp, outp, vc):
+        outp.write_text("ocr text")
+        return True, 5, "tesseract", "image transcribed via OCR"
+
+    monkeypatch.setattr(p1, "ocr_image", fake_ocr_image)
     rel, status, method, note = p1.process_file(
         src_root / "x.png", src_root, corpus, VISION_CFG, None, True)
     assert status == "ok" and method == "tesseract" and note == "image transcribed via OCR"
@@ -125,8 +129,12 @@ def test_audio_routes_to_whisper(tmp_path, monkeypatch):
     corpus = tmp_path / "corpus"
     src_root.mkdir()
     (src_root / "a.mp3").write_bytes(b"ID3")
-    monkeypatch.setattr(p1, "convert_audio",
-                        lambda inp, outp, wm: (True, 5, "whisper", "audio transcribed via whisper"))
+
+    def fake_convert_audio(inp, outp, wm):
+        outp.write_text("audio transcript text")
+        return True, 5, "whisper", "audio transcribed via whisper"
+
+    monkeypatch.setattr(p1, "convert_audio", fake_convert_audio)
     rel, status, method, note = p1.process_file(
         src_root / "a.mp3", src_root, corpus, VISION_CFG, "MODEL", True)
     assert status == "ok" and method == "whisper" and "whisper" in note
@@ -406,7 +414,8 @@ def test_convert_subtitle_vtt(tmp_path):
     ok, size, method, note = p1.convert_subtitle(src, tmp_path / "d.md")
     md = (tmp_path / "d.md").read_text()
     assert ok and method == "pycaption-transcript" and note is None
-    assert md.strip() == "Hello there. General Kenobi."
+    assert md.strip().endswith("Hello there. General Kenobi.")
+    assert "# Transcript: d.vtt" in md
     # No cue numbers or timestamps leaked into the transcript
     assert "-->" not in md and "00:00" not in md
 
@@ -420,7 +429,22 @@ def test_convert_subtitle_srt(tmp_path):
     ok, size, method, note = p1.convert_subtitle(src, tmp_path / "d.md")
     md = (tmp_path / "d.md").read_text()
     assert ok and method == "pycaption-transcript" and note is None
-    assert md.strip() == "Hello there. General Kenobi."
+    assert md.strip().endswith("Hello there. General Kenobi.")
+    assert "# Transcript: d.srt" in md
+
+
+def test_convert_subtitle_header_makes_no_origin_claim(tmp_path):
+    src = tmp_path / "d.vtt"
+    src.write_text(
+        "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello there.\n"
+    )
+    ok, size, method, note = p1.convert_subtitle(src, tmp_path / "d.md")
+    md = (tmp_path / "d.md").read_text()
+    assert "# Transcript: d.vtt" in md
+    assert "cue numbers and timestamps removed" in md
+    assert "Original file preserved" in md
+    for phrase in ("auto-generated", "machine-generated", "transcription errors expected"):
+        assert phrase.lower() not in md.lower()
 
 
 def test_convert_subtitle_srt_youtube_blank_placeholder_pattern(tmp_path):
@@ -461,7 +485,7 @@ def test_convert_subtitle_dedupes_rolling_captions(tmp_path):
     ok, size, method, note = p1.convert_subtitle(src, tmp_path / "rolling.md")
     md = (tmp_path / "rolling.md").read_text()
     assert ok
-    assert md.strip() == "Hello there General Kenobi"  # not repeated twice
+    assert md.strip().endswith("Hello there General Kenobi")  # not repeated twice
 
 
 def test_convert_subtitle_malformed_fails(tmp_path):
@@ -510,8 +534,13 @@ def test_subtitle_routes_directly_bypassing_markitdown(tmp_path, monkeypatch):
     (src_root / "captions.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHi\n")
 
     called = []
-    monkeypatch.setattr(p1, "convert_subtitle",
-                        lambda inp, outp: (called.append(1) or (True, 2, "pycaption-transcript", None)))
+
+    def fake_convert_subtitle(inp, outp):
+        called.append(1)
+        outp.write_text("transcript text")
+        return True, 2, "pycaption-transcript", None
+
+    monkeypatch.setattr(p1, "convert_subtitle", fake_convert_subtitle)
 
     class ExplodingMarkItDown:
         def convert(self, *a, **kw):

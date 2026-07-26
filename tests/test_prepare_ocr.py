@@ -187,11 +187,13 @@ def test_is_duplicate_first_is_false(tmp_path):
     d.text((10, 10), "Unique content", fill="black")
     path = tmp_path / "a.png"
     img.save(str(path))
-    assert _is_duplicate_image(path) is False
+    is_dup, dup_of = _is_duplicate_image(path)
+    assert is_dup is False and dup_of is None
 
 
 def test_is_duplicate_second_is_true(tmp_path):
-    """Second identical image is detected as duplicate."""
+    """Second identical image is detected as duplicate, and the match names
+    the first (surviving) file."""
     _reset_dedup()
     from PIL import Image, ImageDraw
 
@@ -205,8 +207,10 @@ def test_is_duplicate_second_is_true(tmp_path):
     p2 = tmp_path / "b.png"
     make_img().save(str(p1))
     make_img().save(str(p2))
-    assert _is_duplicate_image(p1) is False
-    assert _is_duplicate_image(p2) is True
+    is_dup1, dup_of1 = _is_duplicate_image(p1)
+    assert is_dup1 is False and dup_of1 is None
+    is_dup2, dup_of2 = _is_duplicate_image(p2)
+    assert is_dup2 is True and dup_of2 == p1
 
 
 def test_is_duplicate_different_image_is_false(tmp_path):
@@ -228,8 +232,10 @@ def test_is_duplicate_different_image_is_false(tmp_path):
     p2 = tmp_path / "img2.png"
     img2.save(str(p2))
 
-    assert _is_duplicate_image(p1) is False
-    assert _is_duplicate_image(p2) is False
+    is_dup1, dup_of1 = _is_duplicate_image(p1)
+    assert is_dup1 is False and dup_of1 is None
+    is_dup2, dup_of2 = _is_duplicate_image(p2)
+    assert is_dup2 is False and dup_of2 is None
 
 
 def test_ocr_image_skips_duplicate(tmp_path, monkeypatch):
@@ -259,3 +265,24 @@ def test_ocr_image_skips_duplicate(tmp_path, monkeypatch):
     assert ok1 and method1 == "tesseract"  # first gets processed
     assert ok2 and method2 == "image-dup"   # second skipped
     assert "duplicate" in note2
+
+
+def test_duplicate_image_stub_names_the_surviving_file(tmp_path):
+    _reset_dedup()
+    vision_cfg = {"enabled": False, "min_words": 20, "min_image_dim": 0, "dedup_images": True}
+
+    import base64
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(png_bytes)
+    second.write_bytes(png_bytes)
+
+    ocr.ocr_image(first, tmp_path / "first.png.md", vision_cfg)
+    ok, size, method, note = ocr.ocr_image(second, tmp_path / "second.png.md", vision_cfg)
+
+    assert method == "image-dup"
+    md = (tmp_path / "second.png.md").read_text()
+    assert "first.png" in md

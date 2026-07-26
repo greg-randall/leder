@@ -36,12 +36,26 @@ from pipeline.config import DEFAULT_TEXT_NATIVE_EXTS
 
 results_lock = threading.Lock()
 TEMP_FILE_PREFIXES = ("~$", "._")
-MIN_CONTENT_BYTES = 100
+MIN_CONTENT_BYTES = 100  # default; run_prepare_1 may override module state via _configure()
 # Short-but-real digital PDFs (e.g. a 1-page memo under 200 chars) may fall
 # through to OCR unnecessarily under this per-page threshold; content isn't
 # lost, just re-extracted -- an accepted tradeoff, not a bug.
 _MIN_CHARS_PER_PAGE = 200
-FILE_TIMEOUT = 300  # per-file timeout in seconds
+FILE_TIMEOUT = 300  # default; per-file timeout in seconds -- see above
+
+
+def _configure(file_timeout: int, min_content_bytes: int) -> None:
+    """Override MIN_CONTENT_BYTES/FILE_TIMEOUT module state for this run.
+
+    These are read by is_meaningful() and the as_completed() timeout loops
+    below via module-level globals rather than threaded through every call
+    site, matching how they were already used before they became
+    configurable (prepare.convert.file_timeout / .min_content_bytes).
+    """
+    global FILE_TIMEOUT, MIN_CONTENT_BYTES
+    FILE_TIMEOUT = file_timeout
+    MIN_CONTENT_BYTES = min_content_bytes
+
 
 # ── Optional: MarkItDown ──────────────────────────────────────
 
@@ -775,15 +789,21 @@ def _print_banner(failures: list):
 
 def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                   vision_cfg: dict, audio_cfg: dict, force: bool,
-                  text_native_exts: set[str] | None = None) -> dict:
+                  text_native_exts: set[str] | None = None,
+                  convert_cfg: dict | None = None) -> dict:
     """Convert every file under source_root into markdown under corpus_root.
 
     vision_cfg: {enabled, model, min_words, max_pages_per_doc, ocr_images}.
     audio_cfg:  {enabled, model, device}.
     text_native_exts: extensions copied through verbatim (see config.yaml
         prepare.text_native_extensions). Defaults to DEFAULT_TEXT_NATIVE_EXTS.
+    convert_cfg: {file_timeout, min_content_bytes} (see config.yaml
+        prepare.convert). Defaults to the module's hardcoded defaults.
     """
     from tqdm import tqdm
+
+    convert_cfg = convert_cfg or {}
+    _configure(convert_cfg.get("file_timeout", 300), convert_cfg.get("min_content_bytes", 100))
 
     if text_native_exts is None:
         text_native_exts = {e.lower() for e in DEFAULT_TEXT_NATIVE_EXTS}
@@ -826,13 +846,19 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                                   vision_cfg, whisper_model, force, md_client,
                                   text_native_exts)
                 futmap[fut] = f
-            for future in as_completed(futmap):
+            pending = set(futmap.keys())
+            while pending:
+                try:
+                    future = next(as_completed(pending, timeout=FILE_TIMEOUT))
+                except (TimeoutError, StopIteration):
+                    break
+                pending.discard(future)
                 f = futmap[future]
                 rel = str(Path(f).relative_to(src_root))
                 try:
-                    _, status, method, note = future.result(timeout=FILE_TIMEOUT)
-                except TimeoutError:
-                    status, method, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
+                    _, status, method, note = future.result()
+                except Exception as ex:
+                    status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
                 with results_lock:
                     if status == "ok":
                         ok_ct += 1
@@ -847,6 +873,18 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                     else:
                         failures.append((rel, method))
                     pbar.update(1)
+
+            if pending:
+                stalled = [str(Path(futmap[fut]).relative_to(src_root)) for fut in pending]
+                print(f"\n  ⚠  {len(stalled)} file(s) still running after "
+                      f"{FILE_TIMEOUT}s and were not waited on further: "
+                      f"{', '.join(stalled[:5])}"
+                      f"{' ...' if len(stalled) > 5 else ''}", file=sys.stderr)
+                with results_lock:
+                    for fut in pending:
+                        rel = str(Path(futmap[fut]).relative_to(src_root))
+                        failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
+                        pbar.update(1)
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)
@@ -870,13 +908,19 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                                        vision_cfg, whisper_model, force, md_client,
                                        text_native_exts)
                     futmap2[fut] = f
-                for future in as_completed(futmap2):
+                pending2 = set(futmap2.keys())
+                while pending2:
+                    try:
+                        future = next(as_completed(pending2, timeout=FILE_TIMEOUT))
+                    except (TimeoutError, StopIteration):
+                        break
+                    pending2.discard(future)
                     f2 = futmap2[future]
                     rel = str(Path(f2).relative_to(src_root))
                     try:
-                        _, status, method, note = future.result(timeout=FILE_TIMEOUT)
-                    except TimeoutError:
-                        status, method, note = "fail", f"timed out after {FILE_TIMEOUT}s", None
+                        _, status, method, note = future.result()
+                    except Exception as ex:
+                        status, method, note = "fail", f"error: {type(ex).__name__}: {ex}", None
                     with results_lock:
                         if status == "ok":
                             ok_ct += 1
@@ -891,6 +935,18 @@ def run_prepare_1(source_root: str, corpus_root: str, workers: int,
                         else:
                             failures.append((rel, method))
                         pbar2.update(1)
+
+                if pending2:
+                    stalled2 = [str(Path(futmap2[fut]).relative_to(src_root)) for fut in pending2]
+                    print(f"\n  ⚠  {len(stalled2)} file(s) still running after "
+                          f"{FILE_TIMEOUT}s and were not waited on further: "
+                          f"{', '.join(stalled2[:5])}"
+                          f"{' ...' if len(stalled2) > 5 else ''}", file=sys.stderr)
+                    with results_lock:
+                        for fut in pending2:
+                            rel = str(Path(futmap2[fut]).relative_to(src_root))
+                            failures.append((rel, f"timed out after {FILE_TIMEOUT}s"))
+                            pbar2.update(1)
 
     _write_unconverted(out_root, failures)
     _write_needs_review(out_root, needs_review)

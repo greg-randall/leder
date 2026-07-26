@@ -780,6 +780,32 @@ def test_convert_subtitle_real_youtube_auto_captions(tmp_path):
     assert "Orion spacecraft in the vehicle assembly spacecraft" not in md
 
 
+def test_hung_converter_is_reported_as_timed_out(tmp_path, monkeypatch):
+    """A converter that never returns must actually show up as a timeout
+    failure, not hang the whole run silently."""
+    import time as _time
+
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "slow.xyz").write_text("content")
+
+    def hanging_process_file(*args, **kwargs):
+        _time.sleep(2)
+        return "slow.xyz", "ok", "should-not-happen", None
+
+    monkeypatch.setattr(p1, "process_file", hanging_process_file)
+    # file_timeout flows through run_prepare_1's convert_cfg param (which
+    # calls _configure() and overwrites module-level FILE_TIMEOUT on entry)
+    # rather than via monkeypatching FILE_TIMEOUT directly -- a direct
+    # monkeypatch would be clobbered by that same _configure() call.
+    report = p1.run_prepare_1(str(src_root), str(corpus), 1,
+                              VISION_CFG, AUDIO_CFG, True,
+                              convert_cfg={"file_timeout": 0.2})
+    assert report["failure_count"] == 1
+    assert any("timed out" in reason for _, reason in report["failures"])
+
+
 def test_subtitle_routes_directly_bypassing_markitdown(tmp_path, monkeypatch):
     """.srt/.vtt go straight to convert_subtitle, not through MarkItDown."""
     src_root = tmp_path / "src"

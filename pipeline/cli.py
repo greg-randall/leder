@@ -335,6 +335,8 @@ def main() -> None:
                 workers=prep.convert_workers,
                 vision_cfg=vision_cfg, audio_cfg=audio_cfg, force=force,
                 text_native_exts={e.lower() for e in prep.text_native_extensions},
+                convert_cfg={"file_timeout": prep.convert.file_timeout,
+                             "min_content_bytes": prep.convert.min_content_bytes},
             )
             convert_failures = report["failure_count"]
             if args.command == "prepare-1":

@@ -56,21 +56,22 @@ def _is_tiny_image(filepath: Path, min_dim: int) -> bool:
         return False
 
 
-def _is_duplicate_image(filepath: Path) -> bool:
-    """True if a perceptually similar image has already been processed."""
+def _is_duplicate_image(filepath: Path) -> tuple[bool, Path | None]:
+    """True + the matched file's path if a perceptually similar image has
+    already been processed."""
     try:
         from imagehash import phash
         from PIL import Image
         with Image.open(filepath) as img:
             h = phash(img)
         with _dedup_lock:
-            for seen in _seen_hashes:
-                if abs(h - seen) <= 4:
-                    return True
-            _seen_hashes.append(h)
-        return False
+            for seen_hash, seen_path in _seen_hashes:
+                if abs(h - seen_hash) <= 4:
+                    return True, seen_path
+            _seen_hashes.append((h, filepath))
+        return False, None
     except Exception:
-        return False
+        return False, None
 
 # Image formats we handle. tesseract (via Leptonica) reads png/jpg/tiff
 # directly; gif/bmp/webp are normalized to PNG with Pillow first.
@@ -138,11 +139,15 @@ def ocr_image(inpath: Path, md_path: Path, vision_cfg: dict):
         return True, len(content), "image-tiny", f"skipped — <= {min_dim}x{min_dim}px"
 
     # Skip duplicate images (same attachment forwarded multiple times)
-    if vision_cfg.get("dedup_images", True) and _is_duplicate_image(inpath):
-        rel = os.path.relpath(inpath, md_path.parent)
-        content = f"![{inpath.name}]({rel})\n\n*Image skipped — duplicate of previously processed image.*\n"
-        md_path.write_text(content, encoding="utf-8")
-        return True, len(content), "image-dup", "skipped — duplicate"
+    if vision_cfg.get("dedup_images", True):
+        is_dup, dup_of = _is_duplicate_image(inpath)
+        if is_dup:
+            rel = os.path.relpath(inpath, md_path.parent)
+            dup_note = f" (duplicate of `{dup_of.name}`)" if dup_of else ""
+            content = (f"![{inpath.name}]({rel})\n\n"
+                       f"*Image skipped — duplicate of previously processed image{dup_note}.*\n")
+            md_path.write_text(content, encoding="utf-8")
+            return True, len(content), "image-dup", f"skipped — duplicate{dup_note}"
 
     if not vision_cfg.get("ocr_images", True):
         rel = os.path.relpath(inpath, md_path.parent)

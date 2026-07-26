@@ -83,6 +83,12 @@ class PrepareRollupConfig:
 
 
 @dataclass
+class ConvertConfig:
+    file_timeout: int = 300       # seconds before a hung per-file conversion is abandoned
+    min_content_bytes: int = 100  # minimum extracted chars to accept a conversion as meaningful
+
+
+@dataclass
 class AudioConfig:
     enabled: bool = True
     model: str = "medium"
@@ -104,6 +110,7 @@ class PrepareConfig:
         default_factory=lambda: list(DEFAULT_TEXT_NATIVE_EXTS))
     vision_fallback: VisionFallbackConfig = field(default_factory=VisionFallbackConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+    convert: ConvertConfig = field(default_factory=ConvertConfig)
     summarize: PrepareSummarizeConfig = field(default_factory=PrepareSummarizeConfig)
     rollup: PrepareRollupConfig = field(default_factory=PrepareRollupConfig)
     playbooks: PlaybooksConfig = field(default_factory=PlaybooksConfig)
@@ -119,6 +126,7 @@ class PrepareConfig:
                 "text_native_extensions", list(DEFAULT_TEXT_NATIVE_EXTS)),
             vision_fallback=VisionFallbackConfig(**(raw.get("vision_fallback") or {})),
             audio=AudioConfig(**(raw.get("audio") or {})),
+            convert=ConvertConfig(**(raw.get("convert") or {})),
             summarize=PrepareSummarizeConfig(**(raw.get("summarize") or {})),
             rollup=PrepareRollupConfig(**(raw.get("rollup") or {})),
             playbooks=PlaybooksConfig(**raw.get("playbooks", {})),

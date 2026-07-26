@@ -94,3 +94,27 @@ def test_prepare_parsed_from_yaml(tmp_path):
     assert cfg.prepare.summarize.workers == 7
     assert cfg.prepare.rollup.big_call_model == "m-pro[1m]"
     assert cfg.prepare.rollup.crosscutting is False
+
+
+def test_file_timeout_and_min_content_bytes_default_when_unset(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.convert.file_timeout == 300
+    assert cfg.prepare.convert.min_content_bytes == 100
+
+
+def test_file_timeout_and_min_content_bytes_parsed_from_yaml(tmp_path):
+    cfg_path = _write(tmp_path, """
+        article: {path: "article.md"}
+        corpus: {root: "corpus/"}
+        prepare:
+          convert:
+            file_timeout: 600
+            min_content_bytes: 50
+    """)
+    cfg = PipelineConfig.from_yaml(cfg_path)
+    assert cfg.prepare.convert.file_timeout == 600
+    assert cfg.prepare.convert.min_content_bytes == 50

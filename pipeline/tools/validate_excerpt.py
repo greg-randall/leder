@@ -89,6 +89,7 @@ def validate_excerpt(file_path: str, candidate: str) -> dict:
     top_indices = [i for i, _ in scores[:3]]
 
     best: dict | None = None
+    best_ratio = 0.0
     for idx_chunk in top_indices:
         chunk_text, chunk_start, _ = chunks[idx_chunk]
         pos = find_quote_position(candidate, chunk_text)
@@ -97,7 +98,8 @@ def validate_excerpt(file_path: str, candidate: str) -> dict:
         cstart, cend = pos
         actual = chunk_text[cstart:cend]
         ratio = difflib.SequenceMatcher(None, _clean(candidate), _clean(actual)).ratio()
-        if ratio >= 0.6 and (best is None or ratio > best["similarity"]):
+        if ratio >= 0.6 and (best is None or ratio > best_ratio):
+            best_ratio = ratio
             best = {
                 "found": True,
                 "actual_text": actual,

@@ -14,6 +14,7 @@ With --debug, raw output from EVERY tier is saved to the cache directory:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -22,6 +23,15 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 import trafilatura
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write `content` to `path` atomically via a same-directory temp file +
+    os.replace, so a concurrent reader never sees a half-written page.md."""
+    tmp_path = str(path) + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp_path, path)
 
 
 def _try_jina(url: str, timeout: int = 30, debug_dir: Path | None = None
@@ -176,13 +186,31 @@ _PAYWALL_SIGNALS = (
 )
 
 
+def _safe_tier(fetcher, url, debug_dir):
+    """Run a fetch tier, degrading to (None, name) on any failure.
+
+    Tiers depend on optional binaries and packages (playwright, obscura,
+    camoufox) that may not be installed, and on the network. A dead tier must
+    fall through to the next one, not abort the whole fetch -- fetch_page's
+    contract is that it always returns and always writes page.md.
+    """
+    name = getattr(fetcher, "__name__", str(fetcher)).removeprefix("_try_")
+    try:
+        return fetcher(url, debug_dir=debug_dir)
+    except Exception as e:
+        print(f"  {name}: {type(e).__name__}: {e}", file=sys.stderr)
+        return None, name
+
+
 def fetch_page(url: str, target_id: str, cache_dir: str = "web_cache",
                debug: bool = False, use_archive: bool = False) -> dict:
     """Fetch `url`, cache it at <cache_dir>/<target_id>/page.md, return the result.
 
     Returns {"ok": bool, "path": str, "method": str | None, "content": str,
-             "warning": str | None}. Always writes page.md, even on failure
-    (with the "(failed to fetch ...)" marker other stages already look for).
+             "warning": str | None}. Always writes page.md, even on failure or
+    if every tier raises (missing binaries/packages, network errors) -- with
+    the "(failed to fetch ...)" marker other stages already look for. This
+    function itself never raises.
     """
     out_dir = Path(cache_dir) / target_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -194,18 +222,18 @@ def fetch_page(url: str, target_id: str, cache_dir: str = "web_cache",
     warning = None
 
     # Tier 1: jina.ai -- fast, free, but fails on paywalls
-    jina_result, _ = _try_jina(url, debug_dir=debug_dir)
+    jina_result, _ = _safe_tier(_try_jina, url, debug_dir)
     if jina_result:
         content, method = jina_result, "jina.ai"
     else:
         # Tier 2: obscura / playwright
         for fetcher in (_try_obscura, _try_playwright):
-            content, method = fetcher(url, debug_dir=debug_dir)
+            content, method = _safe_tier(fetcher, url, debug_dir)
             if content:
                 break
         # Tier 3: archive.is -- slow, hit-or-miss, opt-in
         if not content and use_archive:
-            content, method = _try_archive_is(url, debug_dir=debug_dir)
+            content, method = _safe_tier(_try_archive_is, url, debug_dir)
         if content and any(signal.lower() in content[:500].lower()
                            for signal in _PAYWALL_SIGNALS):
             warning = (f"content may be a paywall preview ({len(content)} chars). "
@@ -216,13 +244,13 @@ def fetch_page(url: str, target_id: str, cache_dir: str = "web_cache",
         # Prepend the source URL if the fetcher didn't include it (jina does)
         if method != "jina.ai" and "http" not in content[:200]:
             content = f"**Source URL:** {url}\n\n{content}"
-        out_path.write_text(content, encoding="utf-8")
+        _atomic_write(out_path, content)
         print(f"[fetch_page] {url} -> {out_path}  ({method})", file=sys.stderr)
         return {"ok": True, "path": str(out_path), "method": method,
                 "content": content, "warning": warning}
 
     failure = f"(failed to fetch {url})\n"
-    out_path.write_text(failure, encoding="utf-8")
+    _atomic_write(out_path, failure)
     print(f"[fetch_page] FAILED: {url} — all methods exhausted", file=sys.stderr)
     return {"ok": False, "path": str(out_path), "method": None,
             "content": failure, "warning": warning}

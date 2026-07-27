@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch a web page and save the raw content verbatim to web_cache/<target_id>/page.md.
 
-Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> [--debug]
+Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> [--debug] [--archive-is] [--cache-dir <dir>]
 
 Four tiers (in order):
   1. jina.ai (r.jina.ai) — free, fast, clean markdown
@@ -246,7 +246,7 @@ def main():
         debug="--debug" in sys.argv,
         use_archive="--archive-is" in sys.argv,
     )
-    print(result["content"])
+    print(result["content"], end="" if result["content"].endswith("\n") else "\n")
 
 
 if __name__ == "__main__":

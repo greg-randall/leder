@@ -482,13 +482,29 @@ def _apply_excerpt_gate(raw: dict, corpus_root: str, web_cache_dir: str,
 
     target = None
     if source_path:
-        # Agents sometimes prefix the path with the corpus folder name or "./";
+        # Agents sometimes prefix the path with the corpus folder name and/or
+        # "./", occasionally both ("./corpus/doc.md", "corpus/./doc.md");
         # stage_d_sources.py strips the same prefixes when resolving sources.
-        for prefix in ("corpus/", "./"):
-            if source_path.startswith(prefix):
-                source_path = source_path[len(prefix):]
+        # Keep stripping while a known prefix remains at the front, stopping
+        # the instant a pass strips nothing so a pathological input can't spin.
+        while True:
+            stripped = source_path
+            for prefix in ("corpus/", "./"):
+                if stripped.startswith(prefix):
+                    stripped = stripped[len(prefix):]
+                    break
+            if stripped == source_path:
                 break
+            source_path = stripped
         target = resolve_within(_Path(corpus_root), source_path)
+        if target is None:
+            # A source_path that resolves outside the corpus is treated the
+            # same as a missing file (see module docstring / task discussion):
+            # excerpt_status stays "unchecked", never surfaced as a distinct
+            # security signal on the Finding. Still worth a line in the run
+            # output so an escape attempt isn't completely invisible.
+            print(f"  ⚠ source_path escapes corpus, not read: {source_path!r}",
+                  file=sys.stderr)
     elif source_url:
         target = _Path(web_cache_dir) / claim_id / "page.md"
 
@@ -513,7 +529,15 @@ def _apply_excerpt_gate(raw: dict, corpus_root: str, web_cache_dir: str,
         "source_excerpt_offset": result["offset"],
         "source_excerpt_similarity": similarity,
     }
-    if similarity >= 1.0:
+    # similarity alone cannot distinguish the tiers: validate_excerpt's _clean()
+    # strips punctuation before scoring, so a candidate differing only by an
+    # apostrophe or comma scores 1.0 through the FUZZY tier. Compare the
+    # agent's wording against what the document actually says to tell a
+    # literal match from a normalised one -- tier 1's own match rule is
+    # text.lower().find(candidate.lower()), so a genuine literal match always
+    # satisfies excerpt.lower() == actual_text.lower().
+    is_literal = excerpt.lower() == result["actual_text"].lower()
+    if similarity >= 1.0 and is_literal:
         fields["excerpt_status"] = "exact"
     else:
         fields["excerpt_status"] = "repaired"

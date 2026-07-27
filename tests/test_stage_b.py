@@ -955,3 +955,66 @@ def test_excerpt_gate_does_not_touch_severity_or_confidence(tmp_path):
                 doc_text="completely unrelated content about zoning")
     assert "severity" not in out
     assert "confidence" not in out
+
+
+def test_excerpt_gate_punctuation_only_diff_is_repaired_not_exact(tmp_path):
+    """A candidate that differs from the source only by punctuation _clean()
+    strips (apostrophe, comma) scores similarity 1.0 through validate_excerpt's
+    FUZZY tier, not its literal tier -- excerpt_status must reflect that it
+    was normalised, not quoted verbatim, and must flag for human review."""
+    doc = "The commission said its a routine matter, nothing more."
+    out = _gate(tmp_path,
+                {"source_path": "doc.md",
+                 "source_excerpt": "it's a routine matter nothing more"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "repaired"
+    assert out["human_review"] is True
+    assert out["source_excerpt"] == "its a routine matter, nothing more"
+    assert out["source_excerpt"] in doc
+
+
+def test_excerpt_gate_genuine_literal_match_stays_exact(tmp_path):
+    """Guard against the literal-vs-normalised rule drifting the other way:
+    a true verbatim (case-insensitive) match must still be 'exact' with no
+    human_review."""
+    doc = "The road commission issued a 68-page notice of violation."
+    out = _gate(tmp_path,
+                {"source_path": "doc.md", "source_excerpt": "ROAD COMMISSION issued"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "exact"
+    assert out["source_excerpt"] == "road commission issued"
+    assert "human_review" not in out
+
+
+def test_excerpt_gate_strips_repeated_dot_slash_corpus_prefix(tmp_path):
+    """'./corpus/doc.md' must resolve, not silently fall through to unchecked."""
+    doc = "The road commission issued a notice."
+    out = _gate(tmp_path,
+                {"source_path": "./corpus/doc.md", "source_excerpt": "road commission issued"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "exact"
+
+
+def test_excerpt_gate_strips_corpus_dot_slash_prefix(tmp_path):
+    """'corpus/./doc.md' must also resolve."""
+    doc = "The road commission issued a notice."
+    out = _gate(tmp_path,
+                {"source_path": "corpus/./doc.md", "source_excerpt": "road commission issued"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "exact"
+
+
+def test_excerpt_gate_escape_logs_to_stderr(tmp_path, capsys):
+    """An escaping source_path should still print a visible warning, even
+    though excerpt_status stays 'unchecked' rather than a distinct status."""
+    from pipeline.stage_b_verify import _apply_excerpt_gate
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "web_cache").mkdir()
+    (tmp_path / "secret.md").write_text("road commission issued a notice")
+    out = _apply_excerpt_gate(
+        {"source_path": "../secret.md", "source_excerpt": "road commission issued"},
+        str(corpus), str(corpus / "web_cache"), "c1")
+    assert out == {"excerpt_status": "unchecked"}
+    captured = capsys.readouterr()
+    assert "escapes corpus" in captured.err

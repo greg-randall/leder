@@ -1,9 +1,11 @@
-"""The verification agent's entire reachable surface: in-process tools + permissions.
+"""The verification agent's in-process tools: validate_excerpt and fetch_page.
 
 Stage-B agents run with cwd=corpus_root and must not reach outside it. Rather
 than express that as CLI paths and permission-rule globs (which is what failed
-before -- Bash(...) rules match command patterns, not paths), both the tools and
-the containment policy live here, in Python we can unit-test without an agent.
+before -- Bash(...) rules match command patterns, not paths), the tools and
+their path containment live here, in Python we can unit-test without an agent.
+A permission callback that reuses resolve_within() to police Read/Grep/Glob
+arrives in a later task; _PATH_ARG below is the map it will key off.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Annotated
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from claude_agent_sdk import McpSdkServerConfig, create_sdk_mcp_server, tool
 
 from pipeline.tools.fetch_page import fetch_page
 from pipeline.tools.validate_excerpt import validate_excerpt
@@ -30,25 +32,33 @@ def _json_result(payload: dict, is_error: bool = False) -> dict:
     return result
 
 
-def resolve_within(root: Path, candidate: str) -> Path | None:
+def resolve_within(root: Path, candidate: str | None) -> Path | None:
     """Resolve `candidate` against `root`; return None if it lands outside.
 
     Relative paths resolve against `root`; absolute paths are taken as-is and
     then checked. `.resolve()` collapses `..` and follows symlinks BEFORE the
     containment check, so neither can be used to escape.
+
+    A missing candidate (None or "") means "no path given" -- e.g. a Grep/Glob
+    call with no `path` argument, which searches the whole corpus -- so it
+    resolves to the corpus root itself rather than being rejected.
     """
+    if not candidate:
+        return root.resolve()
     try:
         raw = Path(candidate)
         target = (raw if raw.is_absolute() else root / raw).resolve()
         root_resolved = root.resolve()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError, TypeError):
         return None
-    if target == root_resolved or target.is_relative_to(root_resolved):
+    if target.is_relative_to(root_resolved):
         return target
     return None
 
 
-def build_verification_tools(corpus_root: str, web_cache_dir: str, claim_id: str):
+def build_verification_tools(
+    corpus_root: str, web_cache_dir: str, claim_id: str
+) -> McpSdkServerConfig:
     """Build the per-claim in-process MCP server for a verification agent.
 
     corpus_root / web_cache_dir / claim_id are captured in the closure, so the
@@ -107,7 +117,21 @@ def build_verification_tools(corpus_root: str, web_cache_dir: str, claim_id: str
             return {"content": [{"type": "text",
                                  "text": f"fetch failed: {type(e).__name__}: {e}"}],
                     "is_error": True}
-        payload = {"content": [{"type": "text", "text": result.get("content", "")}]}
+        # fetch_page's contract (see its docstring) guarantees "content" is
+        # always present; index directly rather than defaulting so a broken
+        # contract fails loudly instead of handing the agent silent emptiness.
+        blocks = [{"type": "text", "text": result["content"]}]
+        method = result.get("method")
+        if method:
+            # Audit-relevant: e.g. "archive.is-raw" means the agent got raw
+            # HTML rather than clean extracted markdown.
+            blocks.append({"type": "text", "text": f"[fetched via {method}]"})
+        warning = result.get("warning")
+        if warning:
+            # The paywall detector -- an agent citing this page needs to know
+            # it may be reading a subscription teaser, not the full article.
+            blocks.append({"type": "text", "text": f"WARNING: {warning}"})
+        payload = {"content": blocks}
         if not result.get("ok"):
             payload["is_error"] = True
         return payload

@@ -1018,3 +1018,14 @@ def test_excerpt_gate_escape_logs_to_stderr(tmp_path, capsys):
     assert out == {"excerpt_status": "unchecked"}
     captured = capsys.readouterr()
     assert "escapes corpus" in captured.err
+
+
+def test_excerpt_gate_non_string_excerpt_does_not_crash(tmp_path):
+    """A non-string source_excerpt (int, list) must not raise AttributeError on
+    .strip(). The JSON schema constrains this, but the gate should survive
+    malformed input rather than crashing the entire pipeline."""
+    for bogus in (42, ["a", "b"], None):
+        out = _gate(tmp_path,
+                    {"source_path": "doc.md", "source_excerpt": bogus},
+                    doc_text="the road commission issued a notice")
+        assert out["excerpt_status"] in ("unchecked", "not_found")

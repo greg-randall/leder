@@ -476,7 +476,7 @@ def _apply_excerpt_gate(raw: dict, corpus_root: str, web_cache_dir: str,
     from pipeline.agent_tools import resolve_within
     from pipeline.tools.validate_excerpt import validate_excerpt
 
-    excerpt = (raw.get("source_excerpt") or "").strip()
+    excerpt = str(raw.get("source_excerpt") or "").strip()
     source_path = raw.get("source_path")
     source_url = raw.get("source_url")
 

@@ -733,20 +733,16 @@ def test_verify_claim_async_user_prompt_matches_output_schema(monkeypatch):
 
     captured_prompts = []
 
-    class _FakeQuery:
-        def __init__(self, prompt, options):
-            captured_prompts.append(prompt)
+    def _fake_query(prompt, options):
+        async def _gen():
+            async for msg in prompt:
+                if isinstance(msg, dict) and "message" in msg:
+                    captured_prompts.append(msg["message"]["content"])
+            return
+            yield  # pragma: no cover -- makes this an async generator
+        return _gen()
 
-        def __aiter__(self):
-            async def _gen():
-                return
-                yield  # pragma: no cover -- makes this an async generator
-            return _gen()
-
-    monkeypatch.setattr(
-        "claude_agent_sdk.query",
-        lambda prompt, options: _FakeQuery(prompt, options).__aiter__(),
-    )
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
 
     claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
     asyncio.run(sb._verify_claim_async(
@@ -762,66 +758,7 @@ def test_verify_claim_async_user_prompt_matches_output_schema(monkeypatch):
     assert "Output fields: verdict, source_proximity" not in prompt
 
 
-def test_verify_claim_async_fetch_page_command_uses_absolute_path(monkeypatch):
-    """The fetch_page.py invocation in the prompt must be runnable from the
-    agent's cwd (= corpus_root), which a bare relative path is not."""
-    from pipeline import stage_b_verify as sb
-    import sys as _sys
-
-    captured_prompts = []
-
-    class _FakeQuery:
-        def __init__(self, prompt, options):
-            captured_prompts.append(prompt)
-
-        def __aiter__(self):
-            async def _gen():
-                return
-                yield  # pragma: no cover
-            return _gen()
-
-    monkeypatch.setattr(
-        "claude_agent_sdk.query",
-        lambda prompt, options: _FakeQuery(prompt, options).__aiter__(),
-    )
-
-    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
-    asyncio.run(sb._verify_claim_async(
-        claim, "/corpus", "sys", timeout=5, max_turns=1, web_cache_dir="/corpus/web_cache",
-    ))
-
-    prompt = captured_prompts[0]
-    assert _sys.executable in prompt
-    assert "pipeline/tools/fetch_page.py" in prompt or "fetch_page.py" in prompt
-    assert "/corpus/web_cache" in prompt
-    # Must be an absolute path to the script, not the bare relative form
-    assert "python3 pipeline/tools/fetch_page.py" not in prompt
-
-
 # ── FindingOutput source_excerpt_offset / source_excerpt_similarity ──
-
-def test_finding_output_schema_includes_offset_and_similarity_fields():
-    """FindingOutput schema should declare the new optional fields."""
-    from pipeline.stage_b_verify import FindingOutput
-    schema = FindingOutput.model_json_schema()
-    props = schema["properties"]
-    assert "source_excerpt_offset" in props
-    assert "source_excerpt_similarity" in props
-
-
-def test_finding_output_accepts_new_fields():
-    """FindingOutput should accept source_excerpt_offset and source_excerpt_similarity."""
-    from pipeline.stage_b_verify import FindingOutput
-    f = FindingOutput(
-        severity="PASS",
-        agent_summary="test",
-        source_excerpt="road commission issued a notice",
-        source_excerpt_offset=[1423, 1507],
-        source_excerpt_similarity=1.0,
-    )
-    assert f.source_excerpt_offset == [1423, 1507]
-    assert f.source_excerpt_similarity == 1.0
-
 
 def test_finding_output_defaults_new_fields_to_none():
     """Both source_excerpt_offset and source_excerpt_similarity should default to None."""
@@ -1029,3 +966,228 @@ def test_excerpt_gate_non_string_excerpt_does_not_crash(tmp_path):
                     {"source_path": "doc.md", "source_excerpt": bogus},
                     doc_text="the road commission issued a notice")
         assert out["excerpt_status"] in ("unchecked", "not_found")
+
+
+# ── Wired excerpt gate + permission callback tests ─────────────────────
+
+def _fake_agent(monkeypatch, structured_output: dict):
+    """Patch claude_agent_sdk.query to return a single ResultMessage with
+    the given structured_output. Uses MagicMock(spec=ResultMessage) so that
+    isinstance(msg, ResultMessage) works without constructing a real SDK object."""
+    from unittest.mock import MagicMock
+    from claude_agent_sdk import ResultMessage
+    msg = MagicMock(spec=ResultMessage)
+    msg.structured_output = structured_output
+
+    def _fake_query(prompt, options):
+        # Regular function (not async) that returns an async generator, matching
+        # the real SDK's query() signature.
+        async def _gen():
+            yield msg
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+
+def test_offset_survives_into_finding(tmp_path, monkeypatch):
+    """Regression test for item 3: offset must survive from agent -> Finding."""
+    corpus = tmp_path / "corpus"; corpus.mkdir()
+    (corpus / "web_cache").mkdir()
+    doc = "The road commission issued a 68-page notice of violation."
+    (corpus / "doc.md").write_text(doc)
+
+    _fake_agent(monkeypatch, {
+        "severity": "PASS",
+        "agent_summary": "The transcript confirms the notice.",
+        "source_path": "doc.md",
+        "source_excerpt": "road commission issued a 68-page notice",
+        "source_excerpt_offset": [4, 43],
+        "source_excerpt_similarity": 1.0,
+        "confidence": 0.95,
+        "human_review": False,
+    })
+
+    from pipeline import stage_b_verify as sb
+    target = {"playbook": "fact_check", "target_text": "T", "anchor_text": "A",
+              "claim_type": "numeric", "context": ""}
+    import asyncio
+    finding = asyncio.run(sb._verify_target_async(
+        target, "sys", ["Read"], str(corpus), 10, 5, None, "",
+        web_cache_dir=str(corpus / "web_cache"),
+    ))
+    assert finding is not None
+    d = finding.to_dict()
+    assert d["source_excerpt_offset"], "offset was dropped between agent and Finding"
+    start, end = d["source_excerpt_offset"]
+    assert doc[start:end] == d["source_excerpt"]
+    assert d["excerpt_status"] == "exact"
+    assert d["source_excerpt_similarity"] == 1.0
+
+
+def test_fabricated_excerpt_is_repaired_in_the_finding(tmp_path, monkeypatch):
+    """A fabricated (paraphrased) excerpt should be repaired with human_review=True."""
+    corpus = tmp_path / "corpus"; corpus.mkdir()
+    (corpus / "web_cache").mkdir()
+    doc = "The road commission issued a 68-page notice of violation."
+    (corpus / "doc.md").write_text(doc)
+
+    _fake_agent(monkeypatch, {
+        "severity": "PASS",
+        "agent_summary": "The transcript confirms the notice.",
+        "source_path": "doc.md",
+        "source_excerpt": "the railroad commission issued a 68 page notice of violation",
+        "source_excerpt_offset": None,
+        "source_excerpt_similarity": None,
+        "confidence": 0.95,
+        "human_review": False,
+    })
+
+    from pipeline import stage_b_verify as sb
+    target = {"playbook": "fact_check", "target_text": "T", "anchor_text": "A",
+              "claim_type": "numeric", "context": ""}
+    import asyncio
+    finding = asyncio.run(sb._verify_target_async(
+        target, "sys", ["Read"], str(corpus), 10, 5, None, "",
+        web_cache_dir=str(corpus / "web_cache"),
+    ))
+    assert finding is not None
+    d = finding.to_dict()
+    assert d["excerpt_status"] == "repaired"
+    # The excerpt should have been REPLACED with real document text
+    assert d["source_excerpt"] != "the railroad commission issued a 68 page notice of violation"
+    assert d["source_excerpt"] in doc
+    assert d["human_review"] is True
+    assert d["source_excerpt_similarity"] is not None
+    assert d["source_excerpt_similarity"] < 1.0
+
+
+def test_agent_options_toolbox_and_permissions(monkeypatch):
+    """Verify ClaudeAgentOptions has correct tool lists and permission config."""
+    from pipeline import stage_b_verify as sb
+
+    captured_options = []
+
+    def _fake_query(prompt, options):
+        captured_options.append(options)
+        async def _gen():
+            return
+            yield  # pragma: no cover
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, "/corpus", "sys", timeout=5, max_turns=1,
+        web_cache_dir="/corpus/web_cache",
+    ))
+
+    assert captured_options, "query() was never called"
+    opts = captured_options[0]
+
+    # Read/Grep/Glob in tools but NOT in allowed_tools
+    assert "Read" in opts.tools
+    assert "Grep" in opts.tools
+    assert "Glob" in opts.tools
+    assert "Read" not in opts.allowed_tools
+    assert "Grep" not in opts.allowed_tools
+    assert "Glob" not in opts.allowed_tools
+
+    # Write/Edit/Bash in neither list
+    assert "Write" not in opts.tools
+    assert "Edit" not in opts.tools
+    assert "Bash" not in opts.tools
+
+    # Permission config
+    assert opts.permission_mode == "default"
+    assert opts.can_use_tool is not None
+    assert opts.strict_mcp_config is True
+
+    # MCP servers
+    assert "leder" in opts.mcp_servers
+
+
+def test_user_prompt_has_no_shell_command(monkeypatch):
+    """The agent prompt must not contain any shell command or fetch_page.py reference."""
+    from pipeline import stage_b_verify as sb
+
+    captured_prompts = []
+
+    def _fake_query(prompt, options):
+        async def _gen():
+            async for msg in prompt:
+                if isinstance(msg, dict) and "message" in msg:
+                    captured_prompts.append(msg["message"]["content"])
+            return
+            yield  # pragma: no cover
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, "/corpus", "sys", timeout=5, max_turns=1,
+        web_cache_dir="/corpus/web_cache",
+    ))
+
+    assert captured_prompts, "query() was never called"
+    prompt = captured_prompts[0]
+    assert "fetch_page.py" not in prompt
+    assert "pipeline/tools/" not in prompt
+    assert "python3 " not in prompt
+    assert "sys.executable" not in prompt
+    # Claim ID should not appear as a label in the prompt text
+    assert "Claim ID:" not in prompt
+
+
+def test_user_prompt_is_async_iterable_not_str(monkeypatch):
+    """The prompt argument to query() must be an async iterable, not a string."""
+    from pipeline import stage_b_verify as sb
+
+    captured_prompts = []
+
+    def _fake_query(prompt, options):
+        captured_prompts.append(prompt)
+        async def _gen():
+            return
+            yield  # pragma: no cover
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, "/corpus", "sys", timeout=5, max_turns=1,
+        web_cache_dir="/corpus/web_cache",
+    ))
+
+    assert captured_prompts, "query() was never called"
+    prompt = captured_prompts[0]
+    assert not isinstance(prompt, str)
+    assert hasattr(prompt, "__aiter__")
+
+
+def test_verify_claim_async_no_settings_tempfile(monkeypatch):
+    """No tempfile.NamedTemporaryFile should be called -- settings block removed."""
+    from pipeline import stage_b_verify as sb
+    import tempfile
+
+    def _raising_named_temp(*args, **kwargs):
+        raise RuntimeError("NamedTemporaryFile should not be called")
+
+    monkeypatch.setattr("tempfile.NamedTemporaryFile", _raising_named_temp)
+
+    def _fake_query(prompt, options):
+        async def _gen():
+            return
+            yield  # pragma: no cover
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    result = asyncio.run(sb._verify_claim_async(
+        claim, "/corpus", "sys", timeout=5, max_turns=1,
+        web_cache_dir="/corpus/web_cache",
+    ))
+    assert result is not None  # Succeeded without tempfile

@@ -21,10 +21,6 @@ from pathlib import Path as _Path
 
 from pipeline.models import Claim
 
-# Absolute path to fetch_page.py -- the verification agent's cwd is corpus_root,
-# so a bare relative "pipeline/tools/fetch_page.py" does not resolve from there.
-_FETCH_PAGE_SCRIPT = str(_Path(__file__).resolve().parent / "tools" / "fetch_page.py")
-
 # The claude CLI prints this once per spawned subprocess whenever an API-key
 # auth source (e.g. DeepSeek via ANTHROPIC_AUTH_TOKEN) takes precedence over
 # a claude.ai login -- expected and harmless here since every agent uses
@@ -237,14 +233,8 @@ async def _verify_claim_async(
     from datetime import datetime as _dt
     today = _dt.now().strftime("%B %d, %Y")
 
-    # Resolve the schema actually in use up front so the prompt's boilerplate
-    # (fetch_page command, "Output fields" list) always matches it.
     schema = output_schema if output_schema is not None else FindingOutput.model_json_schema()
     schema_fields = ", ".join(schema.get("properties", {}).keys())
-    fetch_page_cmd = (
-        f"{sys.executable} {_FETCH_PAGE_SCRIPT} <url> {claim.claim_id} "
-        f"--cache-dir {web_cache_dir}"
-    )
 
     prompt = (
         f"Verify this claim:\n\n"
@@ -253,53 +243,28 @@ async def _verify_claim_async(
         f"Today's date: {today}\n\n"
         f"Claim: {claim.claim_text}\n\n"
         f"Claim type: {claim.claim_type}\n\n"
-        f"Claim ID: {claim.claim_id}\n\n"
-        f"If you fetch any web pages, run: {fetch_page_cmd}\n"
-        f"This saves to {web_cache_dir}/{claim.claim_id}/page.md for the audit trail.\n"
-        f"Before fetching, check {web_cache_dir}/_FOLDER_SUMMARY.md — the page may already be cached.\n\n"
         f"Output fields: {schema_fields}."
     )
 
-    # Dynamic sandbox: deny access outside the corpus and /tmp.
-    # The agent's cwd is corpus_root, so relative paths work for corpus access.
-    # Explicit deny blocks the agent from wandering into /home, /etc, etc.
-    import tempfile as _tempfile
-    _settings = {
-        "permissions": {
-            "deny": [
-                "Bash(/home/**)",
-                "Bash(/etc/**)",
-                "Bash(/usr/**)",
-                "Bash(/var/**)",
-                "Bash(/root/**)",
-                "Bash(/opt/**)",
-                "Bash(/sys/**)",
-                "Bash(/proc/**)",
-                "Read(/home/**)",
-                "Read(/etc/**)",
-                "Read(/usr/**)",
-                "Read(/var/**)",
-                "Read(/root/**)",
-                "Read(/opt/**)",
-                "Read(/sys/**)",
-                "Read(/proc/**)",
-            ]
-        }
-    }
-    _sf = _tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    json.dump(_settings, _sf)
-    _sf.close()
-    settings_path = _sf.name
+    from pipeline.agent_tools import build_verification_tools, corpus_only_permission
 
-    tools = allowed_tools if allowed_tools is not None else ["Read", "Bash", "WebSearch", "WebFetch"]
+    base_tools = ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]
+    mcp_tools = ["mcp__leder__validate_excerpt", "mcp__leder__fetch_page"]
+    auto_allowed = ["WebSearch", "WebFetch"] + mcp_tools
+
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
-        allowed_tools=tools,
-        permission_mode="acceptEdits",
+        tools=base_tools + mcp_tools,
+        allowed_tools=auto_allowed,
+        permission_mode="default",
+        can_use_tool=corpus_only_permission(corpus_root, web_cache_dir),
+        mcp_servers={
+            "leder": build_verification_tools(corpus_root, web_cache_dir, claim.claim_id),
+        },
+        strict_mcp_config=True,
         cwd=corpus_root,
         max_turns=max_turns,
         output_format={"type": "json_schema", "schema": schema},
-        settings=settings_path,
         stderr=_filter_agent_stderr,
     )
 
@@ -308,10 +273,19 @@ async def _verify_claim_async(
     transcript: list[dict] = []  # Full message stream for debug
 
     result = agent_failure_result(claim)
+
+    async def _prompt_stream():
+        yield {
+            "type": "user",
+            "session_id": "",
+            "message": {"role": "user", "content": prompt},
+            "parent_tool_use_id": None,
+        }
+
     try:
         async def _run():
             nonlocal full_text, structured_output
-            async for message in query(prompt=prompt, options=options):
+            async for message in query(prompt=_prompt_stream(), options=options):
                 if debug_dir:
                     try:
                         transcript.append(_serialize_message(message))
@@ -350,8 +324,6 @@ async def _verify_claim_async(
         print(f"  [{claim.claim_id}] Process error (exit {e.exit_code})", file=sys.stderr)
     except Exception as e:
         print(f"  [{claim.claim_id}] Error: {e}", file=sys.stderr)
-    finally:
-        os.unlink(settings_path)
 
     return result
 
@@ -402,7 +374,13 @@ async def _verify_target_async(
     rec_action = raw.get("recommended_action")
     meta = raw.get("metadata", {})
 
+    # Run the excerpt gate: re-verify the agent's quoted excerpt against the
+    # actual document.
+    gate = _apply_excerpt_gate(raw, corpus_root, web_cache_dir, claim.claim_id)
+
     agent_summary = result.rationale or ""
+    if gate.get("note"):
+        agent_summary = f"{agent_summary} {gate['note']}".strip()
     human_review = result.human_review
     if _is_summary_path(result.source_path):
         human_review = True
@@ -423,9 +401,12 @@ async def _verify_target_async(
         recommended_action=rec_action,
         source_path=result.source_path,
         source_url=result.source_url,
-        source_excerpt=result.source_excerpt,
+        source_excerpt=gate.get("source_excerpt", result.source_excerpt),
+        source_excerpt_offset=gate.get("source_excerpt_offset"),
+        source_excerpt_similarity=gate.get("source_excerpt_similarity"),
+        excerpt_status=gate.get("excerpt_status"),
         confidence=result.confidence,
-        human_review=human_review,
+        human_review=bool(human_review) or bool(gate.get("human_review")),
         metadata=meta,
     )
 

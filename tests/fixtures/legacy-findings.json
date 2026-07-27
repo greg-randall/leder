@@ -1,0 +1,44 @@
+{
+  "article_file": "article.md",
+  "article_summary": "A timeline of McBride Operating LLC's oilfield waste facilities near Waskom, Texas, covering regulatory actions by the Railroad Commission, Waskom City Council proceedings, groundwater contamination findings, and ongoing legal disputes from February 2020 through November 2026.",
+  "total_findings": 3,
+  "findings": [
+    {
+      "finding_id": "fact_check-163364f74e",
+      "check_type": "fact_check",
+      "severity": "PASS",
+      "target_text": "Craig Kissok testified at the July 14, 2026 meeting; he is affiliated with Cornell, Texas A&M, and UT, and wrote Louisiana's waste disposal rules.",
+      "anchor_text": "Craig Kissok (Cornell, Texas A&M, UT; wrote Louisiana's waste disposal rules)",
+      "agent_summary": "The July 14, 2026 meeting transcript confirms all elements: Craig Kissok identified himself by name (line 106), stated his degrees from Cornell, Texas A&M, and UT (line 114), and claimed he \"was picked by the state of Louisiana to write rules governing disposal of oil and gas waste in Louisiana\" (line 115). The article properly attributes these as testimony from Kissok. Note: the credentials are self-reported — the corpus contains no independent verification of his degrees or his role in writing Louisiana's rules, but the attribution claim itself is accurate.",
+      "source_path": "20260717 - Meeting for 7-14-26 [XQ3PK-qjSdk].en.srt.md",
+      "source_excerpt": "My name is Craig Kissok. I'm the technical expert on the pride operating case in law school. I'm a licensed scientist with 45 years experience focused on the disposal of oil and gas waste. I'm an undergraduate degree from Cornell, a master degree from Texas A&M, and an MBA from UT. I was picked by the state of Louisiana to write rules governing disposal of oil and gas waste in Louisiana.",
+      "confidence": 0.95,
+      "human_review": false
+    },
+    {
+      "finding_id": "fact_check-b70196975d",
+      "check_type": "fact_check",
+      "severity": "PASS",
+      "target_text": "The Waskom city attorney estimated approximately $100,000 to continue the protest against McBride, with no guarantee of success, as no private citizen has ever prevailed without the Railroad Commission on their side.",
+      "anchor_text": "City attorney estimates ~$100K to continue the protest — with no guarantee of success, as no private citizen has ever prevailed without the Railroad Commission on their side.",
+      "agent_summary": "The July 14, 2026 meeting transcript confirms the city attorney estimated legal costs at \"close to six figures\" (matching \"approximately $100,000\") and stated — both relaying from McBride's attorney Mr. Neil and in his own summary — that \"no entity or private individual has ever successfully stopped a permit from being granted without the river commission on their side.\" The article accurately attributes both the cost estimate and the no-precedent warning to the city attorney.",
+      "source_path": "20260717 - Meeting for 7-14-26 [XQ3PK-qjSdk].en.srt.md",
+      "source_excerpt": "I'll tell you it's probably close to six figures",
+      "confidence": 0.95,
+      "human_review": false
+    },
+    {
+      "finding_id": "fact_check-6bc287a8ae",
+      "check_type": "fact_check",
+      "severity": "PASS",
+      "target_text": "On November 18, 2025, McBride's new safety/PR officer James Stietenroth introduced himself to the Waskom City Council. No formal actions were taken.",
+      "anchor_text": "McBride's new safety/PR officer James Stietenroth introduces himself to council. No formal actions.",
+      "agent_summary": "The November 18, 2025 meeting transcript confirms James Stietenroth (spelled \"S T I E T E N R O T H\" when asked by the council) introduced himself as \"the safety consultant and the public relations officer for... McBride operating\" and provided his contact information. After his introduction, the meeting proceeded directly to monthly reports and routine business (ordinances, resolutions, a library bid) with no votes, resolutions, or formal actions taken regarding McBride Operating.",
+      "source_path": "20251119 - City Council meeting for 11-18-2025 [cBwXIb026iA].en.srt.md",
+      "source_url": "null",
+      "source_excerpt": "I'm here today to introduce myself as the safety consultant and the public relations officer for the city of Was McBride operating",
+      "confidence": 0.95,
+      "human_review": false
+    }
+  ]
+}

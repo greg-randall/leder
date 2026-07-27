@@ -143,13 +143,14 @@ def test_finding_offset_survives_findings_document_json():
 
 
 def test_finding_real_findings_json_still_loads():
-    """The committed findings.json predates these fields. It must still parse --
+    """A findings.json that predates these fields must still parse --
     this is the backward-compatibility guarantee that lets us fix forward."""
-    import os
+    from pathlib import Path as _Path
     from pipeline.finding import FindingsDocument
-    if not os.path.exists("findings.json"):
-        import pytest
-        pytest.skip("findings.json not present")
-    doc = FindingsDocument.from_json(open("findings.json", encoding="utf-8").read())
+    fixture = _Path(__file__).resolve().parent / "fixtures" / "legacy-findings.json"
+    doc = FindingsDocument.from_json(fixture.read_text(encoding="utf-8"))
     assert doc.findings
-    assert all(f.excerpt_status is None for f in doc.findings)
+    for f in doc.findings:
+        assert f.source_excerpt_offset is None
+        assert f.source_excerpt_similarity is None
+        assert f.excerpt_status is None

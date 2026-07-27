@@ -449,6 +449,80 @@ def _is_summary_path(path: str | None) -> bool:
     return any(m in path for m in summary_markers)
 
 
+def _apply_excerpt_gate(raw: dict, corpus_root: str, web_cache_dir: str,
+                        claim_id: str) -> dict:
+    """Re-verify the agent's reported source_excerpt against the document it cites.
+
+    Runs whether or not the agent called the validate_excerpt tool: the tool is
+    a convenience for the agent, this is the guarantee. Returns ONLY the fields
+    to apply to the Finding, plus an optional "note" for agent_summary.
+
+    Four outcomes, recorded in excerpt_status:
+      exact      -- found verbatim; offset recorded
+      repaired   -- found fuzzily; source_excerpt REPLACED with the document's
+                    real wording, flagged for human review
+      not_found  -- no match; excerpt dropped, flagged
+      unchecked  -- no readable source to check against; nothing changed
+
+    "unchecked" exists to separate "we checked and found nothing" from "we had
+    nothing to check against". Collapsing both to a null offset is what let the
+    original dropped-offset bug stay invisible.
+
+    Deliberately does NOT touch severity or confidence. A paraphrased supporting
+    quote does not by itself mean the verdict is wrong, and rewriting an
+    editorial judgment from a string-match score would be a worse defect than
+    the one this fixes.
+    """
+    from pipeline.agent_tools import resolve_within
+    from pipeline.tools.validate_excerpt import validate_excerpt
+
+    excerpt = (raw.get("source_excerpt") or "").strip()
+    source_path = raw.get("source_path")
+    source_url = raw.get("source_url")
+
+    target = None
+    if source_path:
+        # Agents sometimes prefix the path with the corpus folder name or "./";
+        # stage_d_sources.py strips the same prefixes when resolving sources.
+        for prefix in ("corpus/", "./"):
+            if source_path.startswith(prefix):
+                source_path = source_path[len(prefix):]
+                break
+        target = resolve_within(_Path(corpus_root), source_path)
+    elif source_url:
+        target = _Path(web_cache_dir) / claim_id / "page.md"
+
+    if not excerpt or target is None or not target.is_file():
+        return {"excerpt_status": "unchecked"}
+
+    result = validate_excerpt(str(target), excerpt)
+
+    if not result.get("found"):
+        return {
+            "excerpt_status": "not_found",
+            "source_excerpt": None,
+            "source_excerpt_offset": None,
+            "source_excerpt_similarity": None,
+            "human_review": True,
+            "note": "⚠ the quoted excerpt could not be located in the cited source",
+        }
+
+    similarity = result.get("similarity", 1.0)
+    fields = {
+        "source_excerpt": result["actual_text"],
+        "source_excerpt_offset": result["offset"],
+        "source_excerpt_similarity": similarity,
+    }
+    if similarity >= 1.0:
+        fields["excerpt_status"] = "exact"
+    else:
+        fields["excerpt_status"] = "repaired"
+        fields["human_review"] = True
+        fields["note"] = ("⚠ excerpt replaced with the source's actual wording "
+                          f"(match {similarity:.2f})")
+    return fields
+
+
 def _summarize_web_cache(web_cache_dir: str) -> None:
     """Create minimal page_summary.md for each web_cache page so tiered search
     finds them on re-runs. Free — takes the first paragraph of each page

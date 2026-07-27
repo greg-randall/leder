@@ -829,3 +829,129 @@ def test_finding_output_defaults_new_fields_to_none():
     f = FindingOutput(severity="PASS", agent_summary="test")
     assert f.source_excerpt_offset is None
     assert f.source_excerpt_similarity is None
+
+
+# ── excerpt gate ──────────────────────────────────────────────────────────
+
+def _gate(tmp_path, raw, claim_id="c1", doc_text=None, doc_name="doc.md"):
+    from pipeline.stage_b_verify import _apply_excerpt_gate
+    corpus = tmp_path / "corpus"
+    corpus.mkdir(exist_ok=True)
+    wc = corpus / "web_cache"
+    wc.mkdir(exist_ok=True)
+    if doc_text is not None:
+        (corpus / doc_name).write_text(doc_text)
+    return _apply_excerpt_gate(raw, str(corpus), str(wc), claim_id)
+
+
+def test_excerpt_gate_exact_records_offset(tmp_path):
+    doc = "The road commission issued a 68-page notice of violation."
+    out = _gate(tmp_path,
+                {"source_path": "doc.md", "source_excerpt": "road commission issued"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "exact"
+    assert out["source_excerpt"] == "road commission issued"
+    start, end = out["source_excerpt_offset"]
+    assert doc[start:end] == "road commission issued"
+    assert out["source_excerpt_similarity"] == 1.0
+    assert "human_review" not in out
+
+
+def test_excerpt_gate_repairs_paraphrase(tmp_path):
+    doc = ("the road commission issued a 68 page notice of violation for the "
+           "McBride Was facility on fe February 7th, 2025.")
+    out = _gate(tmp_path,
+                {"source_path": "doc.md",
+                 "source_excerpt": "the Railroad Commission issued a 68-page notice of violation"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "repaired"
+    assert out["human_review"] is True
+    # The excerpt is REPLACED with text that really is in the document
+    assert out["source_excerpt"] in doc
+    assert out["source_excerpt"] != "the Railroad Commission issued a 68-page notice of violation"
+    start, end = out["source_excerpt_offset"]
+    assert doc[start:end] == out["source_excerpt"]
+    assert out["source_excerpt_similarity"] < 1.0
+
+
+def test_excerpt_gate_not_found_drops_excerpt(tmp_path):
+    out = _gate(tmp_path,
+                {"source_path": "doc.md",
+                 "source_excerpt": "a quote that is nowhere in this document at all"},
+                doc_text="completely unrelated text about zoning permits")
+    assert out["excerpt_status"] == "not_found"
+    assert out["source_excerpt"] is None
+    assert out["source_excerpt_offset"] is None
+    assert out["human_review"] is True
+    assert out.get("note")
+
+
+def test_excerpt_gate_unchecked_when_no_source_file(tmp_path):
+    out = _gate(tmp_path,
+                {"source_path": "missing.md", "source_excerpt": "anything"})
+    assert out == {"excerpt_status": "unchecked"}
+
+
+def test_excerpt_gate_unchecked_when_no_excerpt(tmp_path):
+    out = _gate(tmp_path, {"source_path": "doc.md", "source_excerpt": ""},
+                doc_text="some text")
+    assert out == {"excerpt_status": "unchecked"}
+
+
+def test_excerpt_gate_unchecked_when_no_source_at_all(tmp_path):
+    """Neither source_path nor source_url -- nothing to check against."""
+    out = _gate(tmp_path, {"source_excerpt": "some quote"})
+    assert out == {"excerpt_status": "unchecked"}
+
+
+def test_excerpt_gate_strips_corpus_prefix(tmp_path):
+    doc = "The road commission issued a notice."
+    out = _gate(tmp_path,
+                {"source_path": "corpus/doc.md", "source_excerpt": "road commission issued"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "exact"
+
+
+def test_excerpt_gate_strips_dot_slash_prefix(tmp_path):
+    doc = "The road commission issued a notice."
+    out = _gate(tmp_path,
+                {"source_path": "./doc.md", "source_excerpt": "road commission issued"},
+                doc_text=doc)
+    assert out["excerpt_status"] == "exact"
+
+
+def test_excerpt_gate_resolves_web_finding_to_cache(tmp_path):
+    from pipeline.stage_b_verify import _apply_excerpt_gate
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    wc = corpus / "web_cache"
+    (wc / "c9").mkdir(parents=True)
+    (wc / "c9" / "page.md").write_text("The commission denied the renewal in February.")
+    out = _apply_excerpt_gate(
+        {"source_url": "https://x.test/a", "source_excerpt": "denied the renewal"},
+        str(corpus), str(wc), "c9")
+    assert out["excerpt_status"] == "exact"
+    assert out["source_excerpt"] == "denied the renewal"
+
+
+def test_excerpt_gate_rejects_path_escape(tmp_path):
+    """An escaping source_path must be treated as unchecked, never read."""
+    from pipeline.stage_b_verify import _apply_excerpt_gate
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "web_cache").mkdir()
+    (tmp_path / "secret.md").write_text("road commission issued a notice")
+    out = _apply_excerpt_gate(
+        {"source_path": "../secret.md", "source_excerpt": "road commission issued"},
+        str(corpus), str(corpus / "web_cache"), "c1")
+    assert out == {"excerpt_status": "unchecked"}
+
+
+def test_excerpt_gate_does_not_touch_severity_or_confidence(tmp_path):
+    """The gate flags for human review; it must never rewrite the verdict."""
+    out = _gate(tmp_path,
+                {"source_path": "doc.md", "severity": "CRITICAL", "confidence": 0.95,
+                 "source_excerpt": "nowhere in this text at all"},
+                doc_text="completely unrelated content about zoning")
+    assert "severity" not in out
+    assert "confidence" not in out

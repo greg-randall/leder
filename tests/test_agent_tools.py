@@ -263,7 +263,12 @@ def _permission(tmp_path):
     from pipeline.agent_tools import corpus_only_permission
     corpus = tmp_path / "corpus"
     corpus.mkdir()
-    wc = corpus / "web_cache"
+    # Deliberately OUTSIDE corpus (a sibling of it, not nested inside) --
+    # web_cache_dir defaults inside corpus_root in production, but a fixture
+    # that nests it there makes any test asserting "web_cache is reachable"
+    # pass on corpus_root containment alone, testing nothing about the
+    # second root. Only a genuinely separate root exercises that branch.
+    wc = tmp_path / "web_cache"
     wc.mkdir()
     return corpus, wc, corpus_only_permission(str(corpus), str(wc))
 
@@ -389,3 +394,58 @@ def test_permission_allows_ordinary_grep_glob_filter(tmp_path):
     for glob_filter in ("*.md", "**/*.srt.md", "20260717*"):
         result = _decide(cb, "Grep", {"pattern": "x", "glob": glob_filter})
         assert result.behavior == "allow", glob_filter
+
+
+def test_permission_denies_glob_pattern_brace_and_bracket_spellings_of_traversal(tmp_path):
+    """A bare '..' substring check isn't enough: minimatch (which npm `glob`,
+    and therefore almost certainly the Glob tool, is built on) does brace
+    expansion by default, and `[.]` is a character class matching a literal
+    dot -- so these are the same traversal spelled around the substring
+    check."""
+    _, _, cb = _permission(tmp_path)
+    for pattern in ("{..,.}/x", "{.,..}/*.md", "[.][.]/x", "[.]./x", ".[.]/x"):
+        assert _decide(cb, "Glob", {"pattern": pattern}).behavior == "deny", pattern
+
+
+def test_permission_denies_grep_glob_filter_brace_and_bracket_spellings(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    for glob_filter in ("{..,.}/x", "{.,..}/*.md", "[.][.]/x", "[.]./x", ".[.]/x"):
+        result = _decide(cb, "Grep", {"pattern": "x", "glob": glob_filter})
+        assert result.behavior == "deny", glob_filter
+
+
+def test_permission_denies_glob_pattern_tilde(tmp_path):
+    """The '~' branch of _pattern_escapes has its own test so deleting it
+    can't silently pass the suite."""
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Glob", {"pattern": "~/secrets/*"}).behavior == "deny"
+
+
+def test_permission_denies_grep_glob_filter_tilde(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    result = _decide(cb, "Grep", {"pattern": "x", "glob": "~/secrets/*"})
+    assert result.behavior == "deny"
+
+
+def test_permission_denies_read_with_missing_file_path(tmp_path):
+    """Read's file_path is mandatory (path_required=True) -- unlike Grep/Glob's
+    path, a missing file_path must deny outright rather than default to 'the
+    corpus root'."""
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Read", {}).behavior == "deny"
+
+
+def test_tool_spec_membership_is_pinned(tmp_path):
+    """Pin _TOOL_SPEC's exact membership so a future entry can't reach
+    production without a test author consciously updating this assertion."""
+    from pipeline.agent_tools import _TOOL_SPEC
+    assert set(_TOOL_SPEC) == {"Read", "Grep", "Glob"}
+
+
+def test_tool_spec_entries_all_have_a_nonempty_path_arg(tmp_path):
+    """The hazard this guards: a spec with an empty/None path_arg and no
+    matching pattern_args falls through every check in _can_use_tool and
+    reaches PermissionResultAllow() regardless of tool_input."""
+    from pipeline.agent_tools import _TOOL_SPEC
+    for name, spec in _TOOL_SPEC.items():
+        assert spec.path_arg, name

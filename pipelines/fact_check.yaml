@@ -87,7 +87,7 @@ verification:
     Aim to complete verification in 30 turns or fewer. If you search
     repeatedly without narrowing, stop and work with what you have.
 
-  allowed_tools: [Read, Bash, WebSearch, WebFetch]
+  allowed_tools: [Read, Grep, Glob, WebSearch, WebFetch]
 
 display:
   template: |

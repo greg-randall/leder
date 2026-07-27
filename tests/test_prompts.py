@@ -44,7 +44,7 @@ def test_extraction_prompt_well_formed_with_empty_description():
 def test_verification_rules_has_sandbox_rule():
     p = build_verification_rules_block("")
     assert "SANDBOX" in p
-    assert "relative paths only" in p.lower()
+    assert "paths relative to this" in p.lower()
 
 
 def test_verification_rules_has_tiered_search_strategy():
@@ -95,7 +95,40 @@ def test_verification_rules_well_formed_with_empty_description():
     assert "{{" not in p and "}}" not in p
 
 
+def test_verification_rules_reference_tools_not_shell():
+    from pipeline.prompts import build_verification_rules_block
+    block = build_verification_rules_block("")
+    assert "validate_excerpt" in block
+    assert "fetch_page" in block
+    # Nothing the agent is told to do may be a shell invocation or a script path
+    assert "python3 " not in block
+    assert "pipeline/tools/" not in block
+    assert "--cache-dir" not in block
+
+
+def test_verification_rules_have_standalone_validate_section():
+    from pipeline.prompts import build_verification_rules_block
+    block = build_verification_rules_block("")
+    assert "## VALIDATE EXCERPT" in block
+    # It must come after the search strategy, not inside it
+    assert block.index("## SEARCH STRATEGY") < block.index("## VALIDATE EXCERPT")
+
+
+def test_verification_rules_describe_grep_not_rg():
+    from pipeline.prompts import build_verification_rules_block
+    block = build_verification_rules_block("")
+    assert "Grep" in block
+    assert 'rg "term"' not in block
+
+
+def test_fact_check_yaml_allows_grep_and_glob():
+    from pipeline.playbook import load_playbook
+    pb = load_playbook("pipelines/fact_check.yaml")
+    assert pb.allowed_tools == ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]
+
+
 def test_verification_rules_has_validate_excerpt_step():
     p = build_verification_rules_block("")
     assert "VALIDATE EXCERPT (MANDATORY)" in p
-    assert "validate_excerpt.py" in p
+    assert "validate_excerpt" in p
+    assert "validate_excerpt.py" not in p

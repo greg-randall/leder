@@ -88,11 +88,11 @@ def build_verification_rules_block(corpus_description: str) -> str:
 
 {domain_block}## SANDBOX
 
-Your working directory IS the document corpus. Use relative paths only:
-`rg "term" .` or `rg "term" some-folder/`. NEVER use absolute paths
-(`/home/...`, `/mnt/...`) -- the Read tool also takes paths relative to this
-directory. If you can't find a source within the corpus, say so; do not go
-looking elsewhere on the filesystem.
+Your working directory IS the document corpus. Search it with the `Grep` and
+`Glob` tools and open files with `Read`, always using paths relative to this
+directory (e.g. `Grep(pattern="McBride", path=".")`). Paths that resolve outside
+the corpus are refused, so absolute paths will not work. If you can't find a
+source within the corpus, say so; do not go looking elsewhere.
 
 ## SEARCH STRATEGY -- tiered, local first
 
@@ -113,27 +113,35 @@ Search top-down through whatever levels exist for this corpus:
    it, treat it as unconfirmed. NOTE: some `.md` files are image stubs
    (containing "Image skipped") -- these have no extractable text; skip them
    as evidence sources.
-5. VALIDATE EXCERPT (MANDATORY) -- before reporting any source_excerpt, you MUST
-   call `python3 pipeline/tools/validate_excerpt.py <source_path> "<candidate>"`
-   with the source file path and the text you believe supports the claim. The tool
-   returns the ACTUAL text from the source (never your paraphrase) and its match
-   position. Use the returned `actual_text` as `source_excerpt` and the returned
-   `offset` as `source_excerpt_offset` -- never your own wording. If the tool
-   returns `{{"found": false}}`, you may: (a) try a different candidate excerpt,
-   (b) lower your confidence and set `human_review: true`, or (c) report the
-   finding as unverifiable in this corpus. You may NOT fabricate a source_excerpt
-   that the tool did not confirm. Findings verified against web sources
-   (source_url, no local source_path) do not need to call this tool.
-6. `web_cache/` -- pages a previous verification agent already fetched. Check
-   `web_cache/_FOLDER_SUMMARY.md` BEFORE fetching a new URL; a prior agent may
-   have already cached the page you need.
-7. THE WEB -- see "Corroboration" below. Not just a fallback for missing local
+5. `web_cache/` -- pages a previous verification agent already fetched. Check
+   `web_cache/_FOLDER_SUMMARY.md` BEFORE calling `fetch_page` for a new page;
+   a prior agent may have already cached what you need.
+6. THE WEB -- see "Corroboration" below. Not just a fallback for missing local
    information.
 
 `source_path` format: relative to the corpus root, exactly as the file exists
 on disk, and always the converted `.md` file (e.g.
 `20260717 - Meeting for 7-14-26 [XQ3PK-qjSdk].en.srt.md`), never the raw
 `.srt`/`.pdf`/other source format.
+
+## VALIDATE EXCERPT (MANDATORY)
+
+Before reporting any `source_excerpt`, call the `validate_excerpt` tool with the
+source file path and the text you believe supports the claim. It returns the
+ACTUAL text from the source -- never your paraphrase -- along with its character
+position. Report the returned `actual_text` as `source_excerpt` and the returned
+`offset` as `source_excerpt_offset`.
+
+If the tool returns `{{"found": false}}`, you may: (a) try a different candidate
+excerpt, (b) lower your confidence and set `human_review: true`, or (c) report the
+finding as unverifiable in this corpus. Do not report a `source_excerpt` the tool
+did not confirm: every excerpt is re-checked in code after you finish, and an
+unconfirmed one is replaced with the source's real wording or dropped, and the
+finding is flagged for human review either way.
+
+Findings verified against web sources (`source_url`, no local `source_path`) skip
+this step. Fetch pages with the `fetch_page` tool, which caches them for the
+audit trail; pass it only the URL.
 
 ## Corroboration -- the corpus itself is checkable
 

@@ -83,3 +83,73 @@ def test_target_from_dict_defaults():
     t = Target.from_dict({"target_text": "x", "anchor_text": "x", "playbook": "fc"})
     assert t.context == ""
     assert t.claim_type is None
+
+
+def _finding(**kw):
+    from pipeline.finding import Finding
+    base = dict(finding_id="f1", check_type="fact_check", severity="PASS",
+                target_text="T", anchor_text="A", agent_summary="S")
+    base.update(kw)
+    return Finding(**base)
+
+
+def test_finding_round_trips_excerpt_fields():
+    from pipeline.finding import Finding
+    f = _finding(source_excerpt="real text", source_excerpt_offset=[10, 19],
+                 source_excerpt_similarity=0.82, excerpt_status="repaired")
+    d = f.to_dict()
+    assert d["source_excerpt_offset"] == [10, 19]
+    assert d["source_excerpt_similarity"] == 0.82
+    assert d["excerpt_status"] == "repaired"
+    back = Finding.from_dict(d)
+    assert back.source_excerpt_offset == [10, 19]
+    assert back.source_excerpt_similarity == 0.82
+    assert back.excerpt_status == "repaired"
+
+
+def test_finding_omits_excerpt_fields_when_unset():
+    d = _finding().to_dict()
+    assert "source_excerpt_offset" not in d
+    assert "source_excerpt_similarity" not in d
+    assert "excerpt_status" not in d
+
+
+def test_finding_from_dict_without_excerpt_fields():
+    """Findings written before the excerpt gate existed must still load."""
+    from pipeline.finding import Finding
+    f = Finding.from_dict({
+        "finding_id": "f1", "check_type": "fact_check", "severity": "PASS",
+        "target_text": "T", "anchor_text": "A", "agent_summary": "S",
+    })
+    assert f.source_excerpt_offset is None
+    assert f.excerpt_status is None
+
+
+def test_finding_offset_survives_findings_document_json():
+    """The fields must survive the FindingsDocument JSON round-trip, which is
+    the actual wire format between stage B and stages C/D -- not just to_dict."""
+    from pipeline.finding import FindingsDocument
+    doc = FindingsDocument(
+        article_file="a.md", article_summary="S",
+        findings=[_finding(source_excerpt="real text",
+                           source_excerpt_offset=[10, 19],
+                           source_excerpt_similarity=1.0,
+                           excerpt_status="exact")],
+    )
+    back = FindingsDocument.from_json(doc.to_json())
+    assert back.findings[0].source_excerpt_offset == [10, 19]
+    assert back.findings[0].source_excerpt_similarity == 1.0
+    assert back.findings[0].excerpt_status == "exact"
+
+
+def test_finding_real_findings_json_still_loads():
+    """The committed findings.json predates these fields. It must still parse --
+    this is the backward-compatibility guarantee that lets us fix forward."""
+    import os
+    from pipeline.finding import FindingsDocument
+    if not os.path.exists("findings.json"):
+        import pytest
+        pytest.skip("findings.json not present")
+    doc = FindingsDocument.from_json(open("findings.json", encoding="utf-8").read())
+    assert doc.findings
+    assert all(f.excerpt_status is None for f in doc.findings)

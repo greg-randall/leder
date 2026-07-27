@@ -51,6 +51,10 @@ class Finding:
     source_path: Optional[str] = None
     source_url: Optional[str] = None
     source_excerpt: Optional[str] = None
+    source_excerpt_offset: Optional[list[int]] = None
+    source_excerpt_similarity: Optional[float] = None
+    # One of "exact", "repaired", "not_found", "unchecked" (set by the excerpt gate).
+    excerpt_status: Optional[str] = None
     confidence: Optional[float] = None
     human_review: Optional[bool] = None
     metadata: dict = field(default_factory=dict)
@@ -92,6 +96,9 @@ class Finding:
             source_path=d.get("source_path"),
             source_url=d.get("source_url"),
             source_excerpt=d.get("source_excerpt"),
+            source_excerpt_offset=d.get("source_excerpt_offset"),
+            source_excerpt_similarity=d.get("source_excerpt_similarity"),
+            excerpt_status=d.get("excerpt_status"),
             confidence=d.get("confidence"),
             human_review=d.get("human_review"),
             metadata=d.get("metadata", {}),

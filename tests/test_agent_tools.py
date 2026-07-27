@@ -340,3 +340,52 @@ def test_permission_denies_non_string_truthy_path(tmp_path):
     _, _, cb = _permission(tmp_path)
     for bogus in (123, True, ["a"], b"doc.md"):
         assert _decide(cb, "Read", {"file_path": bogus}).behavior == "deny", bogus
+
+
+def test_permission_denies_tilde_path(tmp_path):
+    """A leading '~' is contained by resolve_within (it's just a literal
+    directory name to Path), which is only correct if the real Read tool does
+    no tilde expansion of its own. Nothing in the corpus is legitimately
+    addressed with '~', so deny it outright rather than trust that."""
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Read", {"file_path": "~/.ssh/id_rsa"}).behavior == "deny"
+
+
+# Glob's `pattern` and Grep's `glob` are a second route to the filesystem,
+# independent of the `path` argument -- a clean `path` doesn't clear them.
+
+
+def test_permission_denies_glob_pattern_traversal(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Glob", {"pattern": "../*.md", "path": "."}).behavior == "deny"
+
+
+def test_permission_denies_glob_pattern_absolute(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Glob", {"pattern": "/etc/*"}).behavior == "deny"
+
+
+def test_permission_denies_glob_pattern_deep_traversal(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Glob", {"pattern": "../../**/*"}).behavior == "deny"
+
+
+def test_permission_denies_grep_glob_filter_traversal(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    result = _decide(cb, "Grep", {"pattern": ".", "path": ".", "glob": "../*"})
+    assert result.behavior == "deny"
+
+
+def test_permission_allows_ordinary_glob_patterns(tmp_path):
+    """The pattern-escape rule must not be over-broad -- everyday corpus
+    search patterns still work."""
+    _, _, cb = _permission(tmp_path)
+    for pattern in ("*.md", "**/*.srt.md", "20260717*"):
+        assert _decide(cb, "Glob", {"pattern": pattern}).behavior == "allow", pattern
+
+
+def test_permission_allows_ordinary_grep_glob_filter(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    for glob_filter in ("*.md", "**/*.srt.md", "20260717*"):
+        result = _decide(cb, "Grep", {"pattern": "x", "glob": glob_filter})
+        assert result.behavior == "allow", glob_filter

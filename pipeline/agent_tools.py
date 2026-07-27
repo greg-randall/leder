@@ -4,8 +4,8 @@ Stage-B agents run with cwd=corpus_root and must not reach outside it. Rather
 than express that as CLI paths and permission-rule globs (which is what failed
 before -- Bash(...) rules match command patterns, not paths), the tools and
 their path containment live here, in Python we can unit-test without an agent.
-A permission callback that reuses resolve_within() to police Read/Grep/Glob
-arrives in a later task; _PATH_ARG below is the map it will key off.
+corpus_only_permission() below is the can_use_tool callback that polices
+Read/Grep/Glob using resolve_within(); _TOOL_SPEC is the map it keys off.
 """
 from __future__ import annotations
 
@@ -25,10 +25,23 @@ from claude_agent_sdk import (
 from pipeline.tools.fetch_page import fetch_page
 from pipeline.tools.validate_excerpt import validate_excerpt
 
-# Tool name -> the input key naming the path it will touch. A tool absent from
-# this map is one we have not reasoned about, so the permission callback
-# (added in the next task) denies it.
-_PATH_ARG = {"Read": "file_path", "Grep": "path", "Glob": "path"}
+# Tool name -> how it can reach the filesystem:
+#   "path"     the single input key naming a location, checked via
+#              resolve_within (None if the tool has no such key).
+#   "patterns" input keys holding glob-style strings that are a SECOND route
+#              to the filesystem, independent of "path" -- Glob's `pattern`
+#              and Grep's `glob` are matched against files on disk in their
+#              own right (e.g. Glob(pattern="../*.md") escapes corpus_root
+#              even though Glob's `path` argument was never touched). Grep's
+#              `pattern` is a search regex, not a filesystem pattern, so it is
+#              deliberately absent here.
+# A tool absent from this map is one we have not reasoned about, so the
+# permission callback denies it.
+_TOOL_SPEC = {
+    "Read": {"path": "file_path", "patterns": ()},
+    "Grep": {"path": "path", "patterns": ("glob",)},
+    "Glob": {"path": "path", "patterns": ("pattern",)},
+}
 
 
 def _json_result(payload: dict, is_error: bool = False) -> dict:
@@ -152,6 +165,25 @@ def build_verification_tools(
     )
 
 
+def _pattern_escapes(pattern: str) -> bool:
+    """True if a glob-style pattern reaches outside the corpus on its own,
+    independent of whatever the tool's `path` argument says.
+
+    A legitimate corpus search never needs an absolute prefix, a leading `~`,
+    or a `..` path segment -- Glob/Grep's own `path` argument (already run
+    through resolve_within) is how you scope a search to a subdirectory. This
+    is a conservative, string-level check rather than a resolve_within-style
+    filesystem check: we cannot verify on this machine whether the real
+    Glob/Grep implementations interpret `..`/absolute segments inside a
+    pattern as filesystem traversal, so we deny the shapes that WOULD be a
+    traversal if they are interpreted that way, rather than assume they are
+    safe.
+    """
+    if pattern.startswith("/") or pattern.startswith("~"):
+        return True
+    return ".." in pattern.split("/")
+
+
 def corpus_only_permission(corpus_root: str, web_cache_dir: str):
     """Build a can_use_tool callback that confines filesystem reads to the corpus.
 
@@ -159,8 +191,8 @@ def corpus_only_permission(corpus_root: str, web_cache_dir: str):
     can_use_tool for auto-approved tools, which is exactly why Read/Grep/Glob
     are deliberately left out of allowed_tools in stage B.
 
-    Default-deny: a tool absent from _PATH_ARG is one whose filesystem reach we
-    have not reasoned about, so it is refused rather than waved through.
+    Default-deny: a tool absent from _TOOL_SPEC is one whose filesystem reach
+    we have not reasoned about, so it is refused rather than waved through.
     """
     corpus_resolved = Path(corpus_root).resolve()
     roots = [corpus_resolved]
@@ -169,14 +201,39 @@ def corpus_only_permission(corpus_root: str, web_cache_dir: str):
         roots.append(web_cache)
 
     async def _can_use_tool(tool_name: str, tool_input: dict, context):
-        if tool_name not in _PATH_ARG:
+        spec = _TOOL_SPEC.get(tool_name)
+        if spec is None:
             return PermissionResultDeny(
                 message=f"{tool_name} is not available to verification agents.")
 
-        raw = tool_input.get(_PATH_ARG[tool_name])
+        # Second route to the filesystem: Glob's `pattern` and Grep's `glob`
+        # are matched against files on disk independently of the `path`
+        # argument below, so a clean `path` doesn't clear them.
+        for pattern_arg in spec["patterns"]:
+            pattern_val = tool_input.get(pattern_arg)
+            if pattern_val is None:
+                continue
+            if not isinstance(pattern_val, str):
+                return PermissionResultDeny(
+                    message=f"{pattern_arg} must be a string.")
+            if _pattern_escapes(pattern_val):
+                return PermissionResultDeny(
+                    message=(f"{pattern_arg} must not be absolute, start "
+                             f"with '~', or contain a '..' segment."))
+
+        path_arg = spec["path"]
+        raw = tool_input.get(path_arg) if path_arg else None
         if raw is not None and not isinstance(raw, str):
             return PermissionResultDeny(
-                message=f"{_PATH_ARG[tool_name]} must be a string.")
+                message=f"{path_arg} must be a string.")
+        if isinstance(raw, str) and raw.startswith("~"):
+            # resolve_within would happily contain "<corpus_root>/~/..." --
+            # correct IF Read does no tilde expansion of its own, which we
+            # cannot verify here. Nothing in the corpus is legitimately
+            # addressed with a leading '~', so deny it outright rather than
+            # trust that assumption.
+            return PermissionResultDeny(
+                message=f"{path_arg} must not begin with '~'.")
 
         # A relative (or missing) path resolves against the *process* cwd,
         # which the SDK sets to corpus_root -- so only corpus_root's

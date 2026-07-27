@@ -92,3 +92,62 @@ def test_large_document_handled(tmp_path):
     assert cp.returncode == 0
     out = _output(cp)
     assert out["found"] is True
+
+
+# ── Direct function tests (the CLI tests above cover the argv wrapper) ──
+
+def test_validate_excerpt_function_exact(tmp_path):
+    src = tmp_path / "doc.md"
+    src.write_text("The road commission issued a 68-page notice of violation.")
+    from pipeline.tools.validate_excerpt import validate_excerpt
+    out = validate_excerpt(str(src), "road commission issued a 68-page notice")
+    assert out["found"] is True
+    assert out["similarity"] == 1.0
+    assert out["actual_text"] == "road commission issued a 68-page notice"
+    start, end = out["offset"]
+    assert src.read_text()[start:end] == out["actual_text"]
+
+
+def test_validate_excerpt_function_fuzzy(tmp_path):
+    src = tmp_path / "doc.md"
+    src.write_text(
+        "the road commission issued a 68 page notice of violation "
+        "for the McBride Was facility on fe February 7th, 2025."
+    )
+    from pipeline.tools.validate_excerpt import validate_excerpt
+    out = validate_excerpt(
+        str(src), "the Railroad Commission issued a 68-page notice of violation")
+    assert out["found"] is True
+    assert 0.6 <= out["similarity"] < 1.0
+    start, end = out["offset"]
+    assert src.read_text()[start:end] == out["actual_text"]
+
+
+def test_validate_excerpt_function_no_match(tmp_path):
+    src = tmp_path / "doc.md"
+    src.write_text("completely unrelated text about zoning permits")
+    from pipeline.tools.validate_excerpt import validate_excerpt
+    out = validate_excerpt(str(src), "railroad commission issued a notice")
+    assert out["found"] is False
+
+
+def test_validate_excerpt_function_missing_file(tmp_path):
+    from pipeline.tools.validate_excerpt import validate_excerpt
+    out = validate_excerpt(str(tmp_path / "nope.md"), "anything")
+    assert out["found"] is False
+    assert "error" in out
+
+
+def test_validate_excerpt_function_empty_candidate(tmp_path):
+    src = tmp_path / "doc.md"
+    src.write_text("some content")
+    from pipeline.tools.validate_excerpt import validate_excerpt
+    out = validate_excerpt(str(src), "   ")
+    assert out["found"] is False
+    assert "empty" in out["error"]
+
+
+def test_validate_excerpt_function_does_not_exit(tmp_path):
+    """The function must never call sys.exit -- it is imported by MCP handlers."""
+    from pipeline.tools.validate_excerpt import validate_excerpt
+    validate_excerpt(str(tmp_path / "nope.md"), "x")  # would raise SystemExit if it did

@@ -55,33 +55,32 @@ def _score_chunks(candidate_clean: str, chunks: list[tuple[str, int, int]]) -> l
     return scores
 
 
-def main() -> None:
-    if len(sys.argv) != 3:
-        print(json.dumps({"found": False, "error": "usage: validate_excerpt.py <file_path> <candidate_text>"}))
-        sys.exit(1)
+def validate_excerpt(file_path: str, candidate: str) -> dict:
+    """Check whether `candidate` appears in `file_path`, exactly or fuzzily.
 
-    file_path = sys.argv[1]
-    candidate = sys.argv[2]
-
+    Returns {"found": True, "actual_text", "offset": [start, end], "similarity"}
+    or {"found": False} / {"found": False, "error": str}. Never exits; never
+    raises for a missing file. `actual_text` is always a real substring of the
+    file, which is the whole point -- callers use it in place of whatever
+    wording they came in with.
+    """
     if not candidate.strip():
-        print(json.dumps({"found": False, "error": "candidate_text is empty"}))
-        sys.exit(1)
+        return {"found": False, "error": "candidate_text is empty"}
 
     try:
         text = _Path(file_path).read_text(encoding="utf-8", errors="replace")
     except (FileNotFoundError, OSError):
-        print(json.dumps({"found": False, "error": f"file not found: {file_path}"}))
-        sys.exit(1)
+        return {"found": False, "error": f"file not found: {file_path}"}
 
     # Tier 1: exact substring (case-insensitive)
     idx = text.lower().find(candidate.lower())
     if idx >= 0:
-        actual = text[idx:idx + len(candidate)]
-        print(json.dumps({
-            "found": True, "actual_text": actual,
-            "offset": [idx, idx + len(candidate)], "similarity": 1.0,
-        }))
-        sys.exit(0)
+        return {
+            "found": True,
+            "actual_text": text[idx:idx + len(candidate)],
+            "offset": [idx, idx + len(candidate)],
+            "similarity": 1.0,
+        }
 
     # Tier 2: chunk-scored Levenshtein on top 3 chunks
     chunks = _chunk_document(text)
@@ -93,27 +92,33 @@ def main() -> None:
     for idx_chunk in top_indices:
         chunk_text, chunk_start, _ = chunks[idx_chunk]
         pos = find_quote_position(candidate, chunk_text)
-        if pos is not None:
-            cstart, cend = pos
-            actual = chunk_text[cstart:cend]
-            ratio = difflib.SequenceMatcher(None, _clean(candidate), _clean(actual)).ratio()
-            if ratio >= 0.6:
-                result = {
-                    "found": True,
-                    "actual_text": actual,
-                    "offset": [chunk_start + cstart, chunk_start + cend],
-                    "similarity": round(ratio, 4),
-                }
-                if best is None or ratio > best["similarity"]:
-                    best = result
-
-    if best is not None:
-        print(json.dumps(best))
-        sys.exit(0)
+        if pos is None:
+            continue
+        cstart, cend = pos
+        actual = chunk_text[cstart:cend]
+        ratio = difflib.SequenceMatcher(None, _clean(candidate), _clean(actual)).ratio()
+        if ratio >= 0.6 and (best is None or ratio > best["similarity"]):
+            best = {
+                "found": True,
+                "actual_text": actual,
+                "offset": [chunk_start + cstart, chunk_start + cend],
+                "similarity": round(ratio, 4),
+            }
 
     # Tier 3: no match
-    print(json.dumps({"found": False}))
-    sys.exit(1)
+    return best if best is not None else {"found": False}
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        print(json.dumps({
+            "found": False,
+            "error": "usage: validate_excerpt.py <file_path> <candidate_text>",
+        }))
+        sys.exit(1)
+    result = validate_excerpt(sys.argv[1], sys.argv[2])
+    print(json.dumps(result))
+    sys.exit(0 if result.get("found") else 1)
 
 
 if __name__ == "__main__":

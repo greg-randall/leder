@@ -169,39 +169,31 @@ def _try_archive_is(url: str, timeout: int = 60, debug_dir: Path | None = None
     return html, "archive.is-raw"
 
 
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> "
-              "[--debug] [--cache-dir <dir>]",
-              file=sys.stderr)
-        sys.exit(1)
+_PAYWALL_SIGNALS = (
+    "Supported by", "Subscribe to continue", "Already a subscriber?",
+    "Create a free account", "To continue reading", "Please sign in",
+    "You've reached your limit", "subscribers only",
+)
 
-    url = sys.argv[1]
-    target_id = sys.argv[2]
-    debug = "--debug" in sys.argv
 
-    # --cache-dir <dir> overrides the default relative path
-    cache_root = "web_cache"
-    if "--cache-dir" in sys.argv:
-        idx = sys.argv.index("--cache-dir")
-        if idx + 1 < len(sys.argv):
-            cache_root = sys.argv[idx + 1]
+def fetch_page(url: str, target_id: str, cache_dir: str = "web_cache",
+               debug: bool = False, use_archive: bool = False) -> dict:
+    """Fetch `url`, cache it at <cache_dir>/<target_id>/page.md, return the result.
 
-    cache_dir = Path(cache_root) / target_id
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    out_path = cache_dir / "page.md"
-    debug_dir = cache_dir if debug else None
-
-    _PAYWALL_SIGNALS = (
-        "Supported by", "Subscribe to continue", "Already a subscriber?",
-        "Create a free account", "To continue reading", "Please sign in",
-        "You've reached your limit", "subscribers only",
-    )
+    Returns {"ok": bool, "path": str, "method": str | None, "content": str,
+             "warning": str | None}. Always writes page.md, even on failure
+    (with the "(failed to fetch ...)" marker other stages already look for).
+    """
+    out_dir = Path(cache_dir) / target_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "page.md"
+    debug_dir = out_dir if debug else None
 
     content = None
     method = None
+    warning = None
 
-    # Tier 1: jina.ai — fast, free, but fails on paywalls
+    # Tier 1: jina.ai -- fast, free, but fails on paywalls
     jina_result, _ = _try_jina(url, debug_dir=debug_dir)
     if jina_result:
         content, method = jina_result, "jina.ai"
@@ -211,15 +203,14 @@ def main():
             content, method = fetcher(url, debug_dir=debug_dir)
             if content:
                 break
-        # Tier 3: archive.is (opt-in via --archive-is — slow, hit-or-miss)
-        use_archive = "--archive-is" in sys.argv
+        # Tier 3: archive.is -- slow, hit-or-miss, opt-in
         if not content and use_archive:
             content, method = _try_archive_is(url, debug_dir=debug_dir)
         if content and any(signal.lower() in content[:500].lower()
                            for signal in _PAYWALL_SIGNALS):
-            print(f"  WARNING: content may be a paywall preview "
-                  f"({len(content)} chars). Consider finding an alternate source.",
-                  file=sys.stderr)
+            warning = (f"content may be a paywall preview ({len(content)} chars). "
+                       f"Consider finding an alternate source.")
+            print(f"  WARNING: {warning}", file=sys.stderr)
 
     if content:
         # Prepend the source URL if the fetcher didn't include it (jina does)
@@ -227,11 +218,35 @@ def main():
             content = f"**Source URL:** {url}\n\n{content}"
         out_path.write_text(content, encoding="utf-8")
         print(f"[fetch_page] {url} -> {out_path}  ({method})", file=sys.stderr)
-        print(content)
-    else:
-        out_path.write_text(f"(failed to fetch {url})\n", encoding="utf-8")
-        print(f"[fetch_page] FAILED: {url} — all methods exhausted", file=sys.stderr)
-        print(f"(failed to fetch {url})")
+        return {"ok": True, "path": str(out_path), "method": method,
+                "content": content, "warning": warning}
+
+    failure = f"(failed to fetch {url})\n"
+    out_path.write_text(failure, encoding="utf-8")
+    print(f"[fetch_page] FAILED: {url} — all methods exhausted", file=sys.stderr)
+    return {"ok": False, "path": str(out_path), "method": None,
+            "content": failure, "warning": warning}
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python3 pipeline/tools/fetch_page.py <url> <target_id> "
+              "[--debug] [--archive-is] [--cache-dir <dir>]",
+              file=sys.stderr)
+        sys.exit(1)
+
+    cache_root = "web_cache"
+    if "--cache-dir" in sys.argv:
+        idx = sys.argv.index("--cache-dir")
+        if idx + 1 < len(sys.argv):
+            cache_root = sys.argv[idx + 1]
+
+    result = fetch_page(
+        sys.argv[1], sys.argv[2], cache_root,
+        debug="--debug" in sys.argv,
+        use_archive="--archive-is" in sys.argv,
+    )
+    print(result["content"])
 
 
 if __name__ == "__main__":

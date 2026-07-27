@@ -14,7 +14,13 @@ import json
 from pathlib import Path
 from typing import Annotated
 
-from claude_agent_sdk import McpSdkServerConfig, create_sdk_mcp_server, tool
+from claude_agent_sdk import (
+    McpSdkServerConfig,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    create_sdk_mcp_server,
+    tool,
+)
 
 from pipeline.tools.fetch_page import fetch_page
 from pipeline.tools.validate_excerpt import validate_excerpt
@@ -43,9 +49,9 @@ def resolve_within(root: Path, candidate: str | None) -> Path | None:
     call with no `path` argument, which searches the whole corpus -- so it
     resolves to the corpus root itself rather than being rejected.
     """
-    if not candidate:
-        return root.resolve()
     try:
+        if candidate is None or candidate == "":
+            return root.resolve()
         raw = Path(candidate)
         target = (raw if raw.is_absolute() else root / raw).resolve()
         root_resolved = root.resolve()
@@ -94,7 +100,11 @@ def build_verification_tools(
             return _json_result(
                 {"found": False, "error": f"{type(e).__name__}: {e}"},
                 is_error=True)
-        return _json_result(result)
+        # An "error" key (missing file, empty candidate_text) means validate_excerpt
+        # couldn't even attempt the check -- a usage problem the agent must see AS
+        # an error. A bare {"found": False} with no "error" key is a legitimate
+        # negative result (the text just isn't there) and stays a normal reply.
+        return _json_result(result, is_error=bool(result.get("error")))
 
     @tool(
         "fetch_page",
@@ -140,3 +150,49 @@ def build_verification_tools(
         name="leder", version="1.0.0",
         tools=[_validate_excerpt_tool, _fetch_page_tool],
     )
+
+
+def corpus_only_permission(corpus_root: str, web_cache_dir: str):
+    """Build a can_use_tool callback that confines filesystem reads to the corpus.
+
+    Only reached for tools NOT in allowed_tools -- the SDK does not invoke
+    can_use_tool for auto-approved tools, which is exactly why Read/Grep/Glob
+    are deliberately left out of allowed_tools in stage B.
+
+    Default-deny: a tool absent from _PATH_ARG is one whose filesystem reach we
+    have not reasoned about, so it is refused rather than waved through.
+    """
+    corpus_resolved = Path(corpus_root).resolve()
+    roots = [corpus_resolved]
+    web_cache = Path(web_cache_dir).resolve()
+    if web_cache not in roots:
+        roots.append(web_cache)
+
+    async def _can_use_tool(tool_name: str, tool_input: dict, context):
+        if tool_name not in _PATH_ARG:
+            return PermissionResultDeny(
+                message=f"{tool_name} is not available to verification agents.")
+
+        raw = tool_input.get(_PATH_ARG[tool_name])
+        if raw is not None and not isinstance(raw, str):
+            return PermissionResultDeny(
+                message=f"{_PATH_ARG[tool_name]} must be a string.")
+
+        # A relative (or missing) path resolves against the *process* cwd,
+        # which the SDK sets to corpus_root -- so only corpus_root's
+        # containment applies. Checking it against web_cache_dir too would let
+        # a corpus-root symlink escape slip through on a coincidental
+        # non-existent match under web_cache_dir (resolve() does not raise for
+        # path components that don't exist, so a bogus nested path still
+        # counts as "inside" that root). Absolute paths carry their own
+        # location and may legitimately land in any allowed root.
+        candidate_roots = roots if (raw and Path(raw).is_absolute()) else [corpus_resolved]
+        for root in candidate_roots:
+            if resolve_within(root, raw) is not None:
+                return PermissionResultAllow()
+
+        return PermissionResultDeny(
+            message=(f"{raw} is outside the corpus. Use paths relative to the "
+                     f"corpus root."))
+
+    return _can_use_tool

@@ -234,3 +234,109 @@ def test_tool_names_are_the_two_expected(tmp_path):
             types.ListToolsRequest(method="tools/list")))
     names = {t.name for t in result.root.tools}
     assert names == {"validate_excerpt", "fetch_page"}
+
+
+def test_validate_excerpt_escape_sets_is_error(tmp_path):
+    """The refusal must reach the agent AS AN ERROR, not just as JSON text."""
+    corpus, _, server = _build(tmp_path)
+    (tmp_path / "secret.md").write_text("the road commission issued a notice")
+    result = asyncio.run(_call(server, "validate_excerpt",
+                               {"source_path": "../secret.md",
+                                "candidate_text": "road commission issued"}))
+    assert result.isError is True
+
+
+def test_validate_excerpt_missing_file_sets_is_error(tmp_path):
+    corpus, _, server = _build(tmp_path)
+    result = asyncio.run(_call(server, "validate_excerpt",
+                               {"source_path": "nope.md", "candidate_text": "x"}))
+    assert result.isError is True
+
+
+# ── corpus_only_permission ────────────────────────────────────────────────
+
+def _decide(callback, tool_name, tool_input):
+    return asyncio.run(callback(tool_name, tool_input, None))
+
+
+def _permission(tmp_path):
+    from pipeline.agent_tools import corpus_only_permission
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    wc = corpus / "web_cache"
+    wc.mkdir()
+    return corpus, wc, corpus_only_permission(str(corpus), str(wc))
+
+
+def test_permission_allows_read_inside_corpus(tmp_path):
+    corpus, _, cb = _permission(tmp_path)
+    (corpus / "doc.md").write_text("x")
+    assert _decide(cb, "Read", {"file_path": "doc.md"}).behavior == "allow"
+
+
+def test_permission_allows_grep_and_glob_inside_corpus(tmp_path):
+    corpus, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Grep", {"pattern": "x", "path": "."}).behavior == "allow"
+    assert _decide(cb, "Glob", {"pattern": "*.md", "path": "."}).behavior == "allow"
+
+
+def test_permission_allows_web_cache(tmp_path):
+    _, wc, cb = _permission(tmp_path)
+    assert _decide(cb, "Read", {"file_path": str(wc / "c1" / "page.md")}).behavior == "allow"
+
+
+def test_permission_allows_missing_path_argument(tmp_path):
+    """Grep/Glob with no path default to cwd, which IS corpus_root."""
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Grep", {"pattern": "x"}).behavior == "allow"
+    assert _decide(cb, "Glob", {"pattern": "*.md"}).behavior == "allow"
+
+
+def test_permission_denies_parent_traversal(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    (tmp_path / "article.md").write_text("secret")
+    result = _decide(cb, "Read", {"file_path": "../article.md"})
+    assert result.behavior == "deny"
+    assert "outside the corpus" in result.message
+
+
+def test_permission_denies_absolute_path_outside(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    assert _decide(cb, "Read", {"file_path": "/etc/passwd"}).behavior == "deny"
+
+
+def test_permission_denies_symlink_escape(tmp_path):
+    corpus, _, cb = _permission(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("secret")
+    (corpus / "link.md").symlink_to(outside)
+    assert _decide(cb, "Read", {"file_path": "link.md"}).behavior == "deny"
+
+
+def test_permission_denies_unknown_tool(tmp_path):
+    """A tool we have not reasoned about must be denied, not allowed by default."""
+    _, _, cb = _permission(tmp_path)
+    result = _decide(cb, "Bash", {"command": "rm -rf /"})
+    assert result.behavior == "deny"
+    assert "not available" in result.message
+
+
+def test_permission_denies_write_and_edit(tmp_path):
+    """Write/Edit are removed from the toolbox in a later task, but the callback
+    must not be the thing that would have let them through."""
+    _, _, cb = _permission(tmp_path)
+    for name in ("Write", "Edit", "NotebookEdit"):
+        assert _decide(cb, name, {"file_path": "doc.md"}).behavior == "deny"
+
+
+def test_permission_denies_falsy_non_string_path(tmp_path):
+    """A non-string path must not be coerced into 'the corpus root'."""
+    _, _, cb = _permission(tmp_path)
+    for bogus in (0, False, [], {}, b""):
+        assert _decide(cb, "Read", {"file_path": bogus}).behavior == "deny", bogus
+
+
+def test_permission_denies_non_string_truthy_path(tmp_path):
+    _, _, cb = _permission(tmp_path)
+    for bogus in (123, True, ["a"], b"doc.md"):
+        assert _decide(cb, "Read", {"file_path": bogus}).behavior == "deny", bogus

@@ -469,7 +469,15 @@ def convert(article_sourced_md: str, findings_path: str, output_dir: str,
 
     fn_verdicts = _parse_footnote_verdicts(footnotes_raw)
     html_body = _md_to_html(body, fn_verdicts)
-    sources_html = _render_sources(footnotes_raw, source_map, findings_list)
+    # Stage C's footnote-number -> finding_id map, written beside the sourced
+    # markdown. Absent for markdown produced before the sidecar existed.
+    footnote_map: dict[str, str] = {}
+    sidecar_path = os.path.splitext(article_sourced_md)[0] + ".footnotes.json"
+    if os.path.exists(sidecar_path):
+        with open(sidecar_path, encoding="utf-8") as f:
+            footnote_map = json.load(f)
+
+    sources_html = _render_sources(footnotes_raw, source_map, findings_list, footnote_map)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -644,12 +652,14 @@ def _enrich_contexts(findings: list[dict], article_body: str) -> None:
 
 
 def _render_sources(raw: str, source_map: dict[str, str] | None = None,
-                    findings_list: list[dict] | None = None) -> str:
+                    findings_list: list[dict] | None = None,
+                    footnote_map: dict[str, str] | None = None) -> str:
     """Build HTML source cards (hidden) for the JS sidebar to read from."""
     if not raw.strip():
         return ""
     source_map = source_map or {}
     findings_list = findings_list or []
+    footnote_map = footnote_map or {}
     lines = raw.strip().splitlines()
     cards = []
     cur = None
@@ -692,15 +702,25 @@ def _render_sources(raw: str, source_map: dict[str, str] | None = None,
         extra_attrs = f' data-source-html="{_escape(source_html)}"' if source_html else ""
         if _is_generated_summary_source(c["source"]):
             extra_attrs += ' data-is-summary="true"'
-        # Map footnote number (1-based) to the actual finding_id for scroll-target matching.
-        try:
-            idx = int(c["id"]) - 1
-            finding_id = findings_list[idx].get("finding_id", "") if 0 <= idx < len(findings_list) else ""
-        except (ValueError, IndexError):
-            finding_id = ""
+        # Map footnote number to the actual finding for scroll-target matching.
+        # Stage C numbers footnotes by document position, so the positional
+        # index into findings.json is only a fallback for sourced markdown
+        # written before the sidecar map existed.
+        finding: dict = {}
+        finding_id = footnote_map.get(c["id"], "")
+        if finding_id:
+            finding = next(
+                (f for f in findings_list if f.get("finding_id") == finding_id), {})
+        else:
+            try:
+                idx = int(c["id"]) - 1
+            except ValueError:
+                idx = -1
+            if 0 <= idx < len(findings_list):
+                finding = findings_list[idx]
+                finding_id = finding.get("finding_id", "")
         if finding_id:
             extra_attrs += f' data-finding-id="{_escape(finding_id)}"'
-        finding = findings_list[idx] if finding_id else {}
         raw_context = finding.get("_context_html") or finding.get("context") or finding.get("target_text", "")
         context_html = raw_context  # _context_html is pre-escaped, plain text is safe as-is
         rec = _escape(c["recommendation"])

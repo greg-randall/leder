@@ -146,6 +146,121 @@ def test_fanned_out_clones_survive_dedup(tmp_path):
     assert "[^2]" in result
 
 
+def test_footnote_numbers_match_marker_positions(tmp_path):
+    """Markers are numbered by document position, so the ## Sources block must
+    be numbered the same way. Findings arriving in non-document order must not
+    desync the two -- [^N] in the body has to resolve to the footnote for the
+    sentence it is attached to."""
+    import json
+    from pipeline.stage_c_rebuild import run_stage_c
+
+    article = tmp_path / "article.md"
+    article.write_text(
+        "Alpha claims the wells are clean.\n\n"
+        "Beta claims the permit was denied.\n\n"
+        "Gamma claims the trucks damaged roads.\n"
+    )
+
+    # Deliberately supplied in reverse document order.
+    findings_path = tmp_path / "findings.json"
+    findings_path.write_text(json.dumps({
+        "article_file": str(article),
+        "article_summary": "S",
+        "findings": [
+            {
+                "finding_id": "fact_check-gamma", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "Trucks damaged roads.",
+                "anchor_text": "Gamma claims the trucks damaged roads.",
+                "agent_summary": "ok",
+            },
+            {
+                "finding_id": "fact_check-alpha", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "Wells are clean.",
+                "anchor_text": "Alpha claims the wells are clean.",
+                "agent_summary": "ok",
+            },
+            {
+                "finding_id": "fact_check-beta", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "Permit was denied.",
+                "anchor_text": "Beta claims the permit was denied.",
+                "agent_summary": "ok",
+            },
+        ],
+    }))
+
+    output_path = str(tmp_path / "article-sourced.md")
+    run_stage_c(
+        article_path=str(article), findings_path=str(findings_path),
+        output_path=output_path,
+    )
+
+    body, sources = open(output_path).read().split("## Sources")
+
+    # Markers are placed in document order.
+    assert "clean[^1]" in body
+    assert "denied[^2]" in body
+    assert "roads[^3]" in body
+
+    # ...and each footnote definition must describe the sentence it is on.
+    footnotes = {}
+    for line in sources.splitlines():
+        if line.startswith("[^"):
+            n = line[2:line.index("]")]
+            footnotes[n] = line
+
+    assert "Wells are clean." in footnotes["1"]
+    assert "Permit was denied." in footnotes["2"]
+    assert "Trucks damaged roads." in footnotes["3"]
+
+
+def test_stage_c_writes_footnote_id_sidecar(tmp_path):
+    """Footnotes are numbered by document position, which need not match
+    findings.json order, so stage C must record which finding each number
+    belongs to. Stage D reads this to set data-finding-id."""
+    import json
+    from pipeline.stage_c_rebuild import run_stage_c
+
+    article = tmp_path / "article.md"
+    article.write_text(
+        "Alpha claims the wells are clean.\n\n"
+        "Beta claims the permit was denied.\n"
+    )
+
+    # Reverse document order.
+    findings_path = tmp_path / "findings.json"
+    findings_path.write_text(json.dumps({
+        "article_file": str(article),
+        "article_summary": "S",
+        "findings": [
+            {
+                "finding_id": "fact_check-beta", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "Permit was denied.",
+                "anchor_text": "Beta claims the permit was denied.",
+                "agent_summary": "ok",
+            },
+            {
+                "finding_id": "fact_check-alpha", "check_type": "fact_check", "severity": "PASS",
+                "target_text": "Wells are clean.",
+                "anchor_text": "Alpha claims the wells are clean.",
+                "agent_summary": "ok",
+            },
+        ],
+    }))
+
+    output_path = tmp_path / "article-sourced.md"
+    run_stage_c(
+        article_path=str(article), findings_path=str(findings_path),
+        output_path=str(output_path),
+    )
+
+    sidecar = tmp_path / "article-sourced.footnotes.json"
+    assert sidecar.exists()
+    assert json.loads(sidecar.read_text()) == {
+        "1": "fact_check-alpha",
+        "2": "fact_check-beta",
+    }
+
+
 def test_genuine_duplicates_still_collapse(tmp_path):
     """Two findings with identical claim_text/check_type/source_quote (a
     genuine duplicate, not a fan-out clone) must still collapse to one."""

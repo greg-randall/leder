@@ -425,6 +425,9 @@ def _finding_dicts_to_claim_like_objects(finding_dicts: list[dict]) -> list:
     claim_likes = []
     for fd in finding_dicts:
         obj = SimpleNamespace(**fd)
+        # claim_id is reassigned to a positional cXXXX id during dedup, so keep
+        # the originating finding_id for the stage-D footnote sidecar.
+        obj.finding_id = fd["claim_id"]
         obj.verdict = Verdict(fd["verdict"])
         obj.source_proximity = SourceProximity.ORIGINAL
         obj.reconciled = False
@@ -585,6 +588,10 @@ def run_stage_c(
         still_unmatched = []
 
     # ── Merge claims sharing the same position ────────────────────
+    # Sort by document position first: insert_footnote_markers numbers markers
+    # in position order, so the footnote block -- built from merged_claims --
+    # must be in that same order or every [^N] resolves to the wrong footnote.
+    placed.sort(key=lambda x: x[1][0])
     claim_lookup = {c.claim_id: c for c in claims}
     deduped_placed, merged_claims = _merge_placed_groups(placed, claim_lookup)
 
@@ -608,7 +615,18 @@ def run_stage_c(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(result)
 
+    # Footnotes are numbered by document position, not by findings.json order,
+    # so stage D can't recover the mapping by index. Record it explicitly.
+    sidecar_path = os.path.splitext(output_path)[0] + ".footnotes.json"
+    footnote_map = {
+        str(i + 1): getattr(c, "finding_id", "") or ""
+        for i, c in enumerate(merged_claims)
+    }
+    with open(sidecar_path, "w", encoding="utf-8") as f:
+        json.dump(footnote_map, f, indent=2)
+
     print(f"Output written -> {output_path}")
+    print(f"Footnote map written -> {sidecar_path}")
     if still_unmatched:
         print(f"  {len(still_unmatched)} UNPLACED CLAIMS -- see top of output file")
 

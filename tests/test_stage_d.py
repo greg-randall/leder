@@ -248,3 +248,41 @@ def test_render_source_document_no_offset_no_match_is_not_found(tmp_path):
     excerpts = [("text not in source", "fact_check-1", "PASS", None)]
     html, not_found = render_source_document(text, excerpts)
     assert not_found == ["fact_check-1"]
+
+
+def test_data_finding_id_comes_from_footnote_sidecar(tmp_path):
+    """Stage C numbers footnotes by document position, which need not match
+    findings.json order. data-finding-id must follow the sidecar map stage C
+    writes, not the positional index findings_list[N-1]."""
+    import json
+    import re
+
+    md = tmp_path / "article-sourced.md"
+    md.write_text(
+        "Alpha claims the wells are clean[^1].\n\n"
+        "Beta claims the permit was denied[^2].\n"
+        "\n---\n\n## Sources\n\n"
+        "[^1]: **[✓ fact_check]** [Original] Wells are clean. — ok\n"
+        "    Source: `a.md`\n\n"
+        "[^2]: **[✓ fact_check]** [Original] Permit was denied. — ok\n"
+        "    Source: `a.md`\n"
+    )
+    (tmp_path / "article-sourced.footnotes.json").write_text(json.dumps({
+        "1": "fact_check-alpha",
+        "2": "fact_check-beta",
+    }))
+    # findings.json in reverse document order -- the positional index is wrong.
+    findings_json = json.dumps({
+        "article_file": "a.md", "article_summary": "", "findings": [
+            {"finding_id": "fact_check-beta", "check_type": "fact_check",
+             "severity": "PASS", "target_text": "Permit was denied.",
+             "anchor_text": "Beta claims the permit was denied.", "agent_summary": "ok"},
+            {"finding_id": "fact_check-alpha", "check_type": "fact_check",
+             "severity": "PASS", "target_text": "Wells are clean.",
+             "anchor_text": "Alpha claims the wells are clean.", "agent_summary": "ok"},
+        ]})
+
+    html = _run_and_read(tmp_path, md, findings_json=findings_json)
+
+    fn1 = re.search(r'<div class="source[^"]*" id="fn1"[^>]*>', html).group(0)
+    assert 'data-finding-id="fact_check-alpha"' in fn1

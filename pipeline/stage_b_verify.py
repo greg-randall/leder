@@ -309,6 +309,9 @@ async def _verify_claim_async(
             with open(os.path.join(agent_log_dir, f"{claim.claim_id}.jsonl"), "w") as f:
                 for entry in transcript:
                     f.write(json.dumps(entry, default=str) + "\n")
+            with open(os.path.join(agent_log_dir, f"{claim.claim_id}.prompt.md"), "w") as f:
+                f.write(f"# System Prompt\n\n{system_prompt}\n\n"
+                        f"# User Prompt\n\n{prompt}\n")
 
         # Targeted debug log (--debug / --debug-ids, separate from always-on)
         if debug_dir:

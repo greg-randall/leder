@@ -203,7 +203,7 @@ function smoothScrollTo(el, target, duration) {
     // Add explicit toggle button so text selection doesn't collapse the card
     var toggleBtn = document.createElement('button');
     toggleBtn.className = 'sc-toggle';
-    toggleBtn.innerHTML = '▶';
+    toggleBtn.innerHTML = '+';
     toggleBtn.title = 'Expand / collapse';
     toggleBtn.setAttribute('aria-label', 'Expand card');
     toggleBtn.style.cssText = (
@@ -221,7 +221,7 @@ function smoothScrollTo(el, target, duration) {
       e.stopPropagation();
       card.classList.toggle('expanded');
       var expanded = card.classList.contains('expanded');
-      this.innerHTML = expanded ? '▼' : '▶';
+      this.innerHTML = expanded ? '▼' : '+';
       this.setAttribute('aria-label', expanded ? 'Collapse card' : 'Expand card');
     });
 

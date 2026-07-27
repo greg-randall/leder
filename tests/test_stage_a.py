@@ -7,6 +7,7 @@ import pytest
 
 from pipeline.stage_a_extract import (
     _chunk_article,
+    _find_paragraph,
     run_stage_a,
 )
 
@@ -267,12 +268,10 @@ def test_chunk_context_brief_prepended_to_later_chunks(tmp_path, monkeypatch):
 
 
 def test_run_stage_a_playbook_path_populates_context(tmp_path, monkeypatch):
-    # Note: the target paragraph is placed first (not preceded by other
-    # paragraphs). _find_paragraph's backward boundary search only kicks in
-    # once the match is >1000 chars into the article -- for a match nearer
-    # the start it falls back to article start, which is correct here since
-    # there's nothing before it anyway. Placing a trailing paragraph after
-    # the target instead exercises the (unconditional) forward boundary.
+    # The target paragraph is placed first, so there is no preceding paragraph
+    # for _find_paragraph's lead-in expansion to pull in. The trailing
+    # paragraph after the target exercises the forward boundary: it must be
+    # excluded.
     article_text = (
         "Jerry Carill testified that the facility injects 20000 barrels a day "
         "into the disposal well, according to meeting minutes.\n\n"
@@ -316,6 +315,80 @@ def test_run_stage_a_playbook_path_populates_context(tmp_path, monkeypatch):
     ctx = data["targets"][0]["context"]
     assert "Jerry Carill testified" in ctx
     assert "Closing paragraph" not in ctx
+
+
+def test_find_paragraph_matches_anchor_with_markdown_stripped():
+    """The regression this function was rewritten for.
+
+    The extraction model drops markdown emphasis when copying an anchor
+    "verbatim". A whitespace-normalized find misses it and the claim reaches
+    verification with no context -- which is what happened to 15 of 49 claims
+    in the Waskom run.
+    """
+    article = (
+        "Sep 2021\n\n"
+        "Railroad Commission places the facility in its **operator cleanup "
+        "program** due to groundwater contamination."
+    )
+    anchor = ("Railroad Commission places the facility in its operator cleanup "
+              "program due to groundwater contamination.")
+
+    ctx = _find_paragraph(article, anchor)
+
+    assert ctx, "anchor with ** stripped must still resolve to a context window"
+    assert "operator cleanup program" in ctx
+
+
+def test_find_paragraph_includes_preceding_date_header():
+    """A markdown timeline puts the date in its own paragraph. A claim from a
+    dated entry is meaningless to the verifier without it."""
+    article = (
+        "Sep 2021\n\n"
+        "Railroad Commission places the facility in its cleanup program.\n\n"
+        "Feb 2025\n\n"
+        "Railroad Commission issues a 68-page notice of violation."
+    )
+
+    ctx = _find_paragraph(article, "issues a 68-page notice of violation")
+
+    assert "Feb 2025" in ctx
+    assert "68-page notice of violation" in ctx
+
+
+def test_find_paragraph_excludes_distant_earlier_paragraph():
+    """Lead-in expansion is budgeted -- it must not drag in unrelated text the
+    way the old fixed 1000-char backward pad did."""
+    article = (
+        "UNRELATED " * 120 + "\n\n"          # ~1200 chars, over the lead budget
+        "Short preceding line.\n\n"
+        "The facility injects 20000 barrels a day into the disposal well."
+    )
+
+    ctx = _find_paragraph(article, "injects 20000 barrels a day")
+
+    assert "20000 barrels a day" in ctx
+    assert "Short preceding line." in ctx
+    assert "UNRELATED" not in ctx
+
+
+def test_find_paragraph_returns_empty_when_quote_absent():
+    article = "McBride opened the Boston facility in February 2020."
+
+    assert _find_paragraph(article, "a claim about something else entirely") == ""
+
+
+def test_find_paragraph_truncated_window_still_contains_the_quote():
+    """The old truncation path re-searched for the quote and, on failure,
+    returned the head of the paragraph -- a window that need not contain the
+    claim at all."""
+    filler = "Filler sentence about the facility. " * 100  # ~3600 chars
+    article = filler + "The benzene reading is 12000 times the action level. " + filler
+    anchor = "The benzene reading is 12000 times the action level."
+
+    ctx = _find_paragraph(article, anchor, context_chars=400)
+
+    assert len(ctx) < len(article)
+    assert "benzene reading is 12000 times the action level" in ctx
 
 
 def test_chunk_article_tiny_first_chunk_has_nothing_to_merge_into():

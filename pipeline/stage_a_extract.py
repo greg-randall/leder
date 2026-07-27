@@ -8,6 +8,7 @@ import sys
 
 from pipeline.finding import Target, FindingsDocument
 from pipeline.playbook import load_playbook
+from pipeline.stage_c_rebuild import find_quote_position
 
 
 def _extraction_tool_for(playbook):
@@ -124,43 +125,63 @@ def _extract_targets_from_text(text: str, model: str, playbook,
     raise RuntimeError("LLM did not call the extraction tool or return parseable JSON.")
 
 
-def _find_paragraph(text: str, quote: str, context_chars: int = 1500) -> str:
+def _find_paragraph(text: str, quote: str, context_chars: int = 1500,
+                    lead_chars: int = 600) -> str:
     """Find the paragraph containing `quote` and return surrounding context.
 
-    Searches for the quote in the text (normalized), then expands to the
-    enclosing paragraph boundaries. Truncates to ~context_chars centered
-    on the quote if the paragraph is very long.
+    Locating the quote is delegated to stage C's `find_quote_position`, which
+    matches on a letters-only projection of both strings. That tolerance is the
+    whole point: the extraction model routinely drops markdown emphasis when
+    copying an anchor verbatim (article says `the **operator cleanup program**`,
+    the anchor comes back `the operator cleanup program`). A plain
+    whitespace-normalized `find` misses every one of those and yields no context
+    at all for the claim.
+
+    The window is the enclosing paragraph, extended backward a whole paragraph
+    at a time while the added lead-in stays under `lead_chars`. The lead-in
+    matters because in a markdown timeline the date header (`Sep 2021`) and
+    section headings (`## Key Facts`) are separate paragraphs -- a claim from a
+    dated entry needs that date, which the enclosing paragraph alone would drop.
+
+    Returns "" when the quote cannot be located at all.
     """
-    n_text = re.sub(r'\s+', ' ', text).lower()
-    n_quote = re.sub(r'\s+', ' ', quote).lower().strip()
-    idx = n_text.find(n_quote)
-    if idx == -1:
+    pos = find_quote_position(quote, text)
+    if pos is None:
         return ""
+    idx, quote_end = pos
 
-    # Expand to paragraph boundaries (double newlines)
-    start = text.rfind('\n\n', 0, max(0, idx - 1000))
-    if start == -1:
-        start = 0
-    else:
-        start += 2
-    end = text.find('\n\n', idx + len(quote))
-    if end == -1:
-        end = len(text)
+    # Enclosing paragraph (double newlines)
+    para_start = text.rfind('\n\n', 0, idx)
+    para_start = 0 if para_start == -1 else para_start + 2
+    para_end = text.find('\n\n', quote_end)
+    if para_end == -1:
+        para_end = len(text)
 
-    para = text[start:end].strip()
-    if len(para) <= context_chars:
-        return para
-    # Truncate around the quote
-    qi = para.lower().find(n_quote)
-    if qi == -1:
-        return para[:context_chars] + "..."
+    # Extend backward by whole paragraphs while the lead-in fits the budget.
+    # `start` is always 0 or a boundary index + 2, so `start - 2` never
+    # re-finds the break we just consumed.
+    start = para_start
+    while start > 0:
+        prev = text.rfind('\n\n', 0, start - 2)
+        prev = 0 if prev == -1 else prev + 2
+        if para_start - prev > lead_chars:
+            break
+        start = prev
+
+    window = text[start:para_end]
+    if len(window) <= context_chars:
+        return window.strip()
+
+    # Truncate around the quote using its known absolute offsets -- no second
+    # search, so the returned window always contains the quote.
+    q_off = idx - start
     half = context_chars // 2
-    left = max(0, qi - half)
-    right = min(len(para), qi + len(quote) + half)
-    result = para[left:right].strip()
+    left = max(0, q_off - half)
+    right = min(len(window), (quote_end - start) + half)
+    result = window[left:right].strip()
     if left > 0:
         result = "..." + result
-    if right < len(para):
+    if right < len(window):
         result = result + "..."
     return result
 
@@ -296,6 +317,7 @@ def run_stage_a(
     all_targets = []
     article_title = ""
     article_summary = ""
+    unlocatable_anchors: list[str] = []
 
     for pb in playbooks:
         tool_schema = _extraction_tool_for(pb)
@@ -335,6 +357,8 @@ def run_stage_a(
 
         for t in pb_targets:
             t.context = _find_paragraph(article_text, t.anchor_text)
+            if not t.context:
+                unlocatable_anchors.append(t.anchor_text)
 
         all_targets.extend(pb_targets)
 
@@ -348,6 +372,14 @@ def run_stage_a(
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2, ensure_ascii=False)
     print(f"Wrote {len(all_targets)} targets -> {output_path}", file=sys.stderr)
+    if unlocatable_anchors:
+        # These targets reach stage-b verification with no article context at
+        # all. Never let that be silent -- it went unnoticed for a long time.
+        print(f"  stage-a: WARNING -- {len(unlocatable_anchors)}/{len(all_targets)} anchors "
+              f"could not be located in the article; those claims have no context:",
+              file=sys.stderr)
+        for a in unlocatable_anchors:
+            print(f"    - {a!r}", file=sys.stderr)
     return FindingsDocument(
         article_file=article_path,
         article_summary=article_summary,

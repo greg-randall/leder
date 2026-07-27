@@ -4,7 +4,7 @@ A YAML-driven editorial review pipeline. Extract claims, verify facts, check quo
 
 ## 1. What it is and why
 
-You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. LEDER does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents (or the web) for evidence, and rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
+You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. LEDER does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents (or the web) for evidence, then rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
 
 It handles a mix of local files (permits, reports, emails, spreadsheets, anything that converts to markdown) and web sources. Swap the article and corpus and it works the same way.
 
@@ -60,7 +60,7 @@ Run these whenever your source documents change. They're not part of `all` — S
 python3 -m pipeline.cli all
 ```
 
-Runs startup validation, then all five stages. About 15 minutes for a 5,000-word article against 300 documents on DeepSeek V4 Flash.
+Runs startup validation, then all five stages. About 15 minutes for a 5,000-word article against 300 documents on DeepSeek V4 Pro.
 
 One stage at a time:
 
@@ -81,6 +81,8 @@ The pipeline reads `config.yaml` from the project root. Defaults are sensible �
 ```yaml
 corpus:
   root: "corpus/"
+  description: >
+    Transcripts of Waskom, Texas city council meetings (2024-2026)...
 
 prepare:
   source_root: "corpus/"
@@ -88,7 +90,34 @@ prepare:
     file_timeout: 300       # seconds before a hung per-file conversion is abandoned
     min_content_bytes: 100  # minimum chars to accept a conversion as meaningful
   audio:
-    vocabulary: []          # names/orgs/places to bias whisper transcription, e.g. ["Jerry Carill", "McBride Operating"]
+    enabled: true
+    model: "medium"         # faster-whisper model size
+    device: "auto"          # auto = GPU if available else CPU
+  vision_fallback:
+    enabled: true
+    model: "gpt-4o-mini"
+    min_image_dim: 130      # skip OCR/vision on images smaller than this
+    max_pages_per_doc: 30
+    dedup_images: true      # skip perceptually duplicate images
+
+stage_a:
+  model: "deepseek-v4-pro"
+
+stage_b:
+  model: "deepseek-v4-pro"
+  concurrency: 32
+  timeout: 600
+  max_turns: 60
+
+stage_c:
+  quote_match_method: "normalized"
+
+stage_d:
+  highlight_margin: 10     # words before/after matched region in source viewer
+
+playbooks:
+  dir: "pipelines/"
+  active: ["fact_check"]
 ```
 
 How each file type gets converted (prepare-1):
@@ -136,7 +165,7 @@ verification:
     {{target_text}}
     ## Article Context
     {{context}}
-    [tiered search strategy, evaluation rubric, output instructions...]
+    [check-specific evaluation criteria, severity rubric, output instructions...]
   allowed_tools: [Read, Bash, WebSearch, WebFetch]
 
 display:
@@ -149,27 +178,65 @@ display:
 
 The runner provides `{{article_text}}`, `{{existing_claims}}`, `{{article_summary}}`, `{{target_text}}`, and `{{context}}`. Playbooks reference them freely.
 
+**Important:** The verification prompt only needs to include check-specific evaluation criteria. Generic rules — the tiered search strategy, the confidence rubric with hard caps, the mandatory `validate_excerpt` step, the corroboration principles, and the sandbox instructions — are injected automatically by `pipeline/prompts.py` and must NOT be duplicated in the playbook YAML (doing so would repeat them and bloat the prompt).
+
 If you already have the current pipeline working with fact-checking: nothing breaks. The v1 `active` list contains only `fact_check`, which achieves full parity with the old hardcoded pipeline. The old CLI flags (`--claims`) still work. New playbooks get added one at a time by adding to `active`.
 
 ## 3. How it works
 
 ### Stage 1: Extraction
 
-The runner loads each active playbook, chunks the article at paragraph boundaries, and dispatches each chunk with the playbook's extraction prompt. A quality gate (per playbook, optional) re-reads the full article to catch cross-chunk misses. Output: `targets.json`, with every target tagged by its originating playbook.
+The runner loads each active playbook, chunks the article at paragraph boundaries, and dispatches each chunk with the playbook's extraction prompt. A shared system prompt (from `pipeline/prompts.py`) enforces rules for claim granularity, standalone wording, context injection, attribution framing, and anchor-text uniqueness. A quality gate (per playbook, optional) re-reads the full article to catch cross-chunk misses. Output: `targets.json`, with every target tagged by its originating playbook.
 
 ### Stage 2: Verification
 
-For each target, the runner looks up its playbook, injects `{{article_summary}}`, `{{target_text}}`, and `{{context}}` into the verification prompt, and spawns a Claude Agent SDK agent with the playbook's allowed tools. The agent returns a unified Finding (severity, agent_summary, source_path, source_excerpt, recommended_action, confidence, metadata). Incremental writes survive crashes. Output: `findings.json`.
+For each target, the runner resolves its playbook, builds a verification prompt by prepending the generic rules block (tiered search strategy, confidence rubric with hard caps, mandatory `validate_excerpt` step, corroboration principles, sandbox instructions) to the playbook's check-specific prompt, and spawns a Claude Agent SDK agent with the playbook's allowed tools plus two in-process MCP tools (`validate_excerpt` and `fetch_page` — see below). The agent returns a structured `FindingOutput` (severity, agent_summary, source_path, source_excerpt, source_excerpt_offset, source_excerpt_similarity, confidence, human_review, recommended_action, metadata). Incremental writes survive crashes. Output: `findings.json`.
+
+Agents run in parallel with configurable concurrency (`stage_b.concurrency`, default 32). The agent loop is async throughout.
+
+#### In-process MCP tools
+
+The verification agent has access to two custom tools, implemented as in-process MCP servers (`pipeline/agent_tools.py`) rather than as CLI scripts the agent invokes via Bash:
+
+- **`validate_excerpt`** — A mandatory verification step. Before reporting any `source_excerpt`, the agent must call this tool with the source path and candidate text. The tool:
+  1. Checks for an exact case-insensitive substring match (returns `actual_text`, offsets, similarity=1.0).
+  2. If no exact match, chunk-scores the document by word overlap and runs sliding-window Levenshtein on the top 3 chunks (returns `actual_text` — always a real substring of the file — with offsets and similarity).
+  3. If nothing matches, returns `{"found": false}`.
+
+  The agent must use the returned `actual_text` as `source_excerpt` and the returned `offset` as `source_excerpt_offset` — never its own wording. If the tool returns `found: false`, the agent may try a different candidate, lower confidence and flag for human review, or report the finding as unverifiable. It may NOT fabricate an excerpt the tool didn't confirm.
+
+- **`fetch_page`** — Fetches a web page and caches it for the audit trail. Four tiers: jina.ai (fast, free markdown) → obscura (headless browser for bot-protected pages) → playwright (real headless browser, last resort) → archive.is (paywall bypass via Camoufox, opt-in). Degrades through tiers rather than raising on failure. Detects paywall previews and warns the agent. Saves output atomically to `web_cache/{target_id}/page.md`.
+
+Both tools enforce path containment: `validate_excerpt` cannot read outside the corpus root; `fetch_page`'s cache location is captured in a closure so the agent can't redirect it.
+
+#### Filesystem sandbox
+
+In addition to the in-process tools, agents have access to `Read`, `Grep`, and `Glob` — but these are policed by a `can_use_tool` callback (`corpus_only_permission` in `agent_tools.py`). Every path argument is resolved against the corpus root via `resolve_within()`, which follows symlinks and collapses `..` before checking containment. Glob-style pattern arguments (`pattern`, `glob`) are string-checked for `..`, absolute prefixes, `~`, and brace/bracket/backslash syntax. Tools not in the spec are denied outright. The agent's working directory IS the corpus root — agents use relative paths only.
+
+#### Excerpt gate
+
+After the agent returns, a code-side excerpt gate (in `stage_b_verify.py`) validates every `source_excerpt` against the claimed source file before accepting the finding:
+
+- **Exact match** (literal substring check, case-insensitive): accepted as-is, `excerpt_status = "exact"`.
+- **Repeated-prefix strip**: if the excerpt is the real text prefixed with a garbled partial repeat (a known LLM artifact), the prefix is stripped and the remainder is checked again. If it matches, accepted with `excerpt_status = "repaired"`.
+- **Not found**: the excerpt is dropped (set to `None`), `source_excerpt_offset` and `source_excerpt_similarity` are cleared, and `excerpt_status = "not_found"`. The finding survives — its severity judgment and agent summary are still valid — but the sidebar won't show a highlighted source quote.
+- **No source_path**: `excerpt_status = "unchecked"` (web-only findings skip this gate entirely).
+
+Excerpts flagged as repaired or not-found log the escape for manual review.
+
+#### Web cache
+
+`fetch_page` saves fetched pages to `web_cache/{target_id}/page.md`. After Stage B finishes, a backfill step scans for findings with a `source_url` but no cached page, and fetches them via obscura, then Jina, then curl.
 
 ### Stage C: Rebuild
 
-Each finding's anchor_text is matched to the article via sliding-window Levenshtein distance (handles smart quotes, ellipses, slight paraphrasing). Findings with the same anchor text merge into one footnote with all badges visible, even when they come from different playbooks. Severity-colored markers go at word boundaries. Output: `article-sourced.md`.
+Each finding's anchor_text is matched to the article via sliding-window Levenshtein distance (handles smart quotes, ellipses, slight paraphrasing). When an anchor text matches more than one position in the article, the finding's `context` field (the surrounding paragraph the claim was extracted from) is used to disambiguate by comparing the letter-only text around each candidate position. Findings with the same anchor text merge into one footnote with all badges visible, even when they come from different playbooks. Severity-colored markers go at word boundaries. Footnotes are numbered by document position (left-to-right through the article). Output: `article-sourced.md`.
 
 ### Stage D: HTML
 
-The sourced markdown becomes an output folder with `article.html` and a `sources/` subfolder. `article.html` is a Bootstrap 5 page: footnote pills are green (PASS), yellow (WARNING), or red (CRITICAL). A sticky sidebar on the right shows every source card. The header is the check_type. The body is rendered through the playbook's display template. Click a pill in the article and the matching sidebar card opens and scrolls into view.
+The sourced markdown becomes an output folder with `article.html` and a `sources/` subfolder (built by `pipeline/stage_d_sources.py`). `article.html` is a Bootstrap 5 page: footnote pills are green (PASS), yellow (WARNING), or red (CRITICAL). A sticky sidebar on the right shows every source card. The header is the check_type. The body is rendered through the playbook's display template. Click a pill in the article and the matching sidebar card opens and scrolls into view.
 
-The `sources/` folder contains one highlighted HTML page per cited source document, with the finding's excerpt marked in yellow. Each sidebar card has an "Explore the source material" button that opens a full-page modal showing the source document (top ~2/3) with the excerpt auto-scrolled into view, plus the finding's details, article context, and a download link for the original file (bottom ~1/3). Press `n`/`p` to navigate between findings, Escape to close, and `article.html#exc-{finding_id}` links deep-link straight to a specific finding's source view.
+The `sources/` folder contains one highlighted HTML page per cited source document, with the finding's excerpt marked in yellow. Excerpt offsets come directly from the agent-verified `source_excerpt_offset` — no more fuzzy matching during Stage D. Multiple findings that cite the same document get overlapping `<mark>` spans; when two findings' excerpts overlap, the shared segment carries both finding IDs (`data-findings="a,b"`) so clicking either pill activates the matching region. Each sidebar card has an "Explore the source material" button that opens a full-page modal showing the source document (top ~2/3) with the excerpt auto-scrolled into view, plus the finding's details, article context, and a download link for the original file (bottom ~1/3). Press `n`/`p` to navigate between findings, Escape to close, and `article.html#exc-{finding_id}` links deep-link straight to a specific finding's source view.
 
 Because the source viewer loads documents via `fetch()`, the output folder must be served over HTTP (e.g. `python3 -m http.server` from inside it, or any static host) — opening `article.html` directly via a `file://` URL will show the article but the "Explore the source material" modal won't be able to load source documents due to browser security restrictions on local file access.
 
@@ -192,6 +259,7 @@ article.md
 │   Load playbooks from YAML                         │
 │   Chunk article (~300 words)                       │
 │   Each chunk → LLM + playbook extraction prompt    │
+│   Shared system prompt (prompts.py)                │
 │   Quality gate → full-article re-read              │
 │   Output: targets.json (tagged with playbook)      │
 └────────────────────────────────────────────────────┘
@@ -200,10 +268,16 @@ article.md
 ┌────────────────────────────────────────────────────┐
 │ STAGE 2: Verification (playbook-driven)            │
 │   For each target: resolve playbook → prompt+tools │
+│   Generic rules injected (prompts.py)              │
 │   Claude Agent SDK. One real agent per target.     │
-│   Tools: per-playbook (Read, Bash, WebSearch, ...) │
-│   Unified FindingOutput schema                     │
+│   In-process MCP tools:                            │
+│     validate_excerpt  (mandatory, 3-tier matching) │
+│     fetch_page        (jina→obscura→pw→archive.is) │
+│   Filesystem sandbox (corpus_only_permission)      │
+│   Structured FindingOutput schema                  │
+│   Excerpt gate: literal-check, repair, or drop     │
 │   Incremental writes (crash-resistant)             │
+│   Async concurrency (configurable, default 32)     │
 │   Output: findings.json                            │
 └────────────────────────────────────────────────────┘
     │
@@ -211,9 +285,11 @@ article.md
 ┌────────────────────────────────────────────────────┐
 │ STAGE C: Rebuild                                   │
 │   Sliding-window Levenshtein for anchor_text       │
+│   Context disambiguation for duplicate anchors     │
 │   → article position mapping                       │
 │   Severity-colored badges (PASS/WARNING/CRITICAL)  │
 │   Multi-playbook merging at same anchor            │
+│   Footnotes numbered by document position          │
 │   Output: article-sourced.md                       │
 └────────────────────────────────────────────────────┘
     │
@@ -223,6 +299,10 @@ article.md
 │   Markdown → Bootstrap 5 HTML                      │
 │   Color-coded pills (green/yellow/red)             │
 │   Sticky sidebar with playbook display templates   │
+│   Sources sub-folder (stage_d_sources.py):         │
+│     Agent-verified excerpt offsets (no fuzzy)      │
+│     Overlapping multi-finding <mark> spans          │
+│     Full-page modal source viewer (fetch-based)    │
 │   Output: article-html/article.html + sources/     │
 └────────────────────────────────────────────────────┘
     │
@@ -240,12 +320,16 @@ article.md
 ```
 leder/
 ├── .env.example                    # API key template
+├── .env                            # Your API keys (gitignored)
 ├── article.md                      # Input article
 ├── article-sourced.md              # Stage C output
+├── article-sourced.footnotes.json  # Stage C footnote manifest
 ├── article-html/                   # Stage D output (folder)
 ├── article-sourced.docx            # Stage E output
 ├── targets.json                    # Stage 1 output
 ├── findings.json                   # Stage 2 output
+├── config.yaml                     # Pipeline configuration
+├── example.config.yaml             # Annotated config reference
 ├── corpus/                         # Local document corpus + web_cache
 ├── debug/                          # Agent transcripts (--debug mode)
 ├── pipelines/                      # Playbook YAML files
@@ -253,17 +337,20 @@ leder/
 ├── requirements.txt
 ├── pipeline/
 │   ├── cli.py                      # Entry point, .env loading, subcommands
-│   ├── config.yaml                 # Model, concurrency, playbook, prepare settings
 │   ├── config.py                   # Dataclass-based config loader
-│   ├── models.py                   # Claim and its supporting enums
-│   ├── finding.py                  # Finding, Target, FindingsDocument, Severity
+│   ├── models.py                   # Legacy Claim model (backward compat)
+│   ├── finding.py                  # Target, Finding, FindingsDocument, Severity
 │   ├── playbook.py                 # Playbook dataclass + YAML loader
+│   ├── llm.py                      # Shared single-shot text completion
+│   ├── prompts.py                  # Shared prompt rulesets (extraction + verification)
 │   ├── template_render.py          # Display template engine
+│   ├── agent_tools.py              # In-process MCP tools + filesystem sandbox
 │   ├── startup_check.py            # Prerequisite validation
 │   ├── stage_a_extract.py          # Generic extraction runner
-│   ├── stage_b_verify.py           # Generic verification runner
-│   ├── stage_c_rebuild.py          # Footnote insertion (findings.json)
+│   ├── stage_b_verify.py           # Generic verification runner (async)
+│   ├── stage_c_rebuild.py          # Footnote insertion + context disambiguation
 │   ├── stage_d_html.py             # Bootstrap HTML with sidebar
+│   ├── stage_d_sources.py          # Source document highlighting + rendering
 │   ├── stage_e_docx.py             # .docx with Word comments
 │   ├── prepare_1_convert.py        # Corpus prep: MarkItDown + OCR + vision
 │   ├── prepare_2_summarize.py      # Corpus prep: per-document LLM summaries
@@ -271,28 +358,40 @@ leder/
 │   ├── prepare_ocr.py              # OCR + vision fallback for scanned PDFs/images
 │   ├── prepare_audio.py            # Local faster-whisper audio transcription
 │   ├── prepare_vision.py           # Word-count gate + vision escalation
+│   ├── prepare_reflow.py           # Line reflow for converter output
 │   └── tools/
-│       └── search_corpus.py
+│       ├── fetch_page.py           # Multi-tier web fetcher (jina/obscura/pw/archive.is)
+│       └── validate_excerpt.py     # Mechanical excerpt verification (3-tier matching)
 └── tests/
 ```
 
 ### Key files
 
-`pipeline/finding.py` is the data contract. `Finding` carries `finding_id`, `check_type`, `severity` (PASS, WARNING, CRITICAL), `target_text`, `anchor_text`, `agent_summary`, `recommended_action`, `source_path`, `source_url`, `source_excerpt`, `confidence`, `human_review`, and `metadata`. `FindingsDocument` wraps article metadata and the finding list with `to_json()` and `from_json()`.
+`pipeline/finding.py` is the data contract. `Finding` carries `finding_id`, `check_type`, `severity` (PASS, WARNING, CRITICAL), `target_text`, `anchor_text`, `agent_summary`, `recommended_action`, `source_path`, `source_url`, `source_excerpt`, `source_excerpt_offset` (character positions in the source document), `source_excerpt_similarity` (1.0 for exact, lower for fuzzy), `excerpt_status` (exact, repaired, not_found, or unchecked), `confidence` (one of exactly 0.95, 0.8, 0.6, 0.4, or 0.2 — snapped to the nearest band on ingest), `human_review`, and `metadata` (attribution_status, corpus_contradicted_by_external, etc.). `Target` carries `target_text`, `anchor_text`, `playbook`, `context`, and `claim_type`. `FindingsDocument` wraps article metadata and the finding list with `to_json()` and `from_json()`.
 
 `pipeline/playbook.py` defines the Playbook dataclass and `load_playbook(path)`. A playbook is a YAML file with `extraction.prompt`, `extraction.quality_gate`, `verification.prompt`, `verification.allowed_tools`, and a `display.template`.
 
-`pipeline/stage_a_extract.py` chunks the article and dispatches extraction prompts per playbook. `playbook_names` is required.
+`pipeline/prompts.py` holds shared prompt rulesets injected into every playbook. `build_extraction_system_prompt()` returns the system prompt for Stage A (claim granularity, standalone wording, context injection, attribution framing, anchor-text uniqueness, claim_type definitions). `build_verification_rules_block()` returns the generic verification rules prepended to the playbook's own prompt (tiered search strategy, `validate_excerpt` mandate, sandbox instructions, corroboration principles, confidence rubric with five bands and hard caps, date handling).
 
-`pipeline/stage_b_verify.py` spawns Claude Agent SDK agents with playbook-specific prompts and tools. The `FindingOutput` pydantic model enforces structured output.
+`pipeline/agent_tools.py` builds the per-claim in-process MCP server that provides `validate_excerpt` and `fetch_page` to the verification agent. Also implements `corpus_only_permission()` — the `can_use_tool` callback that confines Read/Grep/Glob to the corpus root via `resolve_within()` path containment (symlink-aware, tilde-denied, pattern-escape-checked). `_TOOL_SPEC` maps each allowed tool to its path argument and pattern arguments so the callback knows what to police.
 
-`pipeline/stage_c_rebuild.py` accepts `findings.json` and produces footnoted markdown. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
+`pipeline/tools/validate_excerpt.py` is the core of the `validate_excerpt` tool. Three tiers: exact case-insensitive substring → chunk-scored Levenshtein on the top 3 chunks (using `find_quote_position` from stage C) → `{"found": false}`. Always returns `actual_text` as a real substring of the file — callers use it in place of whatever wording they came in with.
+
+`pipeline/tools/fetch_page.py` is the multi-tier web fetcher. Four tiers in order: jina.ai (fast, free, clean markdown) → obscura (headless browser for bot-protected pages) → playwright (real headless browser, last resort) → archive.is (Camoufox-driven paywall bypass, opt-in). Each tier degrades gracefully rather than raising. Paywall signals in the first 500 characters trigger a warning. Output is written atomically via a same-directory temp file + `os.replace`.
+
+`pipeline/stage_a_extract.py` chunks the article and dispatches extraction prompts per playbook with a shared system prompt from `prompts.py`. `playbook_names` is required.
+
+`pipeline/stage_b_verify.py` spawns Claude Agent SDK agents with playbook-specific prompts and tools, plus the generic verification rules block from `prompts.py`. The `FindingOutput` pydantic model enforces structured output. An excerpt gate validates every returned `source_excerpt` against the claimed source file (literal match → keep; repeated-prefix strip → repair; not found → drop). Agents run with async concurrency.
+
+`pipeline/stage_c_rebuild.py` inserts footnotes into markdown via sliding-window Levenshtein. When an anchor matches more than one position, `_best_match_by_context()` disambiguates using the finding's context field. Footnotes are numbered by document position. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
+
+`pipeline/stage_d_sources.py` builds the `sources/` folder: resolves each finding's source path, marks excerpts in the document using agent-verified `source_excerpt_offset` values, handles overlapping multi-finding spans with combined `data-findings` attributes, and writes rendered HTML with excerpt highlighting. The old fuzzy matcher is deleted — offsets are trusted directly from the agent.
 
 `pipeline/prepare_1_convert.py` is the corpus-prep converter. Routing: images go to tesseract (with HEIC/HEIF support via `pillow-heif`) then vision if thin or garbled (spellcheck-based detection), with tiny/duplicate images skipped and zero-text images reported as failures; audio goes to local faster-whisper (optionally vocabulary-seeded via `prepare.audio.vocabulary`); `.eml`/`.msg` go to dedicated extractors (HTML-only email bodies convert to markdown, plain-text parts preferred when both exist) with attachment extraction and an auto second pass; `.srt`/`.vtt` go to a pycaption based transcript extractor (output gets a processing header and is sentence/word-boundary re-flowed); PDF goes to MarkItDown first with page-aware OCR fallback (≥ 200 chars/page threshold); already-text formats (`prepare.text_native_extensions`) are copied through verbatim; all converter output is re-flowed so no line exceeds ~300 chars (passthrough_text excluded); everything else goes to MarkItDown, then gap-fillers, then UNCONVERTED.md. A source file newer than its `.md` sidecar is always re-converted (mtime check).
 
 ### Provider setup
 
-The pipeline detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, and related variables. Stage 2 agents use the Claude Agent SDK, which spawns Claude Code CLI processes. These inherit the environment and use DeepSeek through the Anthropic-compatible endpoint.
+The pipeline detects DeepSeek from `DEEPSEEK_API_KEY` in `.env` and configures `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, and related variables. Stage B agents use the Claude Agent SDK, which spawns Claude Code CLI processes. These inherit the environment and use DeepSeek through the Anthropic-compatible endpoint.
 
 ### Debug mode
 
@@ -303,10 +402,6 @@ python3 -m pipeline.cli stage-b --targets targets.json --debug 10
 ```
 
 Writes `debug/{claim_id}.log` (text output) and `debug/{claim_id}.jsonl` (full message stream with every tool call and result).
-
-### Web cache
-
-Agents save web-fetched pages to `web_cache/{target_id}/`. After Stage B finishes, a backfill step scans for findings with a `source_url` but no cached page, and fetches them via obscura, then Jina, then curl.
 
 ### Resume and deduplication
 

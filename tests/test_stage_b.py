@@ -580,7 +580,7 @@ def test_run_stage_b_dedups_near_duplicate_targets_and_fans_out(tmp_path, monkey
     async def fake_verify_target_async(
         target, prompt, allowed_tools, corpus_root,
         timeout, max_turns, debug_dir, article_summary,
-        web_cache_dir="web_cache",
+        agent_log_dir=None, web_cache_dir="web_cache",
     ):
         from pipeline.finding import Finding, Severity
         calls.append(target["anchor_text"])
@@ -622,7 +622,7 @@ def test_verify_target_async_finding_id_no_collision_on_equal_length(monkeypatch
 
     async def fake_verify_claim_async(
         claim, corpus_root, system_prompt, timeout, max_turns,
-        debug_dir, article_summary, allowed_tools=None,
+        debug_dir, agent_log_dir=None, article_summary="", allowed_tools=None,
         output_schema=None, web_cache_dir="web_cache",
     ):
         claim.verdict = "supported"
@@ -701,8 +701,8 @@ def test_verify_target_async_flags_summary_source(monkeypatch):
 
     async def fake_verify_claim_async(
         claim, corpus_root, system_prompt, timeout, max_turns,
-        debug_dir, article_summary, allowed_tools=None, output_schema=None,
-        web_cache_dir="web_cache",
+        debug_dir, agent_log_dir=None, article_summary="", allowed_tools=None,
+        output_schema=None, web_cache_dir="web_cache",
     ):
         claim.verdict = "supported"
         claim.rationale = "The overview mentions this."
@@ -1191,3 +1191,260 @@ def test_verify_claim_async_no_settings_tempfile(monkeypatch):
         web_cache_dir="/corpus/web_cache",
     ))
     assert result is not None  # Succeeded without tempfile
+
+
+# ── agent log: always-on transcript logging ─────────────────────────────
+
+
+def test_serialize_message_no_truncation():
+    """_serialize_message must preserve full text, thinking, input, and result
+    without any truncation — the user wants to see what the agent was thinking."""
+    from pipeline.stage_b_verify import _serialize_message
+    from unittest.mock import MagicMock
+    from claude_agent_sdk import (
+        AssistantMessage, ResultMessage, TextBlock, ThinkingBlock, ToolUseBlock,
+    )
+
+    # Build a message with content exceeding the OLD truncation limits
+    long_text = "x" * 6000
+    long_thinking = "y" * 3000
+    long_input = {"key": "z" * 3000}
+
+    text_block = MagicMock(spec=TextBlock)
+    text_block.text = long_text
+    think_block = MagicMock(spec=ThinkingBlock)
+    think_block.thinking = long_thinking
+    think_block.signature = "sig"
+    tool_block = MagicMock(spec=ToolUseBlock)
+    tool_block.id = "id1"
+    tool_block.name = "grep"
+    tool_block.input = long_input
+
+    msg = MagicMock(spec=AssistantMessage)
+    msg.content = [text_block, think_block, tool_block]
+
+    d = _serialize_message(msg)
+    blocks = d["blocks"]
+    assert blocks[0]["text"] == long_text, "text was truncated"
+    assert blocks[1]["thinking"] == long_thinking, "thinking was truncated"
+    assert blocks[2]["input"] == long_input, "input was truncated / str()'d"
+
+    # Result long text
+    long_result = "r" * 600
+    res_msg = MagicMock(spec=ResultMessage)
+    res_msg.content = []
+    res_msg.result = long_result
+    res_msg.subtype = "success"
+    res_msg.total_cost_usd = 0.0042
+    res_msg.num_turns = 5
+
+    d2 = _serialize_message(res_msg)
+    assert d2["result"] == str(long_result), "result was truncated"
+    assert d2["total_cost_usd"] == 0.0042
+
+
+def test_verify_claim_async_always_collects_transcript(tmp_path, monkeypatch):
+    """Transcript is collected even without a debug_dir — always-on."""
+    from pipeline import stage_b_verify as sb
+
+    def _fake_query(prompt, options):
+        # Return one AssistantMessage with text, then a ResultMessage
+        from unittest.mock import MagicMock
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        text_block = MagicMock(spec=TextBlock)
+        text_block.text = "hello"
+        asst = MagicMock(spec=AssistantMessage)
+        asst.content = [text_block]
+
+        result = MagicMock(spec=ResultMessage)
+        result.structured_output = {
+            "severity": "PASS", "agent_summary": "ok",
+            "source_path": "doc.md", "source_excerpt": "hello",
+            "source_excerpt_offset": [0, 5], "source_excerpt_similarity": 1.0,
+            "confidence": 0.95, "human_review": False,
+        }
+
+        async def _gen():
+            yield asst
+            yield result
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    result = asyncio.run(sb._verify_claim_async(
+        claim, str(tmp_path), "sys", timeout=5, max_turns=1,
+        web_cache_dir=str(tmp_path / "web_cache"),
+    ))
+    assert result.verdict is not None  # Still works end-to-end
+
+
+def test_verify_claim_async_writes_agent_log(tmp_path, monkeypatch):
+    """Passing agent_log_dir must create .log and .jsonl files."""
+    from pipeline import stage_b_verify as sb
+    import json as _json
+
+    def _fake_query(prompt, options):
+        from unittest.mock import MagicMock
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        text_block = MagicMock(spec=TextBlock)
+        text_block.text = "found it"
+        asst = MagicMock(spec=AssistantMessage)
+        asst.content = [text_block]
+
+        result = MagicMock(spec=ResultMessage)
+        result.structured_output = {
+            "severity": "PASS", "agent_summary": "ok",
+            "source_excerpt": "found it", "source_excerpt_similarity": 1.0,
+        }
+
+        async def _gen():
+            yield asst
+            yield result
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    log_dir = tmp_path / "agent-logs" / "20260101-120000"
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    result = asyncio.run(sb._verify_claim_async(
+        claim, str(tmp_path), "sys", timeout=5, max_turns=1,
+        agent_log_dir=str(log_dir),
+        web_cache_dir=str(tmp_path / "web_cache"),
+    ))
+    assert result.verdict is not None
+
+    # Files must exist
+    log_file = log_dir / "c1.log"
+    jsonl_file = log_dir / "c1.jsonl"
+    assert log_file.exists(), ".log not written"
+    assert jsonl_file.exists(), ".jsonl not written"
+
+    # JSONL must be valid JSON lines
+    lines = jsonl_file.read_text().strip().split("\n")
+    assert len(lines) >= 1
+    assert _json.loads(lines[0])  # each line is valid JSON
+
+    # .log must contain the text
+    assert "found it" in log_file.read_text()
+
+
+def test_agent_log_includes_thinking(tmp_path, monkeypatch):
+    """The .log file must include thinking blocks, delimited by --- thinking ---."""
+    from pipeline import stage_b_verify as sb
+
+    def _fake_query(prompt, options):
+        from unittest.mock import MagicMock
+        from claude_agent_sdk import AssistantMessage, ResultMessage, ThinkingBlock
+
+        think_block = MagicMock(spec=ThinkingBlock)
+        think_block.thinking = "hmm, let me search for that"
+        asst = MagicMock(spec=AssistantMessage)
+        asst.content = [think_block]
+
+        result = MagicMock(spec=ResultMessage)
+        result.structured_output = {
+            "severity": "PASS", "agent_summary": "ok",
+            "source_excerpt": "x", "source_excerpt_similarity": 1.0,
+        }
+
+        async def _gen():
+            yield asst
+            yield result
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    log_dir = tmp_path / "agent-logs" / "run01"
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, str(tmp_path), "sys", timeout=5, max_turns=1,
+        agent_log_dir=str(log_dir),
+        web_cache_dir=str(tmp_path / "web_cache"),
+    ))
+
+    log_text = (log_dir / "c1.log").read_text()
+    assert "--- thinking ---" in log_text
+    assert "hmm, let me search for that" in log_text
+
+
+def test_agent_log_and_debug_can_coexist(tmp_path, monkeypatch):
+    """Both agent_log_dir and debug_dir write independently."""
+    from pipeline import stage_b_verify as sb
+    def _fake_query(prompt, options):
+        from unittest.mock import MagicMock
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        text_block = MagicMock(spec=TextBlock)
+        text_block.text = "x"
+        asst = MagicMock(spec=AssistantMessage)
+        asst.content = [text_block]
+        result = MagicMock(spec=ResultMessage)
+        result.structured_output = {
+            "severity": "PASS", "agent_summary": "ok",
+            "source_excerpt": "x", "source_excerpt_similarity": 1.0,
+        }
+
+        async def _gen():
+            yield asst
+            yield result
+        return _gen()
+
+    monkeypatch.setattr("claude_agent_sdk.query", _fake_query)
+
+    agent_dir = tmp_path / "agent" / "ts"
+    debug_dir = tmp_path / "debug"
+    claim = Claim(claim_id="c1", claim_text="T", source_quote="T", claim_type="numeric")
+    asyncio.run(sb._verify_claim_async(
+        claim, str(tmp_path), "sys", timeout=5, max_turns=1,
+        agent_log_dir=str(agent_dir), debug_dir=str(debug_dir),
+        web_cache_dir=str(tmp_path / "web_cache"),
+    ))
+
+    assert (agent_dir / "c1.log").exists()
+    assert (agent_dir / "c1.jsonl").exists()
+    assert (debug_dir / "c1.log").exists()
+    assert (debug_dir / "c1.jsonl").exists()
+
+
+def test_run_stage_b_creates_agent_log_run_folder(tmp_path, monkeypatch):
+    """run_stage_b with agent_log_dir creates a YYYYMMDD-HHMMSS subfolder."""
+    from pipeline import stage_b_verify as sb
+
+    # Write a minimal targets.json
+    targets = tmp_path / "targets.json"
+    import json as _json
+    _json.dump({
+        "targets": [{"playbook": "fact_check", "target_text": "T",
+                      "anchor_text": "A", "claim_type": "numeric"}],
+        "article_summary": "S",
+        "article_file": "a.md",
+    }, open(str(targets), "w"))
+
+    # Stub _verify_target_async so we don't spawn real agents
+    from pipeline.finding import Finding
+    async def _fake_verify(*a, **kw):
+        return Finding(
+            finding_id="fc-abc", check_type="fact_check", severity="PASS",
+            target_text="T", anchor_text="A", agent_summary="ok",
+        )
+
+    monkeypatch.setattr(sb, "_verify_target_async", _fake_verify)
+
+    log_base = tmp_path / "agent-logs"
+    output = tmp_path / "findings.json"
+    sb.run_stage_b(
+        targets_path=str(targets), output_path=str(output),
+        corpus_root=str(tmp_path), force_run=True,
+        agent_log_dir=str(log_base),
+    )
+
+    # A timestamped subfolder was created
+    subdirs = list(log_base.iterdir())
+    assert len(subdirs) == 1, f"expected 1 subdir, got {subdirs}"
+    name = subdirs[0].name
+    # Must match YYYYMMDD-HHMMSS
+    import re
+    assert re.match(r"^\d{8}-\d{6}$", name), f"bad run folder name: {name}"

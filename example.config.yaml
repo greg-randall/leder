@@ -20,6 +20,9 @@ pricing:
   deepseek-v4-flash: { input: 0.14,  output: 0.28  }
   deepseek-v4-pro[1m]: { input: 0.435, output: 0.87 }
 
+agent_log:
+  dir: "agent-logs/"
+
 stage_a:
   model: "deepseek-v4-pro"
   quality_gate: true

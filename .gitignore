@@ -15,6 +15,7 @@ laws/
 local-files/
 sample-code/
 debug/
+agent-logs/
 __pycache__/
 *.pyc
 ~$*

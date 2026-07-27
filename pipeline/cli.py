@@ -420,6 +420,7 @@ def main() -> None:
         from pipeline.stage_b_verify import run_stage_b
 
         output_path = _resolve_output_path(output_path)
+        agent_log_dir = config.resolve_path(config.agent_log.dir)
         doc = run_stage_b(
             targets_path=targets_path,
             output_path=output_path,
@@ -436,6 +437,7 @@ def main() -> None:
             pricing=config.pricing,
             force_run=getattr(args, "force_run", False),
             corpus_description=config.corpus.description,
+            agent_log_dir=agent_log_dir,
         )
         print(f"Stage B complete: {len(doc.findings)} findings")
 

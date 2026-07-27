@@ -140,10 +140,16 @@ class PrepareConfig:
 
 
 @dataclass
+class AgentLogConfig:
+    dir: str = "agent-logs/"
+
+
+@dataclass
 class PipelineConfig:
     article: ArticleConfig
     corpus: CorpusConfig
     output: OutputConfig = field(default_factory=OutputConfig)
+    agent_log: AgentLogConfig = field(default_factory=AgentLogConfig)
     stage_a: StageAConfig = field(default_factory=StageAConfig)
     stage_b: StageBConfig = field(default_factory=StageBConfig)
     stage_c: StageCConfig = field(default_factory=StageCConfig)
@@ -182,6 +188,7 @@ class PipelineConfig:
             article=ArticleConfig(**article_raw),
             corpus=CorpusConfig(**corpus_raw),
             output=OutputConfig(**raw.get("output", {})),
+            agent_log=AgentLogConfig(**raw.get("agent_log", {})),
             stage_a=StageAConfig(**raw.get("stage_a", {})),
             stage_b=StageBConfig(**raw.get("stage_b", {})),
             stage_c=StageCConfig(**raw.get("stage_c", {})),

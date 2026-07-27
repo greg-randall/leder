@@ -211,6 +211,7 @@ async def _verify_claim_async(
     timeout: int = 600,
     max_turns: int = 30,
     debug_dir: str | None = None,
+    agent_log_dir: str | None = None,
     article_summary: str = "",
     allowed_tools: list[str] | None = None,
     output_schema: dict | None = None,
@@ -286,11 +287,10 @@ async def _verify_claim_async(
         async def _run():
             nonlocal full_text, structured_output
             async for message in query(prompt=_prompt_stream(), options=options):
-                if debug_dir:
-                    try:
-                        transcript.append(_serialize_message(message))
-                    except Exception:
-                        pass
+                try:
+                    transcript.append(_serialize_message(message))
+                except Exception:
+                    pass
 
                 if isinstance(message, ResultMessage):
                     structured_output = message.structured_output
@@ -301,10 +301,20 @@ async def _verify_claim_async(
 
         await asyncio.wait_for(_run(), timeout=timeout)
 
+        # Always-on agent log (timestamped run folder, created by run_stage_b)
+        if agent_log_dir:
+            os.makedirs(agent_log_dir, exist_ok=True)
+            with open(os.path.join(agent_log_dir, f"{claim.claim_id}.log"), "w") as f:
+                f.write(_build_log_text(transcript))
+            with open(os.path.join(agent_log_dir, f"{claim.claim_id}.jsonl"), "w") as f:
+                for entry in transcript:
+                    f.write(json.dumps(entry, default=str) + "\n")
+
+        # Targeted debug log (--debug / --debug-ids, separate from always-on)
         if debug_dir:
             os.makedirs(debug_dir, exist_ok=True)
             with open(os.path.join(debug_dir, f"{claim.claim_id}.log"), "w") as f:
-                f.write(full_text)
+                f.write(_build_log_text(transcript))
             with open(os.path.join(debug_dir, f"{claim.claim_id}.jsonl"), "w") as f:
                 for entry in transcript:
                     f.write(json.dumps(entry, default=str) + "\n")
@@ -331,6 +341,7 @@ async def _verify_claim_async(
 async def _verify_target_async(
     target, system_prompt, allowed_tools, corpus_root,
     timeout, max_turns, debug_dir, article_summary,
+    agent_log_dir=None,
     web_cache_dir="web_cache",
 ):
     """Verify one target dict via a playbook's prompt+tools, returning a Finding or None."""
@@ -350,7 +361,7 @@ async def _verify_target_async(
 
     result = await _verify_claim_async(
         claim, corpus_root, system_prompt, timeout, max_turns,
-        debug_dir, article_summary,
+        debug_dir, agent_log_dir, article_summary,
         allowed_tools=allowed_tools,
         output_schema=FindingOutput.model_json_schema(),
         web_cache_dir=web_cache_dir,
@@ -638,27 +649,67 @@ def _populate_claim_from_dict(claim: Claim, data: dict) -> Claim:
 
 
 def _serialize_message(msg) -> dict:
-    """Convert an SDK message to a plain dict for JSONL debug output."""
+    """Convert an SDK message to a plain dict for JSONL output.
+
+    No truncation: the user wants to see what the agent was thinking, and
+    a 2000-char thinking block truncated mid-sentence is useless. Every
+    field that existed at the time of writing is captured in full.
+    """
     result: dict = {"type": type(msg).__name__}
+    _capture_optional(result, msg,
+                      "subtype", "is_error", "num_turns", "session_id",
+                      "model", "stop_reason", "message_id",
+                      "parent_tool_use_id",
+                      "total_cost_usd", "duration_ms",
+                      "duration_api_ms", "usage")
     if hasattr(msg, "content") and msg.content:
         blocks = []
         for block in msg.content:
             b: dict = {"type": type(block).__name__}
             if hasattr(block, "text"):
-                b["text"] = block.text[:5000]
+                b["text"] = block.text
             if hasattr(block, "name"):
                 b["name"] = block.name
             if hasattr(block, "input"):
-                b["input"] = str(block.input)[:2000]
+                b["input"] = block.input
             if hasattr(block, "tool_use_id"):
                 b["tool_use_id"] = block.tool_use_id
             if hasattr(block, "thinking"):
-                b["thinking"] = block.thinking[:2000]
+                b["thinking"] = block.thinking
+            if hasattr(block, "signature"):
+                b["signature"] = block.signature
             blocks.append(b)
         result["blocks"] = blocks
     if hasattr(msg, "result"):
-        result["result"] = str(msg.result)[:500]
+        result["result"] = str(msg.result)
+    if hasattr(msg, "structured_output"):
+        result["structured_output"] = msg.structured_output
     return result
+
+
+def _capture_optional(result: dict, msg, *fields: str) -> None:
+    """Copy every *fields attr from `msg` into `result` when present and non-None."""
+    for name in fields:
+        if hasattr(msg, name):
+            v = getattr(msg, name)
+            if v is not None:
+                result[name] = v
+
+
+def _build_log_text(transcript: list[dict]) -> str:
+    """Build a human-readable .log from the transcript.
+
+    Includes text responses and thinking blocks in message order. For the
+    full structured record (tool calls, results, metadata), see the .jsonl.
+    """
+    parts: list[str] = []
+    for entry in transcript:
+        for block in entry.get("blocks", []):
+            if "text" in block:
+                parts.append(block["text"])
+            if "thinking" in block:
+                parts.append(f"\n\n--- thinking ---\n{block['thinking']}\n")
+    return "\n".join(parts)
 
 
 # ---- public entry point ----
@@ -713,6 +764,7 @@ def run_stage_b(
     debug_ids: list[int] | None = None,
     force_run: bool = False,
     corpus_description: str = "",
+    agent_log_dir: str | None = None,
 ) -> FindingsDocument:
     """Load targets.json, verify each target, write findings.json.
 
@@ -789,6 +841,16 @@ def run_stage_b(
             print(f"Debug mode: logging {debug_count} random targets -> "
                   f"{base_debug_dir}/", file=sys.stderr)
 
+    # Always-on agent logging: timestamped subfolder so logs don't pile up
+    # in one flat directory across runs.
+    actual_agent_log_dir = None
+    if agent_log_dir:
+        from datetime import datetime as _dt2
+        run_ts = _dt2.now().strftime("%Y%m%d-%H%M%S")
+        actual_agent_log_dir = os.path.join(agent_log_dir, run_ts)
+        os.makedirs(actual_agent_log_dir, exist_ok=True)
+        print(f"Agent log: {actual_agent_log_dir}/", file=sys.stderr)
+
     print(f"Stage B: {len(representatives)} targets to verify. "
           f"Model: {os.environ.get('ANTHROPIC_MODEL', '?')}", file=sys.stderr)
 
@@ -833,6 +895,7 @@ def run_stage_b(
                 finding = await _verify_target_async(
                     t, prompt, pb.allowed_tools, corpus_root,
                     timeout, max_turns, t_debug_dir, summary,
+                    agent_log_dir=actual_agent_log_dir,
                     web_cache_dir=web_cache_dir,
                 )
                 if finding is not None:

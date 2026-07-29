@@ -13,6 +13,7 @@ import os
 import re
 import sys
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -542,32 +543,55 @@ def _apply_excerpt_gate(raw: dict, corpus_root: str, web_cache_dir: str,
     return fields
 
 
-def _summarize_web_cache(web_cache_dir: str) -> None:
-    """Create minimal page_summary.md for each web_cache page so tiered search
-    finds them on re-runs. Free — takes the first paragraph of each page
-    as its summary, no LLM calls."""
+def _summarize_web_cache(web_cache_dir: str, model: str = "", workers: int = 8,
+                         corpus_description: str = "", force: bool = False) -> None:
+    """Summarize each web_cache page.md into page_summary.md so tiered search
+    finds them on re-runs.
+
+    Runs prepare-2's summarizer, the same one every other corpus document goes
+    through -- prepare_2_summarize.collect_targets() deliberately skips page.md
+    and leaves it to us. That yields real `**Facts:**` bullets an agent can grep,
+    rather than a title-only stub. The page.md header block (Title / URL Source /
+    any fetch Warning) is part of the document content, so the existing prompt
+    already sees everything it needs, dead pages included.
+
+    summarize_one() writes `<stem>_summary.md`, which for page.md is exactly
+    page_summary.md -- the name _write_web_cache_folder_summary() already reads.
+    """
+    from pipeline.prepare_2_summarize import summarize_one
+
     wc = _Path(web_cache_dir)
     if not wc.is_dir():
         return
     pages = sorted(wc.glob("*/page.md"))
     if not pages:
         return
-    count = 0
-    for page in pages:
-        summary = page.parent / "page_summary.md"
-        if summary.exists() and summary.stat().st_size > 10:
-            continue
-        text = page.read_text(encoding="utf-8", errors="replace").strip()
-        # Grab first paragraph as the summary — cheap, effective for search
-        first_para = text.split("\n\n")[0] if text else "(empty)"
-        summary.write_text(
-            f"**Summary:** Web-cached page. {first_para[:300]}\n\n"
-            f"**Facts:** *(see page.md for full content)*\n",
-            encoding="utf-8")
-        count += 1
-    if count:
-        print(f"  Web cache: wrote {count} page_summary.md files for tiered search",
-              file=sys.stderr)
+
+    counts = {"ok": 0, "skip": 0, "fail": 0}
+    # web_cache_dir doubles as summarize_one's corpus_root: it only uses it for a
+    # relative_to() display string, and every page is under it by construction.
+    with ThreadPoolExecutor(max_workers=min(workers, len(pages))) as pool:
+        futures = [
+            pool.submit(summarize_one, page, wc, model, force, corpus_description)
+            for page in pages
+        ]
+        for future in as_completed(futures):
+            # summarize_one only guards the LLM call itself; an unreadable
+            # page.md would escape it. This runs after findings.json is already
+            # written, so one bad page must not take down the tail of the run.
+            try:
+                _, status = future.result()
+            except Exception as ex:
+                print(f"  Web cache: summarize failed: {type(ex).__name__}: {ex}",
+                      file=sys.stderr)
+                status = "fail"
+            counts["ok" if status.startswith("ok") else status] += 1
+
+    print(f"  Web cache: {counts['ok']} page(s) summarized, "
+          f"{counts['skip']} already current", file=sys.stderr)
+    if counts["fail"]:
+        print(f"  ⚠ Web cache: {counts['fail']} page(s) failed to summarize — "
+              f"they will be missing from _FOLDER_SUMMARY.md", file=sys.stderr)
     _write_web_cache_folder_summary(web_cache_dir)
 
 
@@ -717,16 +741,19 @@ def _build_log_text(transcript: list[dict]) -> str:
 
 # ---- public entry point ----
 
-def _check_corpus_ready(corpus_root: str, web_cache_dir: str) -> list[str]:
+def _check_corpus_ready(corpus_root: str, web_cache_dir: str
+                        ) -> tuple[list[str], list[str]]:
     """Verify the corpus and web_cache have summaries before Stage B runs.
 
     Agents rely on the tiered search hierarchy (_FOLDER_SUMMARY.md →
     _summary.md → original). Without summaries, they waste tokens blindly
     grepping or miss documents entirely.
 
-    Returns a list of human-readable issue strings. Empty list = ready.
+    Returns (issues, warnings). Issues block the run; warnings are printed and
+    the run continues. Empty issues = ready.
     """
     issues: list[str] = []
+    warnings: list[str] = []
     cr = _Path(corpus_root)
 
     # Check 1: Main corpus has at least one folder summary or overview
@@ -738,18 +765,25 @@ def _check_corpus_ready(corpus_root: str, web_cache_dir: str) -> list[str]:
             "Run:  python3 -m pipeline.cli prepare-2 && python3 -m pipeline.cli prepare-3"
         )
 
-    # Check 2: web_cache has pages but no folder summary → agents can't find them
+    # Check 2: web_cache has pages but no folder summary. Advisory only --
+    # blocking here is self-defeating, because _summarize_web_cache() at the end
+    # of this very run is what writes that file. Making it fatal means the only
+    # process that can fix it is the one being refused. prepare-3 doesn't help
+    # either: it skips web_cache subfolders, which hold page.md and no summary.
+    # The cost of proceeding is bounded -- agents can't discover already-cached
+    # pages for this run and may re-fetch a URL -- and it self-heals on exit.
     wc = _Path(web_cache_dir)
     if wc.is_dir():
         has_cached_pages = any(wc.glob("*/page.md"))
         has_wc_folder = (wc / "_FOLDER_SUMMARY.md").exists()
         if has_cached_pages and not has_wc_folder:
-            issues.append(
-                "Web cache has cached pages but no _FOLDER_SUMMARY.md. "
-                "Re-run stage-b (which generates it automatically) or run prepare-3."
+            warnings.append(
+                "Web cache has cached pages but no _FOLDER_SUMMARY.md, so agents "
+                "can't discover them this run and may re-fetch. This run "
+                "regenerates it on completion."
             )
 
-    return issues
+    return issues, warnings
 
 
 def run_stage_b(
@@ -768,6 +802,8 @@ def run_stage_b(
     force_run: bool = False,
     corpus_description: str = "",
     agent_log_dir: str | None = None,
+    summarize_model: str = "",
+    summarize_workers: int = 8,
 ) -> FindingsDocument:
     """Load targets.json, verify each target, write findings.json.
 
@@ -784,6 +820,9 @@ def run_stage_b(
         force_run: Skip the corpus readiness check.
         corpus_description: Domain description injected into the shared
                              verification rules block (see pipeline.prompts).
+        summarize_model: Model used to summarize web_cache pages after the run
+                         (prepare.summarize.model -- not the agent model).
+        summarize_workers: Thread pool size for that summarization pass.
     """
     if not targets_path:
         raise ValueError("targets_path is required")
@@ -794,7 +833,9 @@ def run_stage_b(
 
     # Pre-flight: corpus must have summaries unless --force-run
     if not force_run:
-        issues = _check_corpus_ready(corpus_root, web_cache_dir)
+        issues, warnings = _check_corpus_ready(corpus_root, web_cache_dir)
+        for warning in warnings:
+            print(f"  ⚠ {warning}", file=sys.stderr)
         if issues:
             print("\nERROR: Corpus not ready for Stage B verification.\n",
                   file=sys.stderr)
@@ -927,7 +968,8 @@ def run_stage_b(
         f.write(doc.to_json())
     os.replace(tmp_path, output_path)  # atomic rename
     print(f"Stage B done: {len(findings_list)} findings -> {output_path}", file=sys.stderr)
-    _summarize_web_cache(web_cache_dir)
+    _summarize_web_cache(web_cache_dir, summarize_model, summarize_workers,
+                         corpus_description)
     # Cost estimate (pricing from config.yaml, rates per 1M tokens)
     rates = (pricing or {}).get(
         os.environ.get("ANTHROPIC_MODEL", "deepseek-v4-pro"),

@@ -260,28 +260,113 @@ def test_get_playbook_caches(tmp_path):
 
 # ── web_cache summarization ──────────────────────────────────────
 
-def test_summarize_web_cache_writes_page_summary_md(tmp_path):
-    """_summarize_web_cache writes page_summary.md, not _summary.md."""
+def _mock_summarizer(monkeypatch, reply="**Summary:** A real summary.\n\n**Facts:**\n- $53,750\n"):
+    """Patch prepare-2's LLM call and record every (system, user, model) it sees.
+
+    Patches the name in the prepare_2_summarize namespace, which is where
+    summarize_one resolves it -- same pattern as tests/test_prepare_summarize.py.
+    """
+    from pipeline import prepare_2_summarize as p2
+    calls = []
+
+    def fake(system, user, model, max_tokens=4096):
+        calls.append({"system": system, "user": user, "model": model})
+        if callable(reply):
+            return reply(user)
+        return reply
+
+    monkeypatch.setattr(p2, "call_text_llm", fake)
+    return calls
+
+
+def _write_page(wc, claim_id, body):
+    d = wc / claim_id
+    d.mkdir(parents=True)
+    (d / "page.md").write_text(body, encoding="utf-8")
+    return d
+
+
+# A page.md long enough to clear prepare-2's MIN_FILE_BYTES (80) short-circuit.
+_REAL_PAGE = (
+    "Title: Opponents get organized\n\n"
+    "URL Source: https://example.com/story\n\n"
+    "Markdown Content:\nThe commission received $53,750 in contributions "
+    "ahead of the permit decision, according to filings.\n"
+)
+
+
+def test_summarize_web_cache_writes_real_llm_summary(tmp_path, monkeypatch):
+    """page_summary.md holds the summarizer's output, not a title-only stub."""
+    calls = _mock_summarizer(monkeypatch)
     wc = tmp_path / "web_cache"
-    claim_dir = wc / "claim-001"
-    claim_dir.mkdir(parents=True)
-    (claim_dir / "page.md").write_text(
-        "First paragraph of fetched page.\n\nSecond paragraph with more detail.\n\nThird.",
-        encoding="utf-8",
-    )
+    claim_dir = _write_page(wc, "claim-001", _REAL_PAGE)
 
-    _summarize_web_cache(str(wc))
+    _summarize_web_cache(str(wc), model="test-model")
 
-    # Should write page_summary.md (rollup-friendly name)
     ps = claim_dir / "page_summary.md"
     assert ps.exists(), f"Expected {ps} to exist"
     content = ps.read_text()
-    assert "First paragraph" in content
-    assert "Web-cached page" in content
+    assert "**Facts:**" in content
+    assert "$53,750" in content
+    # The old stub wording must be gone
+    assert "Web-cached page" not in content
+    assert "see page.md for full content" not in content
+
+    # The whole page, header block included, was sent to the model
+    assert len(calls) == 1
+    assert "URL Source: https://example.com/story" in calls[0]["user"]
 
     # Should NOT write the old _summary.md name
     old = claim_dir / "_summary.md"
     assert not old.exists(), f"{old} should NOT exist (old naming convention)"
+
+
+def test_summarize_web_cache_forwards_model(tmp_path, monkeypatch):
+    """The summarize model reaches call_text_llm, not the agent model."""
+    calls = _mock_summarizer(monkeypatch)
+    wc = tmp_path / "web_cache"
+    _write_page(wc, "claim-001", _REAL_PAGE)
+
+    _summarize_web_cache(str(wc), model="deepseek-v4-flash")
+
+    assert [c["model"] for c in calls] == ["deepseek-v4-flash"]
+
+
+def test_summarize_web_cache_passes_corpus_description(tmp_path, monkeypatch):
+    """corpus_description lands in the prompt so summaries index domain terms."""
+    calls = _mock_summarizer(monkeypatch)
+    wc = tmp_path / "web_cache"
+    _write_page(wc, "claim-001", _REAL_PAGE)
+
+    _summarize_web_cache(str(wc), model="m",
+                         corpus_description="Waskom city council transcripts.")
+
+    assert "Waskom city council transcripts." in calls[0]["system"]
+
+
+def test_summarize_web_cache_survives_llm_failure(tmp_path, monkeypatch):
+    """One page failing leaves the others summarized and does not crash."""
+    def reply(user):
+        if "BOOM" in user:
+            raise RuntimeError("api exploded")
+        return "**Summary:** fine\n\n**Facts:**\n- ok\n"
+
+    _mock_summarizer(monkeypatch, reply=reply)
+    wc = tmp_path / "web_cache"
+    bad = _write_page(wc, "claim-bad", _REAL_PAGE + "\nBOOM\n")
+    good = _write_page(wc, "claim-good", _REAL_PAGE)
+
+    _summarize_web_cache(str(wc), model="m")  # must not raise
+
+    assert not (bad / "page_summary.md").exists()
+    assert (good / "page_summary.md").exists()
+
+    # The folder summary is still written, covering the page that succeeded
+    fs = wc / "_FOLDER_SUMMARY.md"
+    assert fs.exists()
+    content = fs.read_text()
+    assert "claim-good" in content
+    assert "claim-bad" not in content
 
 
 def test_write_web_cache_folder_summary(tmp_path):
@@ -320,7 +405,7 @@ def test_check_corpus_ready_passes_when_prepared(tmp_path):
     wc.mkdir()
     (wc / "_FOLDER_SUMMARY.md").write_text("wc summary")
 
-    issues = _check_corpus_ready(str(cr), str(wc))
+    issues, warnings = _check_corpus_ready(str(cr), str(wc))
     assert issues == [], f"Expected no issues, got: {issues}"
 
 
@@ -330,7 +415,7 @@ def test_check_corpus_ready_passes_with_overview(tmp_path):
     cr.mkdir()
     (cr / "CORPUS_OVERVIEW.md").write_text("overview")
 
-    issues = _check_corpus_ready(str(cr), "")
+    issues, warnings = _check_corpus_ready(str(cr), "")
     assert issues == []
 
 
@@ -339,15 +424,20 @@ def test_check_corpus_ready_blocks_when_no_summaries(tmp_path):
     cr = tmp_path / "corpus"
     cr.mkdir()
 
-    issues = _check_corpus_ready(str(cr), "")
+    issues, warnings = _check_corpus_ready(str(cr), "")
     assert len(issues) == 1
     assert "_folder_summary.md" in issues[0].lower()
     assert "prepare-2" in issues[0]
     assert "prepare-3" in issues[0]
 
 
-def test_check_corpus_ready_blocks_when_web_cache_has_pages_but_no_folder_summary(tmp_path):
-    """web_cache with cached pages but no _FOLDER_SUMMARY.md → returns an issue."""
+def test_check_corpus_ready_warns_but_allows_web_cache_without_folder_summary(tmp_path):
+    """web_cache pages with no _FOLDER_SUMMARY.md → warning, not a blocker.
+
+    Blocking would be circular: _summarize_web_cache() at the end of the run is
+    the only thing that writes that file, so a fatal check refuses the sole
+    process able to satisfy it.
+    """
     cr = tmp_path / "corpus"
     cr.mkdir()
     (cr / "_FOLDER_SUMMARY.md").write_text("folder summary")  # corpus is fine
@@ -357,10 +447,11 @@ def test_check_corpus_ready_blocks_when_web_cache_has_pages_but_no_folder_summar
     (wc / "claim-x").mkdir()
     (wc / "claim-x" / "page.md").write_text("cached content")
 
-    issues = _check_corpus_ready(str(cr), str(wc))
-    assert len(issues) == 1
-    assert "web cache" in issues[0].lower()
-    assert "_FOLDER_SUMMARY.md" in issues[0]
+    issues, warnings = _check_corpus_ready(str(cr), str(wc))
+    assert issues == [], "missing web_cache folder summary must not block the run"
+    assert len(warnings) == 1
+    assert "web cache" in warnings[0].lower()
+    assert "_FOLDER_SUMMARY.md" in warnings[0]
 
 
 def test_check_corpus_ready_web_cache_empty_ok(tmp_path):
@@ -371,7 +462,7 @@ def test_check_corpus_ready_web_cache_empty_ok(tmp_path):
     wc = tmp_path / "web_cache"
     wc.mkdir()  # exists but empty — no page.md files
 
-    issues = _check_corpus_ready(str(cr), str(wc))
+    issues, warnings = _check_corpus_ready(str(cr), str(wc))
     assert issues == []
 
 
@@ -392,78 +483,43 @@ def test_summarize_web_cache_noop_when_no_page_md(tmp_path):
     assert not list(wc.rglob("_FOLDER_SUMMARY.md"))
 
 
-def test_summarize_web_cache_handles_empty_page_md(tmp_path):
-    """page.md with empty content → writes (empty) placeholder."""
+def test_summarize_web_cache_handles_empty_page_md(tmp_path, monkeypatch):
+    """Empty page.md is under MIN_FILE_BYTES → canned text, no LLM call."""
+    calls = _mock_summarizer(monkeypatch)
     wc = tmp_path / "web_cache"
-    d = wc / "claim-x"
-    d.mkdir(parents=True)
-    (d / "page.md").write_text("", encoding="utf-8")
+    d = _write_page(wc, "claim-x", "")
 
-    _summarize_web_cache(str(wc))
+    _summarize_web_cache(str(wc), model="m")
 
     ps = d / "page_summary.md"
     assert ps.exists()
-    content = ps.read_text()
-    assert "(empty)" in content
+    assert "too short to summarize" in ps.read_text()
+    assert calls == [], "should not spend an LLM call on an empty page"
 
 
-def test_summarize_web_cache_skips_existing_summary(tmp_path):
-    """Already-existing page_summary.md > 10 bytes → skipped, not overwritten."""
+def test_summarize_web_cache_skips_existing_summary(tmp_path, monkeypatch):
+    """Existing page_summary.md > 20 bytes → skipped, no LLM call."""
+    calls = _mock_summarizer(monkeypatch)
     wc = tmp_path / "web_cache"
-    d = wc / "claim-x"
-    d.mkdir(parents=True)
-    (d / "page.md").write_text("New first paragraph.\n\nMore text.", encoding="utf-8")
+    d = _write_page(wc, "claim-x", _REAL_PAGE)
     (d / "page_summary.md").write_text("EXISTING SUMMARY THAT SHOULD SURVIVE", encoding="utf-8")
 
-    _summarize_web_cache(str(wc))
+    _summarize_web_cache(str(wc), model="m")
 
-    ps = d / "page_summary.md"
-    assert "EXISTING SUMMARY THAT SHOULD SURVIVE" in ps.read_text()
-    assert "New first paragraph" not in ps.read_text()
-
-
-def test_summarize_web_cache_truncates_long_first_paragraph(tmp_path):
-    """First paragraph > 300 chars → truncated."""
-    wc = tmp_path / "web_cache"
-    d = wc / "claim-x"
-    d.mkdir(parents=True)
-    long_para = "A" * 500
-    (d / "page.md").write_text(long_para + "\n\nSecond paragraph.", encoding="utf-8")
-
-    _summarize_web_cache(str(wc))
-
-    ps = d / "page_summary.md"
-    content = ps.read_text()
-    assert "A" * 300 in content
-    assert "A" * 301 not in content
+    assert "EXISTING SUMMARY THAT SHOULD SURVIVE" in (d / "page_summary.md").read_text()
+    assert calls == [], "should not re-summarize an already-current page"
 
 
-def test_summarize_web_cache_many_claim_dirs(tmp_path):
-    """All claim dirs with page.md get page_summary.md."""
+def test_summarize_web_cache_many_claim_dirs(tmp_path, monkeypatch):
+    """All claim dirs with page.md get page_summary.md, run through the pool."""
+    _mock_summarizer(monkeypatch)
     wc = tmp_path / "web_cache"
     for i in range(20):
-        d = wc / f"claim-{i:03d}"
-        d.mkdir(parents=True)
-        (d / "page.md").write_text(f"Content for claim {i}.\n\nMore.", encoding="utf-8")
+        _write_page(wc, f"claim-{i:03d}", _REAL_PAGE)
 
-    _summarize_web_cache(str(wc))
+    _summarize_web_cache(str(wc), model="m", workers=4)
 
-    count = len(list(wc.glob("*/page_summary.md")))
-    assert count == 20
-
-
-def test_summarize_web_cache_single_paragraph_page(tmp_path):
-    """page.md with no double-newline → entire text is the first paragraph."""
-    wc = tmp_path / "web_cache"
-    d = wc / "claim-x"
-    d.mkdir(parents=True)
-    (d / "page.md").write_text("Single line. Still single line. No paragraph break.", encoding="utf-8")
-
-    _summarize_web_cache(str(wc))
-
-    ps = d / "page_summary.md"
-    content = ps.read_text()
-    assert "Single line. Still single line." in content
+    assert len(list(wc.glob("*/page_summary.md"))) == 20
 
 
 # ── _write_web_cache_folder_summary edge cases ────────────────────
@@ -485,7 +541,7 @@ def test_write_web_cache_folder_summary_noop_when_no_summaries(tmp_path):
 # ── _check_corpus_ready edge cases ───────────────────────────────
 
 def test_check_corpus_ready_both_broken(tmp_path):
-    """Corpus missing summaries AND web_cache has orphaned pages → 2 issues."""
+    """Corpus missing summaries AND web_cache orphaned → 1 issue + 1 warning."""
     cr = tmp_path / "corpus"
     cr.mkdir()  # no summaries
     wc = tmp_path / "web_cache"
@@ -493,10 +549,11 @@ def test_check_corpus_ready_both_broken(tmp_path):
     (wc / "claim-x").mkdir()
     (wc / "claim-x" / "page.md").write_text("cached")
 
-    issues = _check_corpus_ready(str(cr), str(wc))
-    assert len(issues) == 2
+    issues, warnings = _check_corpus_ready(str(cr), str(wc))
+    # Only the corpus problem blocks; the web_cache one is advisory.
+    assert len(issues) == 1
     assert any("corpus" in i.lower() for i in issues)
-    assert any("web cache" in i.lower() for i in issues)
+    assert any("web cache" in w.lower() for w in warnings)
 
 
 def test_check_corpus_ready_web_cache_dir_does_not_exist(tmp_path):
@@ -505,7 +562,7 @@ def test_check_corpus_ready_web_cache_dir_does_not_exist(tmp_path):
     cr.mkdir()
     (cr / "_FOLDER_SUMMARY.md").write_text("ready")
 
-    issues = _check_corpus_ready(str(cr), str(tmp_path / "nonexistent"))
+    issues, warnings = _check_corpus_ready(str(cr), str(tmp_path / "nonexistent"))
     assert issues == []
 
 
@@ -515,7 +572,7 @@ def test_check_corpus_ready_empty_web_cache_dir_string(tmp_path):
     cr.mkdir()
     (cr / "_FOLDER_SUMMARY.md").write_text("ready")
 
-    issues = _check_corpus_ready(str(cr), "")
+    issues, warnings = _check_corpus_ready(str(cr), "")
     assert issues == []
 
 
@@ -526,7 +583,7 @@ def test_check_corpus_ready_finds_deep_folder_summary(tmp_path):
     (cr / "subdir").mkdir()
     (cr / "subdir" / "_FOLDER_SUMMARY.md").write_text("deep summary")
 
-    issues = _check_corpus_ready(str(cr), "")
+    issues, warnings = _check_corpus_ready(str(cr), "")
     assert issues == [], f"rglob should find nested _FOLDER_SUMMARY.md, got: {issues}"
 
 

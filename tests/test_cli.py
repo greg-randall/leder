@@ -63,6 +63,25 @@ def test_parser_all_defaults():
     assert args.skip_startup_check is False
 
 
+def test_parser_summarize_web_cache_defaults():
+    parser = build_parser()
+    args = parser.parse_args(["summarize-web-cache"])
+    assert args.config == "config.yaml"
+    assert args.model is None
+    assert args.force is False
+
+
+def test_parser_summarize_web_cache_flags():
+    parser = build_parser()
+    args = parser.parse_args([
+        "summarize-web-cache", "--config", "custom.yaml",
+        "--model", "deepseek-v4-flash", "--force",
+    ])
+    assert args.config == "custom.yaml"
+    assert args.model == "deepseek-v4-flash"
+    assert args.force is True
+
+
 def test_parser_stage_b_defaults():
     parser = build_parser()
     args = parser.parse_args(["stage-b"])
@@ -358,6 +377,47 @@ def test_main_stage_b_passes_corpus_description(tmp_path, monkeypatch):
     main()
 
     assert captured.get("corpus_description") == "A test corpus about widgets"
+    # prepare.summarize.* is threaded through for web_cache page summarization
+    assert captured.get("summarize_model")
+    assert isinstance(captured.get("summarize_workers"), int)
+
+
+def test_main_summarize_web_cache_dispatch(tmp_path, monkeypatch):
+    """summarize-web-cache calls _summarize_web_cache with corpus_root/web_cache
+    and threads config.prepare.summarize.* + corpus_description + --force through,
+    without running prepare-1/2/3."""
+    article = tmp_path / "article.md"
+    article.write_text("# Article\n")
+    cfg = _write_full_config(tmp_path, article, "A test corpus about widgets")
+
+    captured = {}
+
+    def fake_summarize_web_cache(web_cache_dir, **kwargs):
+        captured["web_cache_dir"] = web_cache_dir
+        captured.update(kwargs)
+
+    monkeypatch.setattr("pipeline.stage_b_verify._summarize_web_cache", fake_summarize_web_cache)
+    monkeypatch.setattr("pipeline.startup_check.validate_startup", lambda force=False: True)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pipeline.cli", "summarize-web-cache",
+            "--config", str(cfg),
+            "--model", "deepseek-v4-flash",
+            "--force",
+            "--skip-startup-check",
+        ],
+    )
+
+    from pipeline.cli import main
+
+    main()
+
+    assert captured["web_cache_dir"] == str(tmp_path / "web_cache")
+    assert captured["model"] == "deepseek-v4-flash"
+    assert captured["corpus_description"] == "A test corpus about widgets"
+    assert captured["force"] is True
+    assert isinstance(captured["workers"], int)
 
 
 def test_main_stage_e_claims_alias_overrides_findings(tmp_path, monkeypatch):

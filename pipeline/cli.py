@@ -187,6 +187,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Run only one rollup phase (default: all)")
     p3.add_argument("--force", action="store_true")
 
+    wc = subparsers.add_parser(
+        "summarize-web-cache", parents=[common],
+        help="Summarize corpus/web_cache/*/page.md only (no Stage B rerun)")
+    wc.add_argument("--config", default="config.yaml")
+    wc.add_argument("--model", help="Override prepare.summarize.model")
+    wc.add_argument("--force", action="store_true",
+                    help="Re-summarize pages that already have a page_summary.md")
+
     pp = subparsers.add_parser("prepare", parents=[common], help="Run prepare-1, prepare-2, prepare-3 in order")
     pp.add_argument("--config", default="config.yaml")
     pp.add_argument("--whisper-model", help="Override prepare.audio.model (e.g. small, medium)")
@@ -295,7 +303,8 @@ def main() -> None:
             sys.exit(1)
 
     # --- Corpus prep (prepare-1/2/3 — NOT part of 'all') ---
-    if args.command in ("prepare-1", "prepare-2", "prepare-3", "prepare"):
+    if args.command in ("prepare-1", "prepare-2", "prepare-3", "prepare",
+                        "summarize-web-cache"):
         from pipeline import startup_check as _sc
 
         corpus_root = config.resolve_path(config.corpus.root)
@@ -350,6 +359,18 @@ def main() -> None:
                 model=getattr(args, "model", None) or prep.summarize.model,
                 workers=prep.summarize.workers, force=force,
                 corpus_description=config.corpus.description,
+            )
+
+        if args.command == "summarize-web-cache":
+            # Standalone so a cache refresh doesn't require paying for a full
+            # Stage B rerun -- Stage B calls the same function on completion.
+            from pipeline.stage_b_verify import _summarize_web_cache
+            _summarize_web_cache(
+                os.path.join(corpus_root, "web_cache"),
+                model=getattr(args, "model", None) or prep.summarize.model,
+                workers=prep.summarize.workers,
+                corpus_description=config.corpus.description,
+                force=force,
             )
 
         if args.command in ("prepare-3", "prepare"):
@@ -438,6 +459,8 @@ def main() -> None:
             force_run=getattr(args, "force_run", False),
             corpus_description=config.corpus.description,
             agent_log_dir=agent_log_dir,
+            summarize_model=config.prepare.summarize.model,
+            summarize_workers=config.prepare.summarize.workers,
         )
         print(f"Stage B complete: {len(doc.findings)} findings")
 

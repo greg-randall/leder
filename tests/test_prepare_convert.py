@@ -176,6 +176,131 @@ def test_convert_xml(tmp_path):
     assert ok and "```xml" in md and "<root>" in md and method == "xml-fenced"
 
 
+# A PrimeFaces/JSF panelgrid record, the shape the RRC inspection lookup emits:
+# the data is <label>Field:</label><span>value</span> pairs inside layout divs,
+# not a <table>. MarkItDown returns "" for these.
+_JSF_HTML = """<!DOCTYPE html>
+<html><head><title>Inspection</title>
+<style>.ui-g { display: block; }</style>
+<script>function faceletsDebug(u){return u;}</script></head>
+<body><div class="ui-panelgrid-content"><div class="ui-g">
+<div class="ui-panelgrid-cell"><label>Lease Number: </label><span>STF-0149</span></div>
+<div class="ui-panelgrid-cell"><label>Lease Name: </label>
+<span>McBride Waskom STF Facility</span></div>
+<div class="ui-panelgrid-cell"><label>Operator Number: </label><span>538006</span></div>
+</div><div class="ui-g">
+<div class="ui-panelgrid-cell"><label>Rule Number: </label><span>SWR 4</span></div>
+<div class="ui-panelgrid-cell"><label>Last Enforcement Action: </label>
+<span>Notice of Violation</span></div>
+</div></div></body></html>"""
+
+
+def test_convert_html_keeps_label_and_value_on_one_line(tmp_path):
+    """The point of the converter: `Field: value` must stay greppable together.
+
+    Main-content extractors split these onto separate lines (and drop the
+    identifying header outright), which breaks the summaries' whole purpose.
+    """
+    src = tmp_path / "inspection.html"
+    src.write_text(_JSF_HTML, encoding="utf-8")
+
+    ok, size, method = p1.convert_html(src, tmp_path / "inspection.md")
+    md = (tmp_path / "inspection.md").read_text()
+
+    assert ok and method == "html-markdownify" and size > 0
+    assert "Lease Number: STF-0149" in md
+    assert "Lease Name: McBride Waskom STF Facility" in md
+    assert "Operator Number: 538006" in md
+    assert "Rule Number: SWR 4" in md
+    assert "Last Enforcement Action: Notice of Violation" in md
+
+
+def test_convert_html_strips_script_and_style(tmp_path):
+    src = tmp_path / "p.html"
+    src.write_text(_JSF_HTML, encoding="utf-8")
+
+    p1.convert_html(src, tmp_path / "p.md")
+    md = (tmp_path / "p.md").read_text()
+
+    assert "faceletsDebug" not in md
+    assert "display: block" not in md
+    # ...and no run of 3+ newlines left behind by the stripped layout divs
+    assert "\n\n\n" not in md
+
+
+def test_convert_html_rejects_contentless_page(tmp_path):
+    """Chrome-only page -> fail, so it lands in UNCONVERTED.md rather than
+    writing an empty .md that prepare-2 would then summarize as nothing."""
+    src = tmp_path / "empty.html"
+    src.write_text("<html><body><script>var a=1;</script></body></html>",
+                   encoding="utf-8")
+
+    ok, size, method = p1.convert_html(src, tmp_path / "empty.md")
+
+    assert not ok and size == 0
+    assert not (tmp_path / "empty.md").exists()
+
+
+def test_process_file_html_falls_back_when_markitdown_empty(tmp_path, monkeypatch):
+    """The production case: MarkItDown returns "" for JSF pages, so the
+    .html gap-filler has to catch it."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "rec.html").write_text(_JSF_HTML, encoding="utf-8")
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown",
+                        lambda *a, **k: (False, 0, "markitdown-empty"))
+
+    rel, status, detail, note = p1.process_file(
+        src_root / "rec.html", src_root, corpus, VISION_CFG, None, True,
+        md_client=object())
+
+    assert status == "ok"
+    assert "Lease Number: STF-0149" in (corpus / "rec.html.md").read_text()
+    assert note is not None and "fallback" in note
+
+
+def test_process_file_reason_names_the_real_markitdown_failure(tmp_path, monkeypatch):
+    """A format with no gap-filler must report what MarkItDown actually did,
+    not the misleading 'no converter for .xyz'."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "mystery.xyz").write_text("???")
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown",
+                        lambda *a, **k: (False, 0, "markitdown-empty"))
+
+    rel, status, detail, note = p1.process_file(
+        src_root / "mystery.xyz", src_root, corpus, VISION_CFG, None, True,
+        md_client=object())
+
+    assert status == "fail"
+    assert "markitdown-empty" in detail
+    # The old wording claimed the format was unsupported; it isn't, the
+    # converter just produced nothing.
+    assert detail != "no converter for .xyz"
+
+
+def test_process_file_htm_extension_uses_html_gap_filler(tmp_path, monkeypatch):
+    """.htm must map to the same gap-filler as .html (GAP_FILLERS[".htm"])."""
+    src_root = tmp_path / "src"
+    corpus = tmp_path / "corpus"
+    src_root.mkdir()
+    (src_root / "rec.htm").write_text(_JSF_HTML, encoding="utf-8")
+
+    monkeypatch.setattr(p1, "_convert_with_markitdown",
+                        lambda *a, **k: (False, 0, "markitdown-empty"))
+
+    rel, status, detail, note = p1.process_file(
+        src_root / "rec.htm", src_root, corpus, VISION_CFG, None, True,
+        md_client=object())
+
+    assert status == "ok"
+    assert "Lease Number: STF-0149" in (corpus / "rec.htm.md").read_text()
+
+
 def test_libreoffice_uses_isolated_profile(tmp_path, monkeypatch):
     """Concurrent-safe: each LibreOffice call gets its own -env:UserInstallation profile."""
     captured = {}

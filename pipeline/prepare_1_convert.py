@@ -382,6 +382,52 @@ def convert_xml(inpath: Path, md_path: Path):
         return False, 0, "xml-fenced"
 
 
+def convert_html(inpath: Path, md_path: Path):
+    """HTML -> markdown via markdownify.
+
+    MarkItDown is tried first (see the dispatch in process_file) but returns an
+    empty string on some real-world pages -- notably JSF/PrimeFaces apps such as
+    the RRC inspection lookup, where the record is a grid of
+    `<label>Field:</label><span>value</span>` pairs rather than a <table>.
+
+    markdownify is used rather than a main-content extractor (trafilatura, or
+    Jina Reader's /r endpoint): both treat those header panels as boilerplate
+    and strip the fields identifying which facility, operator and lease the
+    record belongs to, keeping only the body. For a document corpus we want the
+    whole page, and we want `Field: value` to stay on one line so a
+    fact-checking agent can grep for a value and land on its label.
+    """
+    try:
+        from bs4 import BeautifulSoup, NavigableString
+        from markdownify import markdownify as _md
+    except ImportError:
+        return False, 0, "html-markdownify"
+
+    try:
+        raw = inpath.read_text(encoding="utf-8", errors="replace")
+        soup = BeautifulSoup(raw, "html.parser")
+        # Scripts/styles would otherwise survive as literal text.
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        # markdownify preserves source whitespace, so a pretty-printed
+        # `<label>Field:</label>\n<span>value</span>` would come out split
+        # across two lines -- the exact break this converter exists to avoid.
+        # Drop whitespace-only nodes sitting between a label and its value.
+        for label in soup.find_all("label"):
+            sib = label.next_sibling
+            if isinstance(sib, NavigableString) and not sib.strip():
+                sib.extract()
+        content = _md(str(soup))
+        # markdownify leaves long runs of blank lines where layout divs were.
+        content = re.sub(r"\n{3,}", "\n\n", content).strip() + "\n"
+        if not is_meaningful(content):
+            return False, 0, "html-markdownify"
+        _write_md(md_path, content)
+        return True, len(content), "html-markdownify"
+    except Exception:
+        return False, 0, "html-markdownify"
+
+
 def _normalize_vtt_header(text: str) -> str:
     """pycaption requires the blank line immediately after WEBVTT, but many
     generators (e.g. yt-dlp's downloaded YouTube captions) insert extra
@@ -597,6 +643,8 @@ GAP_FILLERS: dict[str, callable] = {
     ".odp": convert_legacy_office,
     ".rtf": convert_rtf,
     ".xml": convert_xml,
+    ".html": convert_html,
+    ".htm": convert_html,
 }
 
 
@@ -721,11 +769,16 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
         return _finish(relpath, convert_subtitle(filepath, md_path), md_path)
 
     # Everything else -> MarkItDown, then gap-fillers.
+    md_method = None
     if md_client is not None:
         ok, size, method = _convert_with_markitdown(filepath, md_path, md_client)
         if ok:
             _reflow_md_file_in_place(md_path)
             return str(relpath), "ok", method, None
+        # Remember *why* MarkItDown declined -- "markitdown-empty" (converted
+        # to nothing) and "markitdown-error" (threw) are very different
+        # diagnoses, and the old reason string discarded both.
+        md_method = method
 
     gap_filler = GAP_FILLERS.get(ext)
     if gap_filler is not None:
@@ -741,7 +794,16 @@ def process_file(filepath: Path, src_root: Path, out_root: Path,
             print(f"  prepare-1 gap-filler failed: {relpath}: {type(ex).__name__}: {ex}",
                   file=sys.stderr)
 
-    reason = f"no converter for {ext}" if gap_filler is None else "converter returned empty"
+    # Report what actually happened. "no converter for .html" was previously
+    # emitted whenever no gap-filler existed, even when MarkItDown had run and
+    # returned an empty document -- which reads as "unsupported format" and
+    # sends the next reader down the wrong path entirely.
+    if gap_filler is not None:
+        reason = "converter returned empty"
+    elif md_method:
+        reason = f"no gap-filler for {ext} after {md_method}"
+    else:
+        reason = f"no converter for {ext}"
     return str(relpath), "fail", reason, None
 
 

@@ -10,6 +10,8 @@ pillow-heif
 tiktoken>=0.7.0
 faster-whisper>=1.0.0
 trafilatura
+beautifulsoup4>=4.12.0
+markdownify>=1.0.0
 pyspellchecker
 extract-msg
 imagehash

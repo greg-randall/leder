@@ -4,11 +4,25 @@ A YAML-driven editorial review pipeline. Extract claims, verify facts, check quo
 
 ## 1. What it is and why
 
-You have a long article making factual claims, and a folder of source documents that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. LEDER does the grunt work: it reads your article, pulls out the claims, dispatches real AI agents to search your documents (or the web) for evidence, then rebuilds the article with footnotes linked to sources. You review the finished product and make the final call.
+You have a long article making factual claims, and a folder of source documents — permits, meeting transcripts, emails, spreadsheets, PDFs — that either back those claims up or knock them down. Checking every claim by hand is slow and you miss things. LEDER does the grunt work and you make the final call.
 
-It handles a mix of local files (permits, reports, emails, spreadsheets, anything that converts to markdown) and web sources. Swap the article and corpus and it works the same way.
+Two problems make this hard, and LEDER is built around solving both.
 
-And because every check is a YAML playbook, not hardcoded Python, adding a new editorial review (Math Check, Quote Precision, Right of Reply) means writing a few prompts, picking some tools, and writing a display template. The rest is configuration.
+**Problem one: the corpus is too big to hand an LLM.** A source folder can run to hundreds of documents in a dozen formats. You can't just dump it all into a prompt. So LEDER does three things:
+
+1. **Ingests almost anything.** Drop in PDFs, Word docs, HTML, spreadsheets, emails (`.eml`/`.msg`, attachments included) — LEDER converts them all to plain markdown. Audio and video get transcribed (local Whisper). Scanned pages and images get OCR'd, with a vision-model fallback when the OCR comes out garbled. Whatever format your evidence is in, it becomes searchable text.
+2. **Summarizes every document.** Instead of an agent reading a 3,000-line file, it reads a summary that's a few dozen lines — a map of what's actually in the file, not the file itself.
+3. **Bundles those summaries into summaries of summaries.** Folder by folder, all the way up to one top-level overview. This gives an agent a branching path to follow: it reads the top-level summary, sees a claim is about "John Smith," notices the `smith-industries/` folder, reads *that* folder's summary, narrows further, and only opens a full document once it's found the right neighborhood. It never has to grep blindly through the whole corpus.
+
+**Problem two: "fact-check this article" is too big a task for one LLM call to do well.** Big, vague tasks get sloppy results. So LEDER breaks the job down:
+
+1. **Splits the article into atomic claims** — single, checkable assertions like "so-and-so did such-and-such on this date" — rather than asking one agent to fact-check the whole piece at once.
+2. **Verifies each claim independently**, dispatching a real agent per claim to search the corpus (tiered, per the summary structure above) and fall back to a live web search when the corpus doesn't have the answer.
+3. **Forces the agent to show its work, then checks that work mechanically.** When an agent believes it's found supporting or contradicting evidence, it returns a short excerpt — e.g. "I saw so-and-so do such-and-such last year" — plus the file it came from. A separate, non-LLM tool then verifies that exact string actually exists in that file. An agent's claimed excerpt is never trusted at face value; it's confirmed against the source text before it ships.
+
+The result: an article rebuilt with footnotes, each one linking to a verified excerpt in its source document, with severity-colored badges (pass / warning / critical) you can review at a glance.
+
+Because every check is a YAML playbook, not hardcoded Python, adding a new editorial review (Math Check, Quote Precision, Right of Reply) means writing a few prompts, picking some tools, and writing a display template. The rest is configuration.
 
 ## 2. Quickstart
 
@@ -179,8 +193,6 @@ display:
 The runner provides `{{article_text}}`, `{{existing_claims}}`, `{{article_summary}}`, `{{target_text}}`, and `{{context}}`. Playbooks reference them freely.
 
 **Important:** The verification prompt only needs to include check-specific evaluation criteria. Generic rules — the tiered search strategy, the confidence rubric with hard caps, the mandatory `validate_excerpt` step, the corroboration principles, and the sandbox instructions — are injected automatically by `pipeline/prompts.py` and must NOT be duplicated in the playbook YAML (doing so would repeat them and bloat the prompt).
-
-If you already have the current pipeline working with fact-checking: nothing breaks. The v1 `active` list contains only `fact_check`, which achieves full parity with the old hardcoded pipeline. The old CLI flags (`--claims`) still work. New playbooks get added one at a time by adding to `active`.
 
 ## 3. How it works
 
@@ -367,27 +379,15 @@ leder/
 
 ### Key files
 
-`pipeline/finding.py` is the data contract. `Finding` carries `finding_id`, `check_type`, `severity` (PASS, WARNING, CRITICAL), `target_text`, `anchor_text`, `agent_summary`, `recommended_action`, `source_path`, `source_url`, `source_excerpt`, `source_excerpt_offset` (character positions in the source document), `source_excerpt_similarity` (1.0 for exact, lower for fuzzy), `excerpt_status` (exact, repaired, not_found, or unchecked), `confidence` (one of exactly 0.95, 0.8, 0.6, 0.4, or 0.2 — snapped to the nearest band on ingest), `human_review`, and `metadata` (attribution_status, corpus_contradicted_by_external, etc.). `Target` carries `target_text`, `anchor_text`, `playbook`, `context`, and `claim_type`. `FindingsDocument` wraps article metadata and the finding list with `to_json()` and `from_json()`.
+Behavior is described stage-by-stage in [§3](#3-how-it-works) above; this is a map to where it lives, plus the details (field names, function names) that section doesn't spell out.
 
-`pipeline/playbook.py` defines the Playbook dataclass and `load_playbook(path)`. A playbook is a YAML file with `extraction.prompt`, `extraction.quality_gate`, `verification.prompt`, `verification.allowed_tools`, and a `display.template`.
-
-`pipeline/prompts.py` holds shared prompt rulesets injected into every playbook. `build_extraction_system_prompt()` returns the system prompt for Stage A (claim granularity, standalone wording, context injection, attribution framing, anchor-text uniqueness, claim_type definitions). `build_verification_rules_block()` returns the generic verification rules prepended to the playbook's own prompt (tiered search strategy, `validate_excerpt` mandate, sandbox instructions, corroboration principles, confidence rubric with five bands and hard caps, date handling).
-
-`pipeline/agent_tools.py` builds the per-claim in-process MCP server that provides `validate_excerpt` and `fetch_page` to the verification agent. Also implements `corpus_only_permission()` — the `can_use_tool` callback that confines Read/Grep/Glob to the corpus root via `resolve_within()` path containment (symlink-aware, tilde-denied, pattern-escape-checked). `_TOOL_SPEC` maps each allowed tool to its path argument and pattern arguments so the callback knows what to police.
-
-`pipeline/tools/validate_excerpt.py` is the core of the `validate_excerpt` tool. Three tiers: exact case-insensitive substring → chunk-scored Levenshtein on the top 3 chunks (using `find_quote_position` from stage C) → `{"found": false}`. Always returns `actual_text` as a real substring of the file — callers use it in place of whatever wording they came in with.
-
-`pipeline/tools/fetch_page.py` is the multi-tier web fetcher. Four tiers in order: jina.ai (fast, free, clean markdown) → obscura (headless browser for bot-protected pages) → playwright (real headless browser, last resort) → archive.is (Camoufox-driven paywall bypass, opt-in). Each tier degrades gracefully rather than raising. Paywall signals in the first 500 characters trigger a warning. Output is written atomically via a same-directory temp file + `os.replace`.
-
-`pipeline/stage_a_extract.py` chunks the article and dispatches extraction prompts per playbook with a shared system prompt from `prompts.py`. `playbook_names` is required.
-
-`pipeline/stage_b_verify.py` spawns Claude Agent SDK agents with playbook-specific prompts and tools, plus the generic verification rules block from `prompts.py`. The `FindingOutput` pydantic model enforces structured output. An excerpt gate validates every returned `source_excerpt` against the claimed source file (literal match → keep; repeated-prefix strip → repair; not found → drop). Agents run with async concurrency.
-
-`pipeline/stage_c_rebuild.py` inserts footnotes into markdown via sliding-window Levenshtein. When an anchor matches more than one position, `_best_match_by_context()` disambiguates using the finding's context field. Footnotes are numbered by document position. Severity maps to badge colors: PASS green, WARNING yellow, CRITICAL red.
-
-`pipeline/stage_d_sources.py` builds the `sources/` folder: resolves each finding's source path, marks excerpts in the document using agent-verified `source_excerpt_offset` values, handles overlapping multi-finding spans with combined `data-findings` attributes, and writes rendered HTML with excerpt highlighting. The old fuzzy matcher is deleted — offsets are trusted directly from the agent.
-
-`pipeline/prepare_1_convert.py` is the corpus-prep converter. Routing: images go to tesseract (with HEIC/HEIF support via `pillow-heif`) then vision if thin or garbled (spellcheck-based detection), with tiny/duplicate images skipped and zero-text images reported as failures; audio goes to local faster-whisper (optionally vocabulary-seeded via `prepare.audio.vocabulary`); `.eml`/`.msg` go to dedicated extractors (HTML-only email bodies convert to markdown, plain-text parts preferred when both exist) with attachment extraction and an auto second pass; `.srt`/`.vtt` go to a pycaption based transcript extractor (output gets a processing header and is sentence/word-boundary re-flowed); PDF goes to MarkItDown first with page-aware OCR fallback (≥ 200 chars/page threshold); already-text formats (`prepare.text_native_extensions`) are copied through verbatim; all converter output is re-flowed so no line exceeds ~300 chars (passthrough_text excluded); everything else goes to MarkItDown, then gap-fillers, then UNCONVERTED.md. A source file newer than its `.md` sidecar is always re-converted (mtime check).
+- **`pipeline/finding.py`** — the data contract. `Finding` carries `finding_id`, `check_type`, `severity`, `target_text`, `anchor_text`, `agent_summary`, `recommended_action`, `source_path`, `source_url`, `source_excerpt`, `source_excerpt_offset`, `source_excerpt_similarity`, `excerpt_status`, `confidence` (snapped to one of 0.95 / 0.8 / 0.6 / 0.4 / 0.2 on ingest), `human_review`, `metadata`. `Target` carries `target_text`, `anchor_text`, `playbook`, `context`, `claim_type`. `FindingsDocument` wraps both, with `to_json()` / `from_json()`.
+- **`pipeline/playbook.py`** — the `Playbook` dataclass and `load_playbook(path)`.
+- **`pipeline/prompts.py`** — `build_extraction_system_prompt()` and `build_verification_rules_block()`, the shared rule blocks referenced in Stages 1–2 above.
+- **`pipeline/agent_tools.py`** — builds the MCP server exposing `validate_excerpt`/`fetch_page`, and implements `corpus_only_permission()`, the sandbox callback from Stage 2. `_TOOL_SPEC` maps each allowed tool to the path/pattern arguments it needs policed.
+- **`pipeline/tools/validate_excerpt.py`**, **`pipeline/tools/fetch_page.py`** — the tool implementations behind the Stage 2 descriptions above.
+- **`pipeline/stage_a_extract.py`**, **`stage_b_verify.py`**, **`stage_c_rebuild.py`**, **`stage_d_sources.py`** — the Stage 1/2/C/D runners described above. Stage C's context disambiguation lives in `_best_match_by_context()`.
+- **`pipeline/prepare_1_convert.py`** — corpus-prep conversion; see "How each file type gets converted" under Quickstart.
 
 ### Provider setup
 

@@ -86,6 +86,7 @@ def _extract_targets_from_text(text: str, model: str, playbook,
 
     client = anthropic.Anthropic(
         api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("DEEPSEEK_API_KEY"),
+        timeout=300.0,  # 5 minutes per chunk — prevent indefinite hangs
     )
     response = client.messages.create(
         model=model,
@@ -332,6 +333,7 @@ def run_stage_a(
         # becomes the context brief for every later chunk (Tweak 3.3).
         chunk_brief = ""
         for i, chunk in enumerate(chunks):
+            print(f"  [{pb.name}] chunk {i+1}/{len(chunks)} ({len(chunk.split())} words)...", file=sys.stderr)
             targets, title, summary = _extract_targets_from_text(
                 chunk, model, pb, tool_schema, quality_gate=False,
                 system_prompt=extraction_system_prompt,

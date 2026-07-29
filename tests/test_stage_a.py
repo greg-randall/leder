@@ -91,6 +91,43 @@ def test_extract_targets_from_text_uses_shared_system_prompt(monkeypatch):
     assert "{{article_text}}" not in captured["messages"][0]["content"]
 
 
+def test_extract_targets_from_text_sets_client_timeout(monkeypatch):
+    """Anthropic client gets an explicit timeout so a hung request can't
+    block a chunk indefinitely."""
+    from pipeline.playbook import Playbook
+    from pipeline.stage_a_extract import _extract_targets_from_text, _extraction_tool_for
+
+    pb = Playbook(
+        name="test_check",
+        extraction_prompt="Extract things from: {{article_text}}",
+        verification_prompt="Verify.",
+    )
+
+    class FakeText:
+        type = "tool_use"
+        input = {"targets": [], "article_title": "T", "article_summary": "S"}
+
+    fake_client = type("c", (), {
+        "messages": type("m", (), {
+            "create": lambda self, **kw: type("r", (), {"content": [FakeText()]})()
+        })()
+    })()
+
+    captured_client_kwargs = {}
+
+    def fake_anthropic(**kw):
+        captured_client_kwargs.update(kw)
+        return fake_client
+
+    monkeypatch.setattr("anthropic.Anthropic", fake_anthropic)
+
+    _extract_targets_from_text(
+        "some article text", "m", pb, _extraction_tool_for(pb),
+        system_prompt="SYS")
+
+    assert captured_client_kwargs.get("timeout") == 300.0
+
+
 def test_run_stage_a_playbook_path_writes_targets_json(tmp_path, monkeypatch):
     """run_stage_a with playbook_names writes targets.json tagged with playbook."""
     article = tmp_path / "article.md"

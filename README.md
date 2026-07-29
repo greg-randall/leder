@@ -12,7 +12,7 @@ Two problems make this hard, and LEDER is built around solving both.
 
 1. **Ingests almost anything.** Drop in PDFs, Word docs, HTML, spreadsheets, emails (`.eml`/`.msg`, attachments included) — LEDER converts them all to plain markdown. Audio and video get transcribed (local Whisper). Scanned pages and images get OCR'd, with a vision-model fallback when the OCR comes out garbled. Whatever format your evidence is in, it becomes searchable text.
 2. **Summarizes every document.** Instead of an agent reading a 3,000-line file, it reads a summary that's a few dozen lines — a map of what's actually in the file, not the file itself.
-3. **Bundles those summaries into summaries of summaries.** Folder by folder, all the way up to one top-level overview. This gives an agent a branching path to follow: it reads the top-level summary, sees a claim is about "John Smith," notices the `smith-industries/` folder, reads *that* folder's summary, narrows further, and only opens a full document once it's found the right neighborhood. It never has to grep blindly through the whole corpus.
+3. **Bundles those summaries into summaries of summaries.** Folder by folder, all the way up to one top-level overview. This gives an agent a branching path to follow: it reads the top-level summary, sees a claim is about "John Smith," notices the `smith-industries/` folder, reads *that* folder's summary, narrows further, and only opens a full document once it's found the right neighborhood. It still has `Grep`/`Glob` over the whole corpus as a fallback, but the summary tree means it usually doesn't need to reach for it.
 
 **Problem two: "fact-check this article" is too big a task for one LLM call to do well.** Big, vague tasks get sloppy results. So LEDER breaks the job down:
 
